@@ -86,6 +86,27 @@ impl Store {
         }
     }
 
+    pub fn tick_next_block(&self) {
+        self.txstore_db.tick_next_block();
+        self.history_db.tick_next_block();
+        self.cache_db.tick_next_block();
+    }
+
+    pub fn enable_rollback_cache(&self) {
+        self.txstore_db.enable_rollbacks();
+        self.history_db.enable_rollbacks();
+        self.cache_db.enable_rollbacks();
+    }
+
+    pub fn rollback(&self, count: usize) {
+        let mut leftover = 0;
+        leftover += self.txstore_db.rollback(count);
+        leftover += self.history_db.rollback(count);
+        leftover += self.cache_db.rollback(count);
+        if leftover > 0 {
+            warn!("Rolling back all DB caches missed {count} blocks. Re-orged duplicates might still be active in the DB.")
+        }
+    }
     pub fn txstore_db(&self) -> &DB {
         &self.txstore_db
     }
@@ -273,6 +294,18 @@ impl Indexer {
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
 
+        // Deal with re-orgs before indexing
+        let headers_len = {
+            let mut headers = self.store.indexed_headers.write().unwrap();
+            let reorged = headers.apply(&new_headers);
+            assert_eq!(tip, *headers.tip());
+            // reorg happened
+            if !reorged.is_empty() {
+                self.store.rollback(reorged.len());
+            }
+            headers.len()
+        };
+
         let to_add = self.headers_to_add(&new_headers);
         debug!(
             "adding transactions from {} blocks using {:?}",
@@ -301,16 +334,20 @@ impl Indexer {
         // update the synced tip *after* the new data is flushed to disk
         debug!("updating synced tip to {:?}", tip);
         self.store.txstore_db.put_sync(b"t", &serialize(&tip));
-
-        let mut headers = self.store.indexed_headers.write().unwrap();
-        headers.apply(new_headers);
-        assert_eq!(tip, *headers.tip());
+        // Ticking cache DB "block every time we update"
+        // This means that each "block" essentially contains the
+        // cache updates between each update() call, and we will
+        // rollback more cache_db than other DBs when rolling back
+        // but this is just a cache anyway.
+        // We'd rather not have bad data in the cache.
+        self.store.cache_db.tick_next_block();
 
         if let FetchFrom::BlkFiles = self.from {
+            self.store.enable_rollback_cache();
             self.from = FetchFrom::Bitcoind;
         }
 
-        self.tip_metric.set(headers.len() as i64 - 1);
+        self.tip_metric.set(headers_len as i64 - 1);
 
         Ok(tip)
     }
@@ -324,7 +361,7 @@ impl Indexer {
         };
         {
             let _timer = self.start_timer("add_write");
-            self.store.txstore_db.write(rows, self.flush);
+            self.store.txstore_db.write_blocks(rows, self.flush);
         }
 
         self.store
@@ -360,7 +397,7 @@ impl Indexer {
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
         };
-        self.store.history_db.write(rows, self.flush);
+        self.store.history_db.write_blocks(rows, self.flush);
     }
 }
 
@@ -820,7 +857,7 @@ impl ChainQuery {
         // save updated utxo set to cache
         if let Some(lastblock) = lastblock {
             if had_cache || processed_items > MIN_HISTORY_ITEMS_TO_CACHE {
-                self.store.cache_db.write(
+                self.store.cache_db.write_nocache(
                     vec![UtxoCacheRow::new(scripthash, &newutxos, &lastblock).into_row()],
                     flush,
                 );
@@ -928,7 +965,7 @@ impl ChainQuery {
         // save updated stats to cache
         if let Some(lastblock) = lastblock {
             if newstats.funded_txo_count + newstats.spent_txo_count > MIN_HISTORY_ITEMS_TO_CACHE {
-                self.store.cache_db.write(
+                self.store.cache_db.write_nocache(
                     vec![StatsCacheRow::new(scripthash, &newstats, &lastblock).into_row()],
                     flush,
                 );
@@ -1256,7 +1293,7 @@ fn load_blockheaders(db: &DB) -> HashMap<BlockHash, BlockHeader> {
         .collect()
 }
 
-fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRow> {
+fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<Vec<DBRow>> {
     // persist individual transactions:
     //      T{txid} → {rawtx}
     //      C{txid}{blockhash}{height} →
@@ -1284,7 +1321,6 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
             rows.push(BlockRow::new_done(blockhash).into_row()); // mark block as "added"
             rows
         })
-        .flatten()
         .collect()
 }
 
@@ -1370,7 +1406,7 @@ fn index_blocks(
     block_entries: &[BlockEntry],
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     iconfig: &IndexerConfig,
-) -> Vec<DBRow> {
+) -> Vec<Vec<DBRow>> {
     block_entries
         .par_iter() // serialization is CPU-intensive
         .map(|b| {
@@ -1389,7 +1425,6 @@ fn index_blocks(
             rows.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
             rows
         })
-        .flatten()
         .collect()
 }
 

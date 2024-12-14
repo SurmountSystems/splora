@@ -1,6 +1,10 @@
+use bounded_vec_deque::BoundedVecDeque;
 use rocksdb;
 
+use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::RwLock;
 
 use crate::config::Config;
 use crate::util::{bincode_util, Bytes};
@@ -134,10 +138,22 @@ impl<'a> Iterator for ReverseScanGroupIterator<'a> {
     }
 }
 
+type SingleBlockCache = HashSet<Vec<u8>>;
+type TipsCache = BoundedVecDeque<SingleBlockCache>;
+
 #[derive(Debug)]
 pub struct DB {
     db: rocksdb::DB,
+    // BoundedVecDeque of most recent blocks
+    // Outer Vec is a list of rocksdb keys to remove when reorged
+    // Inner Vec is the key (a key is Vec<u8>)
+    // It will automatically drop "blocks" that go over the bound.
+    rollback_cache: RwLock<TipsCache>,
+    rollback_active: AtomicBool,
 }
+
+// 6 blocks should be enough
+const CACHE_CAPACITY: usize = 6;
 
 #[derive(Copy, Clone, Debug)]
 pub enum DBFlush {
@@ -147,8 +163,13 @@ pub enum DBFlush {
 
 impl DB {
     pub fn open(path: &Path, config: &Config) -> DB {
+        let mut rollback_cache = BoundedVecDeque::with_capacity(CACHE_CAPACITY, CACHE_CAPACITY);
+        rollback_cache.push_back(HashSet::new()); // last HashSet is "current block"
         let db = DB {
             db: open_raw_db(path),
+            // TODO: Make the number of blocks configurable? 6 should be fine for mainnet
+            rollback_cache: RwLock::new(rollback_cache),
+            rollback_active: AtomicBool::new(false),
         };
         db.verify_compatibility(config);
         db
@@ -220,17 +241,123 @@ impl DB {
         ReverseScanGroupIterator::new(iters, value_offset)
     }
 
-    pub fn write(&self, mut rows: Vec<DBRow>, flush: DBFlush) {
+    fn fill_cache(&self, key: &[u8]) {
+        // Single letter keys tend to be related to versioning and tips
+        // So do not cache as they don't need to be rolled back
+        if key.len() < 2 {
+            return;
+        }
+        self.with_cache(|cache| {
+            cache.insert(key.to_owned());
+        });
+    }
+
+    fn with_cache<F>(&self, func: F)
+    where
+        F: FnOnce(&mut SingleBlockCache),
+    {
+        func(
+            self.rollback_cache
+                .write()
+                .unwrap()
+                .back_mut()
+                .expect("Always one block"),
+        )
+    }
+
+    pub fn tick_next_block(&self) {
+        // Adding a new block's worth of cache
+        // This will automatically drop the oldest block (HashSet)
+        self.rollback_cache
+            .write()
+            .unwrap()
+            .push_back(HashSet::new());
+    }
+
+    /// Performs a rollback of `count` blocks, then ticks one block forward
+    pub fn rollback(&self, mut count: usize) -> usize {
+        if count == 0 {
+            return 0;
+        }
+        let mut cache = self.rollback_cache.write().unwrap();
+        while count > 0 {
+            if let Some(block) = cache.pop_back() {
+                debug!(
+                    "Rolling back DB cached block with {} entries @ {:?}",
+                    block.len(),
+                    self.db.path()
+                );
+                for key in block {
+                    // Ignore rocksdb errors, but log them
+                    let _ = self.db.delete(key).inspect_err(|err| {
+                        warn!("Error when deleting rocksdb rollback cache: {err}");
+                    });
+                }
+                count -= 1;
+            } else {
+                break;
+            }
+        }
+        cache.push_back(HashSet::new());
+        count
+    }
+
+    pub fn rollbacks_enabled(&self) -> bool {
+        self.rollback_active
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn disable_rollbacks(&self) {
+        self.rollback_active
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn enable_rollbacks(&self) {
+        self.rollback_active
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn write_nocache(&self, rows: Vec<DBRow>, flush: DBFlush) {
+        self.write_blocks_nocache(vec![rows], flush);
+    }
+
+    pub fn write_blocks(&self, blocks: Vec<Vec<DBRow>>, flush: DBFlush) {
+        self.write_blocks_inner(blocks, flush, false)
+    }
+
+    pub fn write_blocks_nocache(&self, blocks: Vec<Vec<DBRow>>, flush: DBFlush) {
+        self.write_blocks_inner(blocks, flush, true)
+    }
+
+    #[inline]
+    fn write_blocks_inner(&self, blocks: Vec<Vec<DBRow>>, flush: DBFlush, skip_cache: bool) {
         debug!(
             "writing {} rows to {:?}, flush={:?}",
-            rows.len(),
+            blocks.iter().map(|b| b.len()).sum::<usize>(),
             self.db,
             flush
         );
-        rows.sort_unstable_by(|a, b| a.key.cmp(&b.key));
         let mut batch = rocksdb::WriteBatch::default();
-        for row in rows {
-            batch.put(&row.key, &row.value);
+        for mut rows in blocks {
+            rows.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+            if !skip_cache
+                && self
+                    .rollback_active
+                    .load(std::sync::atomic::Ordering::Acquire)
+            {
+                self.with_cache(|cache| {
+                    for row in &rows {
+                        cache.insert(row.key.clone());
+                        batch.put(&row.key, &row.value);
+                    }
+                });
+                // Special case: we should tick forward blocks
+                self.tick_next_block();
+            } else {
+                for row in &rows {
+                    batch.put(&row.key, &row.value);
+                }
+            }
         }
         let do_flush = match flush {
             DBFlush::Enable => true,
@@ -247,10 +374,22 @@ impl DB {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
+        if self
+            .rollback_active
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.fill_cache(key);
+        }
         self.db.put(key, value).unwrap();
     }
 
     pub fn put_sync(&self, key: &[u8], value: &[u8]) {
+        if self
+            .rollback_active
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.fill_cache(key);
+        }
         let mut opts = rocksdb::WriteOptions::new();
         opts.set_sync(true);
         self.db.put_opt(key, value, &opts).unwrap();
