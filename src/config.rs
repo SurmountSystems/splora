@@ -55,6 +55,7 @@ pub struct Config {
     pub utxos_limit: usize,
     pub electrum_txs_limit: usize,
     pub electrum_banner: String,
+    pub skip_compaction: bool,
     pub mempool_backlog_stats_ttl: u64,
     pub mempool_recent_txs_size: usize,
     pub rest_default_block_limit: usize,
@@ -276,6 +277,10 @@ impl Config {
                     .long("electrum-banner")
                     .help("Welcome banner for the Electrum server, shown in the console to clients.")
                     .takes_value(true)
+            ).arg(
+                Arg::with_name("skip_compaction")
+                    .long("skip-compaction")
+                    .help("Skip compactions after initial sync")
             );
 
         #[cfg(unix)]
@@ -517,6 +522,7 @@ impl Config {
             electrum_rpc_addr,
             electrum_txs_limit: value_t_or_exit!(m, "electrum_txs_limit", usize),
             electrum_banner,
+            skip_compaction: m.is_present("skip_compaction"),
             http_addr,
             http_socket_file,
             rpc_socket_file,

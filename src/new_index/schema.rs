@@ -183,6 +183,7 @@ struct IndexerConfig {
     light_mode: bool,
     address_search: bool,
     index_unspendables: bool,
+    skip_compaction: bool,
     network: Network,
     #[cfg(feature = "liquid")]
     parent_network: crate::chain::BNetwork,
@@ -195,6 +196,7 @@ impl From<&Config> for IndexerConfig {
             address_search: config.address_search,
             index_unspendables: config.index_unspendables,
             network: config.network_type,
+            skip_compaction: config.skip_compaction,
             #[cfg(feature = "liquid")]
             parent_network: config.parent_network,
         }
@@ -250,7 +252,9 @@ impl Indexer {
     fn start_auto_compactions(&self, db: &DB) {
         let key = b"F".to_vec();
         if db.get(&key).is_none() {
-            db.full_compaction();
+            if !self.iconfig.skip_compaction {
+                db.full_compaction();
+            }
             db.put_sync(&key, b"");
             assert!(db.get(&key).is_some());
         }
