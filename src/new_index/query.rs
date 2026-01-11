@@ -147,6 +147,14 @@ impl Query {
             .lookup_raw_txn(txid, None)
             .or_else(|| self.mempool().lookup_raw_txn(txid))
     }
+    pub fn lookup_txn_info_verbose(
+        &self,
+        txid: &Txid,
+        blockid: Option<BlockId>,
+    ) -> Result<serde_json::Value> {
+        self.daemon
+            .gettransaction_verbose(txid, blockid.map(|b| b.hash))
+    }
 
     /// Not all OutPoints from mempool transactions are guaranteed to be included in the result
     pub fn lookup_txos(&self, outpoints: &BTreeSet<OutPoint>) -> HashMap<OutPoint, TxOut> {

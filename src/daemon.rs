@@ -590,6 +590,21 @@ impl Daemon {
         Ok(blocks)
     }
 
+    pub fn gettransaction_verbose(
+        &self,
+        txid: &Txid,
+        blockhash: Option<BlockHash>,
+    ) -> Result<Value> {
+        self.request(
+            "getrawtransaction",
+            json!([
+                txid.to_hex(),
+                /*verbose=*/ true,
+                blockhash.map(|b| b.to_hex())
+            ]),
+        )
+    }
+
     pub fn gettransactions(&self, txhashes: &[&Txid]) -> Result<Vec<Transaction>> {
         let params_list: Vec<Value> = txhashes
             .iter()
