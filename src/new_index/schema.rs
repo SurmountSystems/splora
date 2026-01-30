@@ -1,6 +1,7 @@
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
 #[cfg(not(feature = "liquid"))]
-use bitcoin::util::merkleblock::MerkleBlock;
+use bitcoin::merkle_tree::MerkleBlock;
+#[cfg(not(feature = "liquid"))]
 use bitcoin::VarInt;
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -10,7 +11,7 @@ use sha2::{Digest, Sha256};
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::{
-    encode::{deserialize, serialize},
+    encode::{deserialize, serialize, VarInt},
     AssetId,
 };
 
@@ -20,7 +21,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use crate::chain::{
-    BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, Value,
+    BlockHash, BlockHeader, Network, OutPoint, Script, Transaction, TxOut, Txid, TxidCompat, Value,
 };
 use crate::config::Config;
 use crate::daemon::Daemon;
@@ -1233,7 +1234,7 @@ impl ChainQuery {
         let _timer = self.start_timer("lookup_txn");
         self.lookup_raw_txn(txid, blockhash).map(|rawtx| {
             let txn: Transaction = deserialize(&rawtx).expect("failed to parse Transaction");
-            assert_eq!(*txid, txn.txid());
+            assert_eq!(*txid, txn.get_txid());
             txn
         })
     }
@@ -1390,7 +1391,7 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
         .map(|b| {
             let mut rows = vec![];
             let blockhash = full_hash(&b.entry.hash()[..]);
-            let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.txid()).collect();
+            let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.get_txid()).collect();
             for tx in &b.block.txdata {
                 add_transaction(tx, blockhash, &mut rows, iconfig);
             }
@@ -1420,7 +1421,7 @@ fn add_transaction(
         rows.push(TxRow::new(tx).into_row());
     }
 
-    let txid = full_hash(&tx.txid()[..]);
+    let txid = full_hash(&tx.get_txid()[..]);
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) {
             rows.push(TxOutRow::new(&txid, txo_index, txo).into_row());
@@ -1552,7 +1553,7 @@ fn index_transaction(
     //      H{funding-scripthash}{funding-height}{funding-block-pos}F{funding-txid:vout} → ""
     // persist "edges" for fast is-this-TXO-spent check
     //      S{funding-txid:vout}{spending-txid:vin} → ""
-    let txid = full_hash(&tx.txid()[..]);
+    let txid = full_hash(&tx.get_txid()[..]);
     let script_callback = |script_hash| {
         if let Operation::DeleteBlocksWithHistory(tx) = op {
             tx.send(script_hash).expect("unbounded channel won't fail");
@@ -1560,6 +1561,10 @@ fn index_transaction(
     };
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) || iconfig.index_unspendables {
+            #[cfg(not(feature = "liquid"))]
+            let value = txo.value.to_sat();
+            #[cfg(feature = "liquid")]
+            let value = txo.value;
             let history = TxHistoryRow::new(
                 &txo.script_pubkey,
                 confirmed_height,
@@ -1567,7 +1572,7 @@ fn index_transaction(
                 TxHistoryInfo::Funding(FundingInfo {
                     txid,
                     vout: txo_index as u32,
-                    value: txo.value,
+                    value,
                 }),
             );
             script_callback(history.key.hash);
@@ -1588,6 +1593,11 @@ fn index_transaction(
             .get(&txi.previous_output)
             .unwrap_or_else(|| panic!("missing previous txo {}", txi.previous_output));
 
+        #[cfg(not(feature = "liquid"))]
+        let prev_value = prev_txo.value.to_sat();
+        #[cfg(feature = "liquid")]
+        let prev_value = prev_txo.value;
+
         let history = TxHistoryRow::new(
             &prev_txo.script_pubkey,
             confirmed_height,
@@ -1597,7 +1607,7 @@ fn index_transaction(
                 vin: txi_index as u32,
                 prev_txid: full_hash(&txi.previous_output.txid[..]),
                 prev_vout: txi.previous_output.vout,
-                value: prev_txo.value,
+                value: prev_value,
             }),
         );
         script_callback(history.key.hash);
@@ -1664,7 +1674,7 @@ struct TxRow {
 
 impl TxRow {
     fn new(txn: &Transaction) -> TxRow {
-        let txid = full_hash(&txn.txid()[..]);
+        let txid = full_hash(&txn.get_txid()[..]);
         TxRow {
             key: TxRowKey { code: b'T', txid },
             value: serialize(txn),
@@ -1697,7 +1707,7 @@ struct TxConfRow {
 
 impl TxConfRow {
     fn new(txn: &Transaction, blockhash: FullHash) -> TxConfRow {
-        let txid = full_hash(&txn.txid()[..]);
+        let txid = full_hash(&txn.get_txid()[..]);
         TxConfRow {
             key: TxConfKey {
                 code: b'C',
