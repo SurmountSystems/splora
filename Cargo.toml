@@ -62,8 +62,7 @@ hyperlocal = "0.8"
 tokio = { version = "1", features = ["sync", "macros"] }
 
 # optional dependencies for electrum-discovery
-electrum-client = { version = "0.8", optional = true }
-
+electrum-client = { version = "0.24.1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -74,5 +73,5 @@ panic = 'abort'
 codegen-units = 1
 
 [patch.crates-io.electrum-client]
-git = "https://github.com/Blockstream/rust-electrum-client"
-rev = "d3792352992a539afffbe11501d1aff9fd5b919d" # add-peer branch
+git = "https://github.com/mempool/rust-electrum-client"
+rev = "4bbfc612d594fe23282c439d4bdc446cff01ba1c" # 0.24.1/add-peer branch
