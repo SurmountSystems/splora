@@ -8,7 +8,9 @@ pub mod fees;
 
 pub use self::block::{BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, HeaderEntry, HeaderList};
 pub use self::fees::get_tx_fee;
-pub use self::script::{get_innerscripts, ScriptToAddr, ScriptToAsm, SegwitDetection};
+pub use self::script::{
+    get_innerscripts, IsProvablyUnspendable, ScriptToAddr, ScriptToAsm, SegwitDetection,
+};
 pub use self::transaction::{
     extract_tx_prevouts, has_prevout, is_coinbase, is_spendable, serialize_outpoint,
     sigops::transaction_sigop_count, TransactionStatus, TxInput,

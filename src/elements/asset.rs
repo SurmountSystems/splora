@@ -13,7 +13,9 @@ use crate::elements::registry::{AssetMeta, AssetRegistry};
 use crate::errors::*;
 use crate::new_index::schema::{Operation, TxHistoryInfo, TxHistoryKey, TxHistoryRow};
 use crate::new_index::{db::DBFlush, ChainQuery, DBRow, Mempool, Query};
-use crate::util::{bincode_util, full_hash, Bytes, FullHash, TransactionStatus, TxInput};
+use crate::util::{
+    bincode_util, full_hash, Bytes, FullHash, IsProvablyUnspendable, TransactionStatus, TxInput,
+};
 
 lazy_static! {
     pub static ref NATIVE_ASSET_ID: AssetId =
@@ -261,7 +263,7 @@ fn index_tx_assets(
                     value: pegout.value,
                 }),
             ));
-        } else if txo.script_pubkey.is_op_return() && !txo.is_fee() {
+        } else if txo.script_pubkey.is_provably_unspendable_() && !txo.is_fee() {
             if let (Asset::Explicit(asset_id), Value::Explicit(value)) = (txo.asset, txo.value) {
                 if value > 0 {
                     history.push((

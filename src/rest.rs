@@ -10,7 +10,7 @@ use crate::new_index::{compute_script_hash, Query, SpendingInput, Utxo};
 use crate::util::{
     create_socket, electrum_merkle, extract_tx_prevouts, full_hash, get_innerscripts, get_tx_fee,
     has_prevout, is_coinbase, transaction_sigop_count, BlockHeaderMeta, BlockId, FullHash,
-    ScriptToAddr, ScriptToAsm, SegwitDetection, TransactionStatus,
+    IsProvablyUnspendable, ScriptToAddr, ScriptToAsm, SegwitDetection, TransactionStatus,
 };
 
 #[cfg(not(feature = "liquid"))]
@@ -369,7 +369,7 @@ impl TxOutValue {
             "fee"
         } else if script.is_empty() {
             "empty"
-        } else if script.is_op_return() {
+        } else if script.is_provably_unspendable_() {
             "op_return"
         } else if script.is_p2pk() {
             "p2pk"

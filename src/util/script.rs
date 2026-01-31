@@ -9,6 +9,41 @@ pub struct InnerScripts {
     pub witness_script: Option<Script>,
 }
 
+pub trait IsProvablyUnspendable {
+    fn is_provably_unspendable_(&self) -> bool;
+}
+
+#[cfg(not(feature = "liquid"))]
+impl IsProvablyUnspendable for bitcoin::Script {
+    // is_provably_unspendable() is deprecated in rust-bitcoin
+    // so we re-implement it here. Copy pasted.
+    fn is_provably_unspendable_(&self) -> bool {
+        use bitcoin::blockdata::opcodes::{
+            Class::{IllegalOp, ReturnOp},
+            ClassifyContext, Opcode,
+        };
+
+        match self.as_bytes().first() {
+            Some(b) => {
+                let first = Opcode::from(*b);
+                let class = first.classify(ClassifyContext::Legacy);
+
+                class == ReturnOp || class == IllegalOp
+            }
+            None => false,
+        }
+    }
+}
+
+#[cfg(feature = "liquid")]
+impl IsProvablyUnspendable for elements::Script {
+    #[inline(always)]
+    fn is_provably_unspendable_(&self) -> bool {
+        // Not deprecated yet
+        self.is_provably_unspendable()
+    }
+}
+
 // Extension trait for segwit script detection that works across bitcoin and elements
 pub trait SegwitDetection {
     fn segwit_is_p2wpkh(&self) -> bool;
