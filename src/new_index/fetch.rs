@@ -11,7 +11,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::thread;
 
-use crate::chain::{Block, BlockHash};
+use crate::chain::{Block, BlockHash, BlockSizeCompat};
 use crate::daemon::Daemon;
 use crate::errors::*;
 use crate::util::{spawn_thread, HeaderEntry, SyncChannel};
@@ -82,7 +82,7 @@ pub fn bitcoind_sequential_fetcher(
                     .zip(entries)
                     .map(|(block, entry)| BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
-                        size: block.size() as u32,
+                        size: block.get_block_size() as u32,
                         block,
                     })
                     .collect();
@@ -138,7 +138,7 @@ fn bitcoind_fetcher(
                     .zip(entries)
                     .map(|(block, entry)| BlockEntry {
                         entry: entry.clone(), // TODO: remove this clone()
-                        size: block.size() as u32,
+                        size: block.get_block_size() as u32,
                         block,
                     })
                     .collect();
