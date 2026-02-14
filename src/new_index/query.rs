@@ -210,26 +210,39 @@ impl Query {
             .copied()
     }
 
-    pub fn estimate_fee_map(&self) -> HashMap<u16, f64> {
-        if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap() {
-            if cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL) {
-                return cache.clone();
-            }
-        }
-
-        self.update_fee_estimates();
-        self.cached_estimates.read().unwrap().0.clone()
-    }
-
     fn update_fee_estimates(&self) {
-        match self.daemon.estimatesmartfee_batch(&CONF_TARGETS) {
-            Ok(estimates) => {
-                *self.cached_estimates.write().unwrap() = (estimates, Some(Instant::now()));
+        let mempool = self.mempool.read().unwrap();
+        let projected_blocks = mempool.projected_blocks();
+
+        if projected_blocks.is_empty() {
+            // Fallback to Bitcoin Core RPC if no projected blocks available
+            drop(mempool);
+            match self.daemon.estimatesmartfee_batch(&CONF_TARGETS) {
+                Ok(estimates) => {
+                    *self.cached_estimates.write().unwrap() = (estimates, Some(Instant::now()));
+                }
+                Err(err) => {
+                    warn!("failed estimating feerates: {:?}", err);
+                }
             }
-            Err(err) => {
-                warn!("failed estimating feerates: {:?}", err);
-            }
+            return;
         }
+
+        let mut estimates: HashMap<u16, f64> = HashMap::with_capacity(CONF_TARGETS.len());
+        let last_block_fee = projected_blocks.last().map(|b| b.median_fee).unwrap_or(1.0);
+
+        for target in CONF_TARGETS {
+            let fee = if (target as usize) <= projected_blocks.len() {
+                // Use the median fee from the corresponding projected block (target-1 for 0-indexed)
+                projected_blocks[(target as usize) - 1].median_fee
+            } else {
+                // For targets beyond available blocks, use the last block's fee
+                last_block_fee
+            };
+            estimates.insert(target, fee);
+        }
+
+        *self.cached_estimates.write().unwrap() = (estimates, Some(Instant::now()));
     }
 
     pub fn get_relayfee(&self) -> Result<f64> {

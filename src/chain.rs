@@ -130,6 +130,18 @@ impl Network {
         }
     }
 
+    #[cfg(not(feature = "liquid"))]
+    #[inline(always)]
+    pub const fn is_liquid(self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "liquid")]
+    #[inline(always)]
+    pub const fn is_liquid(self) -> bool {
+        true
+    }
+
     #[cfg(feature = "liquid")]
     pub fn address_params(self) -> &'static address::AddressParams {
         // Liquid regtest uses elements's address params

@@ -110,6 +110,8 @@ pub struct BlockchainInfo {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct MempoolInfo {
     pub loaded: bool,
+    #[serde(default)]
+    pub mempoolminfee: f64, // in BTC/kB
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -531,7 +533,7 @@ impl Daemon {
         from_value(info).chain_err(|| "invalid blockchain info")
     }
 
-    fn getmempoolinfo(&self) -> Result<MempoolInfo> {
+    pub fn getmempoolinfo(&self) -> Result<MempoolInfo> {
         let info: Value = self.request("getmempoolinfo", json!([]))?;
         from_value(info).chain_err(|| "invalid mempool info")
     }

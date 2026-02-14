@@ -21,11 +21,18 @@ use crate::new_index::{
     compute_script_hash, schema::FullHash, ChainQuery, FundingInfo, ScriptStats, SpendingInfo,
     SpendingInput, TxHistoryInfo, Utxo,
 };
+use crate::util::fee_estimation::{FeeEstimator, RecommendedFees};
 use crate::util::fees::{make_fee_histogram, TxFeeInfo};
+use crate::util::gbt::{
+    build_projected_blocks, GbtTransaction, MempoolBlock, DEFAULT_BLOCK_WEIGHT,
+};
 use crate::util::{extract_tx_prevouts, full_hash, has_prevout, is_spendable, Bytes};
 
 #[cfg(feature = "liquid")]
 use crate::elements::asset;
+
+/// Maximum number of projected blocks to build for fee estimation
+pub const MAX_PROJECTED_BLOCKS: usize = 8;
 
 pub struct Mempool {
     chain: Arc<ChainQuery>,
@@ -36,6 +43,9 @@ pub struct Mempool {
     edges: HashMap<OutPoint, (Txid, u32)>,          // OutPoint -> (spending_txid, spending_vin)
     recent: BoundedVecDeque<TxOverview>,            // The N most recent txs to enter the mempool
     backlog_stats: (BacklogStats, Instant),
+    projected_blocks: (Vec<MempoolBlock>, Instant), // Cached projected blocks
+    recommended_fees: (RecommendedFees, Instant),   // Cached recommended fees
+    mempool_min_fee: f64,                           // Cached mempoolminfee in BTC/kB
 
     // monitoring
     latency: HistogramVec, // mempool requests latency
@@ -61,6 +71,7 @@ pub struct TxOverview {
 
 impl Mempool {
     pub fn new(chain: Arc<ChainQuery>, metrics: &Metrics, config: Arc<Config>) -> Self {
+        let ttl = config.mempool_backlog_stats_ttl;
         Mempool {
             chain,
             txstore: BTreeMap::new(),
@@ -70,8 +81,14 @@ impl Mempool {
             recent: BoundedVecDeque::new(config.mempool_recent_txs_size),
             backlog_stats: (
                 BacklogStats::default(),
-                Instant::now() - Duration::from_secs(config.mempool_backlog_stats_ttl),
+                Instant::now() - Duration::from_secs(ttl),
             ),
+            projected_blocks: (Vec::new(), Instant::now() - Duration::from_secs(ttl)),
+            recommended_fees: (
+                RecommendedFees::default(),
+                Instant::now() - Duration::from_secs(ttl),
+            ),
+            mempool_min_fee: 1.0, // Default: 1 sat/vB
             latency: metrics.histogram_vec(
                 HistogramOpts::new("mempool_latency", "Mempool requests latency (in seconds)"),
                 &["part"],
@@ -386,6 +403,16 @@ impl Mempool {
         &self.backlog_stats.0
     }
 
+    /// Get the projected mempool blocks
+    pub fn projected_blocks(&self) -> &[MempoolBlock] {
+        &self.projected_blocks.0
+    }
+
+    /// Get the recommended fees based on projected blocks
+    pub fn recommended_fees(&self) -> &RecommendedFees {
+        &self.recommended_fees.0
+    }
+
     pub fn unique_txids(&self) -> HashSet<Txid> {
         HashSet::from_iter(self.txstore.keys().cloned())
     }
@@ -409,6 +436,13 @@ impl Mempool {
         let txids_to_remove: HashSet<&Txid> = old_txids.difference(&all_txids).collect();
         let txids_to_add: Vec<&Txid> = all_txids.difference(&old_txids).collect();
 
+        // Get mempoolminfee for fee estimation
+        // [LOCK] No lock taken. Wait for RPC request.
+        let mempool_min_fee = daemon
+            .getmempoolinfo()
+            .map(|info| info.mempoolminfee * 100_000.0) // Convert from BTC/kB to sat/vB
+            .unwrap_or(1.0); // Default: 1 sat/vB
+
         // 3. Remove missing transactions. Even if we are unable to download new transactions from
         // the daemon, we still want to remove the transactions that are no longer in the mempool.
         // [LOCK] Write lock is released at the end of the call to remove().
@@ -420,7 +454,7 @@ impl Mempool {
             .gettransactions(&txids_to_add)
             .chain_err(|| format!("failed to get {} transactions", txids_to_add.len()))?;
 
-        // 4. Update local mempool to match daemon's state
+        // 5. Update local mempool to match daemon's state
         // [LOCK] Takes Write lock for whole scope.
         {
             let mut mempool = mempool.write().unwrap();
@@ -429,20 +463,31 @@ impl Mempool {
                 debug!("Mempool update added less transactions than expected");
             }
 
+            // Update mempoolminfee
+            mempool.mempool_min_fee = mempool_min_fee;
+
             mempool
                 .count
                 .with_label_values(&["txs"])
                 .set(mempool.txstore.len() as f64);
 
             // Update cached backlog stats (if expired)
-            if mempool.backlog_stats.1.elapsed()
-                > Duration::from_secs(mempool.config.mempool_backlog_stats_ttl)
-            {
+            let ttl = Duration::from_secs(mempool.config.mempool_backlog_stats_ttl);
+            if mempool.backlog_stats.1.elapsed() > ttl {
                 let _timer = mempool
                     .latency
                     .with_label_values(&["update_backlog_stats"])
                     .start_timer();
                 mempool.backlog_stats = (BacklogStats::new(&mempool.feeinfo), Instant::now());
+            }
+
+            // Update projected blocks and recommended fees (if expired)
+            if mempool.projected_blocks.1.elapsed() > ttl {
+                let _timer = mempool
+                    .latency
+                    .with_label_values(&["update_projected_blocks"])
+                    .start_timer();
+                mempool.update_projected_blocks();
             }
 
             Ok(())
@@ -690,6 +735,56 @@ impl Mempool {
 
         self.edges
             .retain(|_outpoint, (txid, _vin)| !to_remove.contains(txid));
+    }
+
+    /// Build projected mempool blocks and calculate recommended fees.
+    ///
+    /// This method builds block templates using the GBT algorithm and
+    /// calculates recommended transaction fees based on the projected blocks.
+    fn update_projected_blocks(&mut self) {
+        // Build GBT transactions from mempool
+        let gbt_txs: Vec<GbtTransaction> = self
+            .txstore
+            .iter()
+            .filter_map(|(txid, tx)| {
+                let fee_info = self.feeinfo.get(txid)?;
+
+                // Get parent txids (inputs that are unconfirmed)
+                let parents: Vec<Txid> = tx
+                    .input
+                    .iter()
+                    .filter(|txin| has_prevout(txin))
+                    .filter_map(|txin| {
+                        let parent_txid = txin.previous_output.txid;
+                        if self.txstore.contains_key(&parent_txid) {
+                            Some(parent_txid)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                Some(GbtTransaction::new(*txid, fee_info, parents))
+            })
+            .collect();
+
+        // Build projected blocks (up to MAX_PROJECTED_BLOCKS blocks)
+        let result = build_projected_blocks(&gbt_txs, DEFAULT_BLOCK_WEIGHT, MAX_PROJECTED_BLOCKS);
+
+        self.projected_blocks = (result.block_stats, Instant::now());
+
+        // Calculate recommended fees using cached mempoolminfee
+        let estimator = FeeEstimator::for_network(self.config.network_type);
+        let fees =
+            estimator.calculate_recommended_fees(&self.projected_blocks.0, self.mempool_min_fee);
+
+        self.recommended_fees = (fees, Instant::now());
+
+        debug!(
+            "Updated projected blocks: {} blocks, recommended fastest fee: {} sat/vB",
+            self.projected_blocks.0.len(),
+            self.recommended_fees.0.fastest_fee
+        );
     }
 
     #[cfg(feature = "liquid")]

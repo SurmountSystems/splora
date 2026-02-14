@@ -1,11 +1,14 @@
 use crate::chain::{Network, Transaction, TxOut};
+use crate::util::transaction::sigops::transaction_sigop_count;
 use std::collections::HashMap;
 
 const VSIZE_BIN_WIDTH: u32 = 50_000; // in vbytes
 
 pub struct TxFeeInfo {
-    pub fee: u64,   // in satoshis
-    pub vsize: u32, // in virtual bytes (= weight/4)
+    pub fee: u64,    // in satoshis
+    pub vsize: u32,  // in virtual bytes (= weight/4)
+    pub weight: u32, // transaction weight
+    pub sigops: u32, // signature operations count
     pub fee_per_vbyte: f32,
 }
 
@@ -13,13 +16,19 @@ impl TxFeeInfo {
     pub fn new(tx: &Transaction, prevouts: &HashMap<u32, &TxOut>, network: Network) -> Self {
         let fee = get_tx_fee(tx, prevouts, network);
         #[cfg(not(feature = "liquid"))]
-        let vsize = tx.weight().to_wu() / 4;
+        let weight = tx.weight().to_wu() as u32;
         #[cfg(feature = "liquid")]
-        let vsize = tx.weight() / 4;
+        let weight = tx.weight() as u32;
+        let vsize = weight / 4;
+
+        // Calculate sigops, defaulting to 0 on error (e.g., coinbase)
+        let sigops = transaction_sigop_count(tx, prevouts).unwrap_or(0) as u32;
 
         TxFeeInfo {
             fee,
-            vsize: vsize as u32,
+            vsize,
+            weight,
+            sigops,
             fee_per_vbyte: fee as f32 / vsize as f32,
         }
     }

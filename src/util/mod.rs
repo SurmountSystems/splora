@@ -4,7 +4,9 @@ mod transaction;
 
 pub mod bincode_util;
 pub mod electrum_merkle;
+pub mod fee_estimation;
 pub mod fees;
+pub mod gbt;
 
 pub use self::block::{BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, HeaderEntry, HeaderList};
 pub use self::fees::get_tx_fee;

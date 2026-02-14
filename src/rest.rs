@@ -1771,8 +1771,16 @@ fn handle_request(
             json_response(recent, TTL_MEMPOOL_RECENT)
         }
 
-        (&Method::GET, Some(&"fee-estimates"), None, None, None, None) => {
-            json_response(query.estimate_fee_map(), TTL_SHORT)
+        // Recommended fees endpoint (mempool-style fee estimation)
+        (&Method::GET, Some(&"v1"), Some(&"fees"), Some(&"recommended"), None, None) => {
+            let mempool = query.mempool();
+            json_response(mempool.recommended_fees(), TTL_SHORT)
+        }
+
+        // Mempool blocks endpoint (projected blocks)
+        (&Method::GET, Some(&"v1"), Some(&"fees"), Some(&"mempool-blocks"), None, None) => {
+            let mempool = query.mempool();
+            json_response(mempool.projected_blocks(), TTL_SHORT)
         }
 
         #[cfg(feature = "liquid")]

@@ -8,6 +8,7 @@ pub mod schema;
 pub use self::db::{DBRow, DB};
 pub use self::fetch::{BlockEntry, FetchFrom};
 pub use self::mempool::Mempool;
+pub use self::mempool::MAX_PROJECTED_BLOCKS;
 pub use self::query::Query;
 pub use self::schema::{
     compute_script_hash, parse_hash, ChainQuery, FundingInfo, Indexer, ScriptStats, SpendingInfo,
