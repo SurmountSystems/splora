@@ -69,7 +69,7 @@ jobs:
           mv ./.cargohome/registry ~/.cargo/
           mv ./.cargohome/git ~/.cargo/
           rm -rf ./.cargohome
-          pkg install -y git rsync gmake llvm rust rocksdb
+          pkg install -y git rsync gmake llvm rust rocksdb cmake
 
         run: |
           cargo check --no-default-features
