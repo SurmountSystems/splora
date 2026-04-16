@@ -211,7 +211,7 @@ do
 	fi
 
 	# Run the electrs process (Note: db-dir is used in both commands)
-	cargo run \
+	nice cargo run \
 		--release \
 		--bin electrs \
 		--features "${FEATURES}" \
