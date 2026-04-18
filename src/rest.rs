@@ -583,6 +583,19 @@ fn find_txid(
     }
 }
 
+#[inline]
+fn confirmed_after_txid<'a>(
+    after_txid_location: &TxidLocation,
+    after_txid: Option<&'a Txid>,
+) -> Option<&'a Txid> {
+    match after_txid_location {
+        // A mempool cursor never exists in chain history, so always
+        // start from the newest confirmed tx when crossing the boundary.
+        TxidLocation::Mempool | TxidLocation::None => None,
+        TxidLocation::Chain(_) => after_txid,
+    }
+}
+
 /// Prepare transactions to be serialized in a JSON response
 ///
 /// Any transactions with missing prevouts will be filtered out of the response, rather than returned with incorrect data.
@@ -960,13 +973,8 @@ fn handle_request(
             };
 
             if txs.len() < max_txs {
-                let after_txid_ref = if !txs.is_empty() {
-                    // If there are any txs, we know mempool found the
-                    // after_txid IF it exists... so always return None.
-                    None
-                } else {
-                    after_txid.as_ref()
-                };
+                let after_txid_ref =
+                    confirmed_after_txid(&after_txid_location, after_txid.as_ref());
                 let mut confirmed_txs = query
                     .chain()
                     .history(
@@ -1067,13 +1075,8 @@ fn handle_request(
             };
 
             if txs.len() < max_txs {
-                let after_txid_ref = if !txs.is_empty() {
-                    // If there are any txs, we know mempool found the
-                    // after_txid IF it exists... so always return None.
-                    None
-                } else {
-                    after_txid.as_ref()
-                };
+                let after_txid_ref =
+                    confirmed_after_txid(&after_txid_location, after_txid.as_ref());
                 let mut confirmed_txs = query
                     .chain()
                     .history_group(
@@ -2148,6 +2151,8 @@ impl From<address::AddressError> for HttpError {
 
 #[cfg(test)]
 mod tests {
+    use super::{confirmed_after_txid, TxidLocation};
+    use crate::chain::Txid;
     use crate::rest::HttpError;
     use serde_json::Value;
     use std::collections::HashMap;
@@ -2212,6 +2217,37 @@ mod tests {
             .ok_or(HttpError::from("notexist absent or not a u64".to_string()));
 
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_confirmed_after_txid_uses_chain_cursor_only() {
+        let txid: Txid = "0000000000000000000000000000000000000000000000000000000000000001"
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            confirmed_after_txid(&TxidLocation::Mempool, Some(&txid)),
+            None
+        );
+        assert_eq!(confirmed_after_txid(&TxidLocation::None, Some(&txid)), None);
+        assert_eq!(
+            confirmed_after_txid(&TxidLocation::Chain(123), Some(&txid)),
+            Some(&txid)
+        );
+    }
+
+    #[test]
+    fn test_confirmed_after_txid_allows_mempool_chain_boundary_progress() {
+        let txid: Txid = "0000000000000000000000000000000000000000000000000000000000000002"
+            .parse()
+            .unwrap();
+
+        // If a mempool cursor returns no newer mempool txs, confirmed history
+        // must start from the newest confirmed tx instead of seeking this txid.
+        assert_eq!(
+            confirmed_after_txid(&TxidLocation::Mempool, Some(&txid)),
+            None
+        );
     }
 
     #[test]
