@@ -568,9 +568,27 @@ impl Connection {
         Ok(())
     }
 
+    fn close_idle_connection(&mut self, idle_for: Duration) {
+        info!(
+            "[{}] closing idle connection after {} seconds without requests (timeout: {} seconds)",
+            self.stream.addr_string(),
+            idle_for.as_secs(),
+            self.idle_timeout,
+        );
+        self.chan.close();
+    }
+
     fn handle_replies(&mut self, shutdown: crossbeam_channel::Receiver<()>) -> Result<()> {
-        let idle_check = crossbeam_channel::tick(Duration::from_secs(5));
+        let idle_timeout = Duration::from_secs(self.idle_timeout);
         loop {
+            let elapsed = self.last_request_at.elapsed();
+            if elapsed > idle_timeout {
+                self.close_idle_connection(elapsed);
+                return Ok(());
+            }
+            let remaining = idle_timeout.saturating_sub(elapsed);
+            let idle_deadline = crossbeam_channel::after(remaining);
+
             crossbeam_channel::select! {
                 recv(self.chan.receiver()) -> msg => {
                     let msg = msg.chain_err(|| "channel closed")?;
@@ -597,18 +615,10 @@ impl Connection {
                     self.chan.close();
                     return Ok(());
                 }
-                recv(idle_check) -> _ => {
+                recv(idle_deadline) -> _ => {
                     let idle_for = self.last_request_at.elapsed();
-                    if idle_for > Duration::from_secs(self.idle_timeout) {
-                        info!(
-                            "[{}] closing idle connection after {} seconds without requests (timeout: {} seconds)",
-                            self.stream.addr_string(),
-                            idle_for.as_secs(),
-                            self.idle_timeout,
-                        );
-                        self.chan.close();
-                        return Ok(());
-                    }
+                    self.close_idle_connection(idle_for);
+                    return Ok(());
                 }
             }
         }
