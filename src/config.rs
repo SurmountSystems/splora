@@ -65,6 +65,9 @@ pub struct Config {
     pub rest_default_max_address_summary_txs: usize,
     pub rest_max_mempool_page_size: usize,
     pub rest_max_mempool_txid_page_size: usize,
+    pub electrum_max_line_size: usize,
+    pub electrum_max_subscriptions: usize,
+    pub electrum_max_clients: usize,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -278,6 +281,21 @@ impl Config {
                     .long("electrum-banner")
                     .help("Welcome banner for the Electrum server, shown in the console to clients.")
                     .takes_value(true)
+            ).arg(
+                Arg::with_name("electrum_max_line_size")
+                    .long("electrum-max-line-size")
+                    .help("Maximum size of a single Electrum request line in bytes (default: 1 MiB).")
+                    .default_value("1048576")
+            ).arg(
+                Arg::with_name("electrum_max_subscriptions")
+                    .long("electrum-max-subscriptions")
+                    .help("Maximum number of scripthash subscriptions per client connection.")
+                    .default_value("100")
+            ).arg(
+                Arg::with_name("electrum_max_clients")
+                    .long("electrum-max-clients")
+                    .help("Maximum number of concurrent Electrum client connections.")
+                    .default_value("10")
             );
 
         #[cfg(unix)]
@@ -547,6 +565,9 @@ impl Config {
                 "rest_max_mempool_txid_page_size",
                 usize
             ),
+            electrum_max_line_size: value_t_or_exit!(m, "electrum_max_line_size", usize),
+            electrum_max_subscriptions: value_t_or_exit!(m, "electrum_max_subscriptions", usize),
+            electrum_max_clients: value_t_or_exit!(m, "electrum_max_clients", usize),
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
             main_loop_delay: value_t_or_exit!(m, "main_loop_delay", u64),

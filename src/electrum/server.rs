@@ -122,17 +122,22 @@ struct Connection {
     chan: SyncChannel<Message>,
     stats: Arc<Stats>,
     txs_limit: usize,
+    max_line_size: usize,
+    max_subscriptions: usize,
     die_please: Option<Receiver<()>>,
     #[cfg(feature = "electrum-discovery")]
     discovery: Option<Arc<DiscoveryManager>>,
 }
 
 impl Connection {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         query: Arc<Query>,
         stream: ConnectionStream,
         stats: Arc<Stats>,
         txs_limit: usize,
+        max_line_size: usize,
+        max_subscriptions: usize,
         die_please: Receiver<()>,
         #[cfg(feature = "electrum-discovery")] discovery: Option<Arc<DiscoveryManager>>,
     ) -> Connection {
@@ -144,6 +149,8 @@ impl Connection {
             chan: SyncChannel::new(10),
             stats,
             txs_limit,
+            max_line_size,
+            max_subscriptions,
             die_please: Some(die_please),
             #[cfg(feature = "electrum-discovery")]
             discovery,
@@ -293,6 +300,16 @@ impl Connection {
 
     fn blockchain_scripthash_subscribe(&mut self, params: &[Value]) -> Result<Value> {
         let script_hash = hash_from_value(params.first()).chain_err(|| "bad script_hash")?;
+
+        // Enforce per-client subscription limit (don't count re-subscriptions to the same hash)
+        if !self.status_hashes.contains_key(&script_hash)
+            && self.status_hashes.len() >= self.max_subscriptions
+        {
+            bail!(
+                "subscription limit reached ({} max per client)",
+                self.max_subscriptions
+            );
+        }
 
         let history_txids = get_history(&self.query, &script_hash[..], self.txs_limit)?;
         let status_hash = get_status_hash(history_txids, &self.query)
@@ -623,15 +640,25 @@ impl Connection {
     fn handle_requests(
         mut reader: BufReader<ConnectionStream>,
         tx: crossbeam_channel::Sender<Message>,
+        max_line_size: usize,
     ) -> Result<()> {
         loop {
             let mut line = Vec::<u8>::new();
-            reader
+            // Read up to max_line_size + 1 bytes to detect oversized lines
+            let mut limited = (&mut reader).take((max_line_size as u64).saturating_add(1));
+            limited
                 .read_until(b'\n', &mut line)
                 .chain_err(|| "failed to read a request")?;
             if line.is_empty() {
                 tx.send(Message::Done).chain_err(|| "channel closed")?;
                 return Ok(());
+            } else if line.len() > max_line_size {
+                let _ = tx.send(Message::Done);
+                bail!(
+                    "request line too large ({} bytes, max is {})",
+                    line.len(),
+                    max_line_size
+                )
             } else {
                 if line.starts_with(&[22, 3, 1]) {
                     // (very) naive SSL handshake detection
@@ -671,7 +698,10 @@ impl Connection {
             let _ = reply_killer.send(());
         });
 
-        let child = spawn_thread("reader", || Connection::handle_requests(reader, tx));
+        let max_line_size = self.max_line_size;
+        let child = spawn_thread("reader", move || {
+            Connection::handle_requests(reader, tx, max_line_size)
+        });
         if let Err(e) = self.handle_replies(reply_receiver) {
             error!(
                 "[{}] connection handling failed: {}",
@@ -855,6 +885,9 @@ impl RPC {
         });
 
         let txs_limit = config.electrum_txs_limit;
+        let max_line_size = config.electrum_max_line_size;
+        let max_subscriptions = config.electrum_max_subscriptions;
+        let max_clients = config.electrum_max_clients;
 
         RPC {
             notification: notification.sender(),
@@ -872,10 +905,33 @@ impl RPC {
                     acceptor_shutdown_sender,
                 );
 
-                let mut threads = HashMap::new();
+                let mut threads: HashMap<thread::ThreadId, (thread::JoinHandle<()>, Sender<()>)> =
+                    HashMap::new();
                 let (garbage_sender, garbage_receiver) = crossbeam_channel::unbounded();
 
                 while let Some(stream) = acceptor.receiver().recv().unwrap() {
+                    // Clean up finished threads before checking connection limit
+                    while let Ok(id) = garbage_receiver.try_recv() {
+                        if let Some((thread, killer)) = threads.remove(&id) {
+                            let _ = killer.send(());
+                            if let Err(error) = thread.join() {
+                                error!("failed to join {:?}: {:?}", id, error);
+                            }
+                        }
+                    }
+
+                    // Enforce maximum connection limit
+                    if threads.len() >= max_clients {
+                        warn!(
+                            "[{}] rejecting connection: max clients reached ({}/{})",
+                            stream.addr_string(),
+                            threads.len(),
+                            max_clients
+                        );
+                        let _ = stream.shutdown(Shutdown::Both);
+                        continue;
+                    }
+
                     let addr = stream.addr_string();
                     // explicitely scope the shadowed variables for the new thread
                     let query = Arc::clone(&query);
@@ -898,6 +954,8 @@ impl RPC {
                             stream,
                             stats,
                             txs_limit,
+                            max_line_size,
+                            max_subscriptions,
                             peace_receiver,
                             #[cfg(feature = "electrum-discovery")]
                             discovery,
@@ -911,15 +969,6 @@ impl RPC {
 
                     trace!("[{}] spawned {:?}", addr, spawned.thread().id());
                     threads.insert(spawned.thread().id(), (spawned, killer));
-                    while let Ok(id) = garbage_receiver.try_recv() {
-                        if let Some((thread, killer)) = threads.remove(&id) {
-                            trace!("[{}] joining {:?}", addr, id);
-                            let _ = killer.send(());
-                            if let Err(error) = thread.join() {
-                                error!("failed to join {:?}: {:?}", id, error);
-                            }
-                        }
-                    }
                 }
                 // Drop these
                 drop(acceptor);
