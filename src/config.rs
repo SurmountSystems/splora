@@ -68,6 +68,7 @@ pub struct Config {
     pub electrum_max_line_size: usize,
     pub electrum_max_subscriptions: usize,
     pub electrum_max_clients: usize,
+    pub electrum_idle_timeout: u64,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -296,6 +297,11 @@ impl Config {
                     .long("electrum-max-clients")
                     .help("Maximum number of concurrent Electrum client connections.")
                     .default_value("10")
+            ).arg(
+                Arg::with_name("electrum_idle_timeout")
+                    .long("electrum-idle-timeout")
+                    .help("Maximum idle time in seconds since the last client request before disconnecting the Electrum connection.")
+                    .default_value("600")
             );
 
         #[cfg(unix)]
@@ -568,6 +574,7 @@ impl Config {
             electrum_max_line_size: value_t_or_exit!(m, "electrum_max_line_size", usize),
             electrum_max_subscriptions: value_t_or_exit!(m, "electrum_max_subscriptions", usize),
             electrum_max_clients: value_t_or_exit!(m, "electrum_max_clients", usize),
+            electrum_idle_timeout: value_t_or_exit!(m, "electrum_idle_timeout", u64),
             jsonrpc_import: m.is_present("jsonrpc_import"),
             light_mode: m.is_present("light_mode"),
             main_loop_delay: value_t_or_exit!(m, "main_loop_delay", u64),

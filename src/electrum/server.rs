@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
 use error_chain::ChainedError;
@@ -124,6 +125,8 @@ struct Connection {
     txs_limit: usize,
     max_line_size: usize,
     max_subscriptions: usize,
+    idle_timeout: u64,
+    last_request_at: Instant,
     die_please: Option<Receiver<()>>,
     #[cfg(feature = "electrum-discovery")]
     discovery: Option<Arc<DiscoveryManager>>,
@@ -138,6 +141,7 @@ impl Connection {
         txs_limit: usize,
         max_line_size: usize,
         max_subscriptions: usize,
+        idle_timeout: u64,
         die_please: Receiver<()>,
         #[cfg(feature = "electrum-discovery")] discovery: Option<Arc<DiscoveryManager>>,
     ) -> Connection {
@@ -151,6 +155,8 @@ impl Connection {
             txs_limit,
             max_line_size,
             max_subscriptions,
+            idle_timeout,
+            last_request_at: Instant::now(),
             die_please: Some(die_please),
             #[cfg(feature = "electrum-discovery")]
             discovery,
@@ -562,14 +568,34 @@ impl Connection {
         Ok(())
     }
 
+    fn close_idle_connection(&mut self, idle_for: Duration) {
+        info!(
+            "[{}] closing idle connection after {} seconds without requests (timeout: {} seconds)",
+            self.stream.addr_string(),
+            idle_for.as_secs(),
+            self.idle_timeout,
+        );
+        self.chan.close();
+    }
+
     fn handle_replies(&mut self, shutdown: crossbeam_channel::Receiver<()>) -> Result<()> {
+        let idle_timeout = Duration::from_secs(self.idle_timeout);
         loop {
+            let elapsed = self.last_request_at.elapsed();
+            if elapsed > idle_timeout {
+                self.close_idle_connection(elapsed);
+                return Ok(());
+            }
+            let remaining = idle_timeout.saturating_sub(elapsed);
+            let idle_deadline = crossbeam_channel::after(remaining);
+
             crossbeam_channel::select! {
                 recv(self.chan.receiver()) -> msg => {
                     let msg = msg.chain_err(|| "channel closed")?;
                     trace!("RPC {:?}", msg);
                     match msg {
                         Message::Request(line) => {
+                            self.last_request_at = Instant::now();
                             let result = self.handle_line(&line);
                             self.send_values(&[result])?
                         }
@@ -587,6 +613,11 @@ impl Connection {
                 }
                 recv(shutdown) -> _ => {
                     self.chan.close();
+                    return Ok(());
+                }
+                recv(idle_deadline) -> _ => {
+                    let idle_for = self.last_request_at.elapsed();
+                    self.close_idle_connection(idle_for);
                     return Ok(());
                 }
             }
@@ -888,6 +919,7 @@ impl RPC {
         let max_line_size = config.electrum_max_line_size;
         let max_subscriptions = config.electrum_max_subscriptions;
         let max_clients = config.electrum_max_clients;
+        let idle_timeout = config.electrum_idle_timeout;
 
         RPC {
             notification: notification.sender(),
@@ -956,6 +988,7 @@ impl RPC {
                             txs_limit,
                             max_line_size,
                             max_subscriptions,
+                            idle_timeout,
                             peace_receiver,
                             #[cfg(feature = "electrum-discovery")]
                             discovery,
