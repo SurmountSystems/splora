@@ -69,14 +69,13 @@ pub struct Config {
     pub electrum_max_subscriptions: usize,
     pub electrum_max_clients: usize,
     pub electrum_idle_timeout: u64,
+    pub electrum_public_hosts: Option<crate::electrum::ServerHosts>,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
     #[cfg(feature = "liquid")]
     pub asset_db_path: Option<PathBuf>,
 
-    #[cfg(feature = "electrum-discovery")]
-    pub electrum_public_hosts: Option<crate::electrum::ServerHosts>,
     #[cfg(feature = "electrum-discovery")]
     pub electrum_announce: bool,
     #[cfg(feature = "electrum-discovery")]
@@ -521,6 +520,8 @@ impl Config {
         let electrum_public_hosts = m
             .value_of("electrum_public_hosts")
             .map(|s| serde_json::from_str(s).expect("invalid --electrum-public-hosts"));
+        #[cfg(not(feature = "electrum-discovery"))]
+        let electrum_public_hosts: Option<crate::electrum::ServerHosts> = None;
 
         let mut log = stderrlog::new();
         log.verbosity(m.occurrences_of("verbosity") as usize);
@@ -604,7 +605,6 @@ impl Config {
             #[cfg(feature = "liquid")]
             asset_db_path,
 
-            #[cfg(feature = "electrum-discovery")]
             electrum_public_hosts,
             #[cfg(feature = "electrum-discovery")]
             electrum_announce: m.is_present("electrum_announce"),
