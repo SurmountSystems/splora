@@ -14,6 +14,8 @@ use crate::errors::*;
 // (in number of hex characters, not bytes)
 
 const DIR_PARTITION_LEN: usize = 2;
+const SEARCH_SORT_CANDIDATE_LIMIT: usize = 2000;
+
 pub struct AssetRegistry {
     directory: path::PathBuf,
     assets_cache: HashMap<AssetId, (SystemTime, AssetMeta)>,
@@ -51,6 +53,39 @@ impl AssetRegistry {
             assets.len(),
             assets.into_iter().skip(start_index).take(limit).collect(),
         )
+    }
+
+    pub fn search(&self, query: &str, limit: usize) -> Vec<AssetEntry<'_>> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() || limit == 0 {
+            return vec![];
+        }
+
+        let (mut results, candidates) = search_by(
+            self.assets_cache
+                .iter()
+                .map(|(asset_id, (_, metadata))| (asset_id, metadata)),
+            &query,
+            limit,
+            |metadata| metadata.ticker.as_deref(),
+        );
+
+        if results.len() < limit {
+            let (name_matches, candidates) =
+                search_by(candidates, &query, limit - results.len(), |metadata| {
+                    Some(&metadata.name)
+                });
+            results.extend(name_matches);
+
+            if results.len() < limit {
+                let (domain_matches, _) =
+                    search_by(candidates, &query, limit - results.len(), AssetMeta::domain);
+                results.extend(domain_matches);
+            }
+        }
+
+        results.truncate(limit);
+        results
     }
 
     pub fn fs_sync(&mut self) -> Result<()> {
@@ -126,7 +161,7 @@ pub struct AssetMeta {
 }
 
 impl AssetMeta {
-    fn domain(&self) -> Option<&str> {
+    pub(crate) fn domain(&self) -> Option<&str> {
         self.entity["domain"].as_str()
     }
 }
@@ -191,4 +226,49 @@ fn lc_cmp_opt(a: &Option<String>, b: &Option<String>) -> cmp::Ordering {
     a.as_ref()
         .map(|a| a.to_lowercase())
         .cmp(&b.as_ref().map(|b| b.to_lowercase()))
+}
+
+fn search_by<'a, I, F>(
+    candidates: I,
+    query: &str,
+    limit: usize,
+    field: F,
+) -> (Vec<AssetEntry<'a>>, Vec<AssetEntry<'a>>)
+where
+    I: IntoIterator<Item = AssetEntry<'a>>,
+    F: Fn(&AssetMeta) -> Option<&str>,
+{
+    let mut matches = vec![];
+    let mut remaining = vec![];
+
+    for (asset_id, metadata) in candidates {
+        let position = field(metadata).and_then(|field| {
+            let lc_field = field.to_lowercase();
+            lc_field.find(query).map(|position| (position, lc_field))
+        });
+
+        if let Some((position, field)) = position {
+            if matches.len() >= SEARCH_SORT_CANDIDATE_LIMIT {
+                continue;
+            }
+            matches.push((position, field, asset_id, metadata));
+        } else {
+            remaining.push((asset_id, metadata));
+        }
+    }
+
+    matches.sort_unstable_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(b.2))
+    });
+
+    (
+        matches
+            .into_iter()
+            .take(limit)
+            .map(|(_, _, asset_id, metadata)| (asset_id, metadata))
+            .collect(),
+        remaining,
+    )
 }
