@@ -1865,6 +1865,21 @@ fn handle_request(
         }
 
         #[cfg(feature = "liquid")]
+        (&Method::GET, Some(&"assets"), Some(&"registry"), Some(asset_str), None, None) => {
+            let asset_id = AssetId::from_str(asset_str)?;
+            let registry_entry = query
+                .lookup_registry_asset(&asset_id)
+                .map_err(|e| {
+                    HttpError(StatusCode::SERVICE_UNAVAILABLE, e.description().to_string())
+                })?
+                .ok_or_else(|| {
+                    HttpError::not_found("Asset id not found in registry".to_string())
+                })?;
+
+            json_response(registry_entry, TTL_SHORT)
+        }
+
+        #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"asset"), Some(asset_str), None, None, None) => {
             let asset_id = AssetId::from_str(asset_str)?;
             let asset_entry = query

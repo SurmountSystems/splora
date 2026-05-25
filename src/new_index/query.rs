@@ -272,6 +272,15 @@ impl Query {
     }
 
     #[cfg(feature = "liquid")]
+    pub fn lookup_registry_asset(&self, asset_id: &AssetId) -> Result<Option<AssetMeta>> {
+        let asset_db = self
+            .asset_db
+            .as_ref()
+            .chain_err(|| "asset registry unavailable")?;
+        Ok(asset_db.read().unwrap().get(asset_id).cloned())
+    }
+
+    #[cfg(feature = "liquid")]
     pub fn list_registry_assets(
         &self,
         start_index: usize,
