@@ -1806,6 +1806,10 @@ fn handle_request(
             json_response(recent, TTL_MEMPOOL_RECENT)
         }
 
+        (&Method::GET, Some(&"fee-estimates"), None, None, None, None) => {
+            json_response(query.estimate_fee_map(), TTL_SHORT)
+        }
+
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"assets"), Some(&"registry"), Some(&"search"), None, None) => {
             let search = query_params.get("q").map(|q| q.trim()).unwrap_or("");
