@@ -27,7 +27,7 @@ use elements::encode::serialize;
 
 use crate::chain::Txid;
 use crate::config::{Config, VERSION_STRING};
-use crate::electrum::{get_electrum_height, ProtocolVersion};
+use crate::electrum::{get_electrum_height, ProtocolVersion, ServerFeatures};
 use crate::errors::*;
 use crate::metrics::{Gauge, HistogramOpts, HistogramVec, MetricOpts, Metrics};
 use crate::new_index::{Query, Utxo};
@@ -41,7 +41,7 @@ const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 4);
 const MAX_HEADERS: usize = 2016;
 
 #[cfg(feature = "electrum-discovery")]
-use crate::electrum::{DiscoveryManager, ServerFeatures};
+use crate::electrum::DiscoveryManager;
 
 // TODO: Sha256dHash should be a generic hash-container (since script hash is single SHA256)
 fn hash_from_value(val: Option<&Value>) -> Result<Sha256dHash> {
@@ -128,6 +128,7 @@ struct Connection {
     idle_timeout: u64,
     last_request_at: Instant,
     die_please: Option<Receiver<()>>,
+    server_features: Arc<ServerFeatures>,
     #[cfg(feature = "electrum-discovery")]
     discovery: Option<Arc<DiscoveryManager>>,
 }
@@ -143,6 +144,7 @@ impl Connection {
         max_subscriptions: usize,
         idle_timeout: u64,
         die_please: Receiver<()>,
+        server_features: Arc<ServerFeatures>,
         #[cfg(feature = "electrum-discovery")] discovery: Option<Arc<DiscoveryManager>>,
     ) -> Connection {
         Connection {
@@ -158,6 +160,7 @@ impl Connection {
             idle_timeout,
             last_request_at: Instant::now(),
             die_please: Some(die_please),
+            server_features,
             #[cfg(feature = "electrum-discovery")]
             discovery,
         }
@@ -179,13 +182,8 @@ impl Connection {
         Ok(json!(self.query.config().electrum_banner.clone()))
     }
 
-    #[cfg(feature = "electrum-discovery")]
     fn server_features(&self) -> Result<Value> {
-        let discovery = self
-            .discovery
-            .as_ref()
-            .chain_err(|| "discovery is disabled")?;
-        Ok(json!(discovery.our_features()))
+        Ok(json!(self.server_features.as_ref()))
     }
 
     fn server_donation_address(&self) -> Result<Value> {
@@ -490,9 +488,8 @@ impl Connection {
             "server.peers.subscribe" => self.server_peers_subscribe(),
             "server.ping" => Ok(Value::Null),
             "server.version" => self.server_version(),
-
-            #[cfg(feature = "electrum-discovery")]
             "server.features" => self.server_features(),
+
             #[cfg(feature = "electrum-discovery")]
             "server.add_peer" => self.server_add_peer(params),
 
@@ -891,11 +888,10 @@ impl RPC {
 
         let notification = Channel::unbounded();
 
-        // Discovery is enabled when electrum-public-hosts is set
-        #[cfg(feature = "electrum-discovery")]
-        let discovery = config.electrum_public_hosts.clone().map(|hosts| {
+        let server_features = {
             use crate::chain::genesis_hash;
-            let features = ServerFeatures {
+            let hosts = config.electrum_public_hosts.clone().unwrap_or_default();
+            Arc::new(ServerFeatures {
                 hosts,
                 server_version: VERSION_STRING.clone(),
                 genesis_hash: genesis_hash(config.network_type),
@@ -903,10 +899,15 @@ impl RPC {
                 protocol_max: PROTOCOL_VERSION,
                 hash_function: "sha256".into(),
                 pruning: None,
-            };
+            })
+        };
+
+        // Discovery is enabled when electrum-public-hosts is set
+        #[cfg(feature = "electrum-discovery")]
+        let discovery = config.electrum_public_hosts.as_ref().map(|_hosts| {
             let discovery = Arc::new(DiscoveryManager::new(
                 config.network_type,
-                features,
+                server_features.as_ref().clone(),
                 PROTOCOL_VERSION,
                 config.electrum_announce,
                 config.tor_proxy,
@@ -977,6 +978,7 @@ impl RPC {
 
                     #[cfg(feature = "electrum-discovery")]
                     let discovery = discovery.clone();
+                    let server_features = Arc::clone(&server_features);
 
                     let spawned = spawn_thread("peer", move || {
                         let addr = stream.addr_string();
@@ -990,6 +992,7 @@ impl RPC {
                             max_subscriptions,
                             idle_timeout,
                             peace_receiver,
+                            server_features,
                             #[cfg(feature = "electrum-discovery")]
                             discovery,
                         );

@@ -35,7 +35,7 @@ use hyperlocal::UnixServerExt;
 use std::{cmp, fs};
 #[cfg(feature = "liquid")]
 use {
-    crate::elements::{peg::PegoutValue, AssetSorting, IssuanceValue},
+    crate::elements::{peg::PegoutValue, AssetMeta, AssetSorting, IssuanceValue},
     elements::{
         confidential::{Asset, Nonce, Value},
         encode, AssetId,
@@ -59,6 +59,12 @@ const MULTI_ADDRESS_LIMIT: usize = 300;
 const ASSETS_PER_PAGE: usize = 25;
 #[cfg(feature = "liquid")]
 const ASSETS_MAX_PER_PAGE: usize = 100;
+#[cfg(feature = "liquid")]
+const ASSETS_SEARCH_DEFAULT_LIMIT: usize = 15;
+#[cfg(feature = "liquid")]
+const ASSETS_SEARCH_MAX_LIMIT: usize = 100;
+#[cfg(feature = "liquid")]
+const ASSETS_SEARCH_MAX_QUERY_LEN: usize = 64;
 
 const TTL_LONG: u32 = 157_784_630; // ttl for static resources (5 years)
 const TTL_SHORT: u32 = 10; // ttl for volatie resources
@@ -128,6 +134,32 @@ impl BlockValue {
 
             #[cfg(feature = "liquid")]
             ext: Some(json!(header.ext)),
+        }
+    }
+}
+
+#[cfg(feature = "liquid")]
+#[derive(Serialize)]
+struct AssetRegistrySearchResult {
+    asset_id: AssetId,
+    name: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ticker: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
+}
+
+#[cfg(feature = "liquid")]
+impl AssetRegistrySearchResult {
+    fn new(asset_id: &AssetId, meta: &AssetMeta) -> Self {
+        let domain = meta.domain().map(String::from);
+        Self {
+            asset_id: *asset_id,
+            name: meta.name.clone(),
+            ticker: meta.ticker.clone(),
+            domain,
         }
     }
 }
@@ -1774,6 +1806,42 @@ fn handle_request(
             json_response(recent, TTL_MEMPOOL_RECENT)
         }
 
+        (&Method::GET, Some(&"fee-estimates"), None, None, None, None) => {
+            json_response(query.estimate_fee_map(), TTL_SHORT)
+        }
+
+        #[cfg(feature = "liquid")]
+        (&Method::GET, Some(&"assets"), Some(&"registry"), Some(&"search"), None, None) => {
+            let search = query_params.get("q").map(|q| q.trim()).unwrap_or("");
+            let assets = if search.is_empty() {
+                vec![]
+            } else if search.chars().count() > ASSETS_SEARCH_MAX_QUERY_LEN {
+                return Err(HttpError(
+                    StatusCode::BAD_REQUEST,
+                    "search query too long".to_string(),
+                ));
+            } else {
+                let limit = query_params
+                    .get("limit")
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(ASSETS_SEARCH_DEFAULT_LIMIT)
+                    .min(ASSETS_SEARCH_MAX_LIMIT);
+
+                query
+                    .search_registry_assets(search, limit, AssetRegistrySearchResult::new)
+                    .map_err(|e| {
+                        HttpError(StatusCode::SERVICE_UNAVAILABLE, e.description().to_string())
+                    })?
+            };
+
+            Ok(Response::builder()
+                // Disable caching because we don't currently support caching with query string params
+                .header("Cache-Control", "no-store")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_string(&assets)?))
+                .unwrap())
+        }
+
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"assets"), Some(&"registry"), None, None, None) => {
             let start_index: usize = query_params
@@ -1798,6 +1866,21 @@ fn handle_request(
                 .header("X-Total-Results", total_num.to_string())
                 .body(Body::from(serde_json::to_string(&assets)?))
                 .unwrap())
+        }
+
+        #[cfg(feature = "liquid")]
+        (&Method::GET, Some(&"assets"), Some(&"registry"), Some(asset_str), None, None) => {
+            let asset_id = AssetId::from_str(asset_str)?;
+            let registry_entry = query
+                .lookup_registry_asset(&asset_id)
+                .map_err(|e| {
+                    HttpError(StatusCode::SERVICE_UNAVAILABLE, e.description().to_string())
+                })?
+                .ok_or_else(|| {
+                    HttpError::not_found("Asset id not found in registry".to_string())
+                })?;
+
+            json_response(registry_entry, TTL_SHORT)
         }
 
         #[cfg(feature = "liquid")]
