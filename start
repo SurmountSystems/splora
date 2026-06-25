@@ -5,6 +5,7 @@ DAEMON=bitcoin
 NETWORK=mainnet
 FEATURES=default
 DB_FOLDER=/electrs
+ASSET_DB_ARGS=()
 NODENAME=$(hostname|cut -d . -f1)
 LOCATION=$(hostname|cut -d . -f2)
 USAGE="Usage: $0 (mainnet|testnet|signet|liquid|liquidtestnet) [popular-scripts]"
@@ -64,6 +65,7 @@ case "${1}" in
 		DAEMON=elements
 		NETWORK=liquid
 		FEATURES=liquid
+		ASSET_DB_ARGS=(--asset-db-path /elements/asset_registry_db)
 		THREADS=$((NPROC / 8))
 		CRONJOB_TIMING="12 4 * * *"
 	;;
@@ -71,6 +73,7 @@ case "${1}" in
 		DAEMON=elements
 		NETWORK=liquidtestnet
 		FEATURES=liquid
+		ASSET_DB_ARGS=(--asset-db-path /elements/asset_registry_testnet_db)
 		THREADS=$((NPROC / 8))
 		CRONJOB_TIMING="17 4 * * *"
 	;;
@@ -252,6 +255,7 @@ do
 		--network "${NETWORK}" \
 		--daemon-dir "${HOME}" \
 		--db-dir "${DB_FOLDER}" \
+		"${ASSET_DB_ARGS[@]}" \
 		--main-loop-delay "${MAIN_LOOP_DELAY}" \
 		--rpc-socket-file "${RPC_SOCKET_FILE}" \
 		--http-socket-file "${HTTP_SOCKET_FILE}" \
