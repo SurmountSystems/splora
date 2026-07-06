@@ -92,6 +92,9 @@ POPULAR_SCRIPTS_FILE="${POPULAR_SCRIPTS_FOLDER}/popular-scripts.txt"
 generate_popular_scripts() {
 	mkdir -p "${POPULAR_SCRIPTS_FOLDER}"
 
+	## Use fewer threads for popular-scripts to keep system load low
+	local JOB_THREAD_COUNT=$(( (THREADS / 4) + 1 ))
+
 	## Use nproc * 4 threads to generate the txt file (lots of iowait, so 2x~4x core count is ok)
 	## Only pick up addresses with 101 history events or more
 	## (Without lowering MIN_HISTORY_ITEMS_TO_CACHE this is the lowest we can go)
@@ -99,8 +102,8 @@ generate_popular_scripts() {
 	echo "[*] Generating popular-scripts using ${THREADS} threads..."
 	cd "${HOME}/electrs"
 	HIGH_USAGE_THRESHOLD=101 \
-	JOB_THREAD_COUNT=${THREADS} \
-	nice cargo run \
+	JOB_THREAD_COUNT=${JOB_THREAD_COUNT} \
+	nice -n 19 cargo run \
 		--release \
 		--bin popular-scripts \
 		--features "${FEATURES}" \
@@ -247,7 +250,7 @@ do
 	fi
 
 	# Run the electrs process (Note: db-dir is used in both commands)
-	nice cargo run \
+	nice -n 7 cargo run \
 		--release \
 		--bin electrs \
 		--features "${FEATURES}" \
