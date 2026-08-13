@@ -258,7 +258,7 @@ impl Config {
             .arg(
                 Arg::with_name("rest_default_max_address_summary_txs")
                     .long("rest-default-max-address-summary-txs")
-                    .help("The default number of transactions returned by the address summary endpoints.")
+                    .help("The default and maximum number of transactions returned by the address summary endpoints.")
                     .default_value("5000")
             )
             .arg(
