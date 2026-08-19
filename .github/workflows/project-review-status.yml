@@ -8,7 +8,7 @@ on:
 
 jobs:
   project-automation:
-    uses: mempool/.github/.github/workflows/project-board-automation.yml@master
+    uses: mempool/.github/.github/workflows/project-board-automation.yml@86b3a255a9a60ac3396d516bd26a64a171aef7d5 # master
     with:
       project-number: 8
     secrets:
