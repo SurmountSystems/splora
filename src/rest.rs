@@ -1,3 +1,4 @@
+use crate::auth::{Allowlist, AuthError};
 #[cfg(feature = "liquid")]
 use crate::chain::address;
 use crate::chain::{
@@ -6,6 +7,7 @@ use crate::chain::{
 use crate::config::{Config, BITCOIND_SUBVER, VERSION_STRING};
 use crate::errors;
 use crate::metrics::Metrics;
+use crate::mwck::{ClientState, MwckHub};
 use crate::new_index::{compute_script_hash, Query, SpendingInput, Utxo};
 use crate::util::{
     create_socket, electrum_merkle, extract_tx_prevouts, full_hash, get_innerscripts, get_tx_fee,
@@ -21,17 +23,26 @@ use std::str::FromStr;
 
 use bitcoin::blockdata::opcodes;
 use bitcoin::hashes::Hash;
+use futures_util::{SinkExt, StreamExt};
 use hex::{self, FromHexError};
 use hyper::{
-    header::HeaderValue,
+    header::{self, HeaderValue},
     service::{make_service_fn, service_fn},
+    upgrade::Upgraded,
 };
-use hyper::{Body, Method, Response, Server, StatusCode};
+use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use prometheus::{HistogramOpts, HistogramVec};
 use rayon::iter::ParallelIterator;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::WebSocketStream;
 
 use hyperlocal::UnixServerExt;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cmp, fs};
 #[cfg(feature = "liquid")]
 use {
@@ -70,6 +81,13 @@ const TTL_LONG: u32 = 157_784_630; // ttl for static resources (5 years)
 const TTL_SHORT: u32 = 10; // ttl for volatie resources
 const TTL_MEMPOOL_RECENT: u32 = 5; // ttl for GET /mempool/recent
 const CONF_FINAL: usize = 10; // reorgs deeper than this are considered unlikely
+
+const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_BODY_SIZE: usize = 1_000_000;
+const NIP98_WINDOW_SECS: u64 = 60;
+const WS_ALLOWLIST_POLL: Duration = Duration::from_secs(2);
+// Header-read timeout (~10s) is a Blockstream new-index valve. hyper 0.14.18 in this
+// lockfile has no Server::http1_header_read_timeout (that landed in 0.14.20).
 
 // internal api prefix
 const INTERNAL_PREFIX: &str = "internal";
@@ -653,12 +671,324 @@ fn prepare_txs(
         .collect()
 }
 
+/// Serialize confirmed or mempool txs for MWCK notify.
+pub fn transactions_as_json(
+    txs: Vec<(Transaction, Option<BlockId>)>,
+    query: &Query,
+    config: &Config,
+) -> Vec<serde_json::Value> {
+    prepare_txs(txs, query, config)
+        .into_iter()
+        .filter_map(|tv| serde_json::to_value(&tv).ok())
+        .collect()
+}
+
+/// Outcome of the HTTP / websocket NIP-98 gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HttpAuthOutcome {
+    PublicHealth,
+    Pubkey([u8; 32]),
+}
+
+fn is_public_health_path(path: &str) -> bool {
+    path == "/blocks/tip/hash" || path == "/blocks/tip/height"
+}
+
+/// Reconstruct the absolute URL NIP-98 `u` must match: proto from
+/// `X-Forwarded-Proto` (first hop) else `http`, host from `Host`, path+query.
+pub fn reconstruct_absolute_url(
+    forwarded_proto: Option<&str>,
+    host: Option<&str>,
+    path_and_query: &str,
+) -> String {
+    let proto = forwarded_proto
+        .unwrap_or("http")
+        .split(',')
+        .next()
+        .unwrap_or("http")
+        .trim();
+    let proto = if proto.is_empty() { "http" } else { proto };
+    let host = host.unwrap_or("localhost").trim();
+    let host = if host.is_empty() { "localhost" } else { host };
+    let path = if path_and_query.is_empty() {
+        "/"
+    } else {
+        path_and_query
+    };
+    format!("{}://{}{}", proto, host, path)
+}
+
+fn reconstruct_from_req(req: &Request<Body>) -> String {
+    let proto = req
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok());
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok());
+    let pq = req
+        .uri()
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or_else(|| req.uri().path());
+    reconstruct_absolute_url(proto, host, pq)
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// HTTP and `/api/v1/ws` NIP-98 gate. `--public-health` skips auth only for
+/// GET `/blocks/tip/hash` and GET `/blocks/tip/height`. An empty allowlist is
+/// 401 for everything else. Localhost is not an exception.
+pub fn http_ws_auth_gate(
+    method: &str,
+    path: &str,
+    authorization: Option<&str>,
+    absolute_url: &str,
+    body: &[u8],
+    now_unix: u64,
+    public_health: bool,
+    allow: &Allowlist,
+) -> Result<HttpAuthOutcome, AuthError> {
+    if public_health && method.eq_ignore_ascii_case("GET") && is_public_health_path(path) {
+        return Ok(HttpAuthOutcome::PublicHealth);
+    }
+    let pk = crate::auth::verify_nip98(
+        authorization,
+        method,
+        absolute_url,
+        body,
+        now_unix,
+        NIP98_WINDOW_SECS,
+        allow,
+    )?;
+    Ok(HttpAuthOutcome::Pubkey(pk))
+}
+
+fn unauthorized_response(err: &AuthError) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header("Content-Type", "text/plain")
+        .header("WWW-Authenticate", "Nostr")
+        .body(Body::from(err.to_string()))
+        .unwrap()
+}
+
+fn apply_common_headers(resp: &mut Response<Body>, config: &Config) {
+    resp.headers_mut()
+        .insert("X-Powered-By", HeaderValue::from_static(&VERSION_STRING));
+    if let Some(ref origins) = config.cors {
+        resp.headers_mut()
+            .insert("Access-Control-Allow-Origin", origins.parse().unwrap());
+    }
+    if let Some(subver) = BITCOIND_SUBVER.get() {
+        resp.headers_mut()
+            .insert("X-Bitcoin-Version", HeaderValue::from_static(subver));
+    }
+}
+
+fn is_websocket_upgrade(req: &Request<Body>) -> bool {
+    let upgrade = req
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    let conn = req
+        .headers()
+        .get(header::CONNECTION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_ascii_lowercase().contains("upgrade"))
+        .unwrap_or(false);
+    upgrade && conn
+}
+
+fn auth_header_from(req: &Request<Body>) -> Option<String> {
+    req.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+/// HTTP status for GET /api/v1/ws after the NIP-98 gate. This does not run
+/// the hyper upgrade. 401 when the gate fails; 101 when listed plus websocket
+/// headers; 400 when authorized but the request is not a websocket upgrade.
+pub fn mwck_upgrade_http_status(
+    gate: Result<HttpAuthOutcome, AuthError>,
+    is_websocket_upgrade: bool,
+    has_sec_websocket_key: bool,
+) -> StatusCode {
+    match gate {
+        Ok(HttpAuthOutcome::Pubkey(_)) => {
+            if !is_websocket_upgrade || !has_sec_websocket_key {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::SWITCHING_PROTOCOLS
+            }
+        }
+        Ok(HttpAuthOutcome::PublicHealth) | Err(_) => StatusCode::UNAUTHORIZED,
+    }
+}
+
+async fn handle_mwck_upgrade(
+    req: Request<Body>,
+    allow: Arc<Allowlist>,
+    hub: Arc<MwckHub>,
+    public_health: bool,
+) -> Response<Body> {
+    let authorization = auth_header_from(&req);
+    let absolute = reconstruct_from_req(&req);
+    let method = req.method().as_str().to_string();
+    let path = req.uri().path().to_string();
+    let gate = http_ws_auth_gate(
+        &method,
+        &path,
+        authorization.as_deref(),
+        &absolute,
+        b"",
+        now_unix(),
+        public_health,
+        &allow,
+    );
+    let ws = is_websocket_upgrade(&req);
+    let has_key = req.headers().get("sec-websocket-key").is_some();
+    match mwck_upgrade_http_status(gate.clone(), ws, has_key) {
+        StatusCode::UNAUTHORIZED => {
+            return unauthorized_response(match &gate {
+                Err(e) => e,
+                Ok(_) => &AuthError::NotAllowlisted,
+            });
+        }
+        StatusCode::BAD_REQUEST => {
+            let msg = if !ws {
+                "expected WebSocket upgrade on GET /api/v1/ws"
+            } else {
+                "missing Sec-WebSocket-Key"
+            };
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("Content-Type", "text/plain")
+                .body(Body::from(msg))
+                .unwrap();
+        }
+        _ => {}
+    }
+    let pubkey = match gate {
+        Ok(HttpAuthOutcome::Pubkey(pk)) => pk,
+        _ => return unauthorized_response(&AuthError::NotAllowlisted),
+    };
+
+    let key = match req.headers().get("sec-websocket-key") {
+        Some(k) => k.clone(),
+        None => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("Content-Type", "text/plain")
+                .body(Body::from("missing Sec-WebSocket-Key"))
+                .unwrap();
+        }
+    };
+    let accept = derive_accept_key(key.as_bytes());
+    let on_upgrade = hyper::upgrade::on(req);
+    tokio::spawn(async move {
+        match on_upgrade.await {
+            Ok(upgraded) => {
+                let ws = WebSocketStream::from_raw_socket(upgraded, Role::Server, None).await;
+                run_mwck_socket(ws, allow, hub, pubkey).await;
+            }
+            Err(e) => warn!("websocket upgrade failed: {}", e),
+        }
+    });
+
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(header::UPGRADE, "websocket")
+        .header(header::CONNECTION, "Upgrade")
+        .header("Sec-WebSocket-Accept", accept)
+        .body(Body::empty())
+        .unwrap()
+}
+
+async fn run_mwck_socket(
+    ws: WebSocketStream<Upgraded>,
+    allow: Arc<Allowlist>,
+    hub: Arc<MwckHub>,
+    pubkey: [u8; 32],
+) {
+    let (mut sink, mut stream) = ws.split();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let id = hub.register_socket(tx);
+    let mut state = ClientState::default();
+    let mut tick = tokio::time::interval(WS_ALLOWLIST_POLL);
+
+    loop {
+        if !allow.contains(&pubkey) {
+            break;
+        }
+        tokio::select! {
+            _ = tick.tick() => {
+                if !allow.contains(&pubkey) {
+                    break;
+                }
+            }
+            maybe_out = rx.recv() => {
+                match maybe_out {
+                    Some(v) => {
+                        if sink.send(WsMessage::Text(v.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            incoming = stream.next() => {
+                match incoming {
+                    Some(Ok(WsMessage::Text(t))) => {
+                        if !allow.contains(&pubkey) {
+                            break;
+                        }
+                        let msg: serde_json::Value = match serde_json::from_str(&t) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let reply = hub.handle_socket(&allow, &pubkey, &mut state, msg).await;
+                        hub.set_client_state(id, state.clone());
+                        if let Some(out) = reply {
+                            if sink.send(WsMessage::Text(out.to_string())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(WsMessage::Ping(p))) => {
+                        if sink.send(WsMessage::Pong(p)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(WsMessage::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(WsMessage::Binary(_)))
+                    | Some(Ok(WsMessage::Pong(_)))
+                    | Some(Ok(WsMessage::Frame(_))) => {}
+                }
+            }
+        }
+    }
+    hub.detach_client(id);
+    let _ = sink.send(WsMessage::Close(None)).await;
+}
+
 #[tokio::main]
 async fn run_server(
     config: Arc<Config>,
     query: Arc<Query>,
     rx: oneshot::Receiver<()>,
     metric: HistogramVec,
+    allow: Arc<Allowlist>,
+    hub: Arc<MwckHub>,
 ) {
     let addr = &config.http_addr;
     let socket_file = &config.http_socket_file;
@@ -669,18 +999,68 @@ async fn run_server(
     let make_service_fn_inn = || {
         let query = Arc::clone(&query);
         let config = Arc::clone(&config);
+        let allow = Arc::clone(&allow);
+        let hub = Arc::clone(&hub);
         let metric = metric.clone();
 
         async move {
-            Ok::<_, hyper::Error>(service_fn(move |req| {
+            Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
                 let query = Arc::clone(&query);
                 let config = Arc::clone(&config);
+                let allow = Arc::clone(&allow);
+                let hub = Arc::clone(&hub);
                 let timer = metric.with_label_values(&["all_methods"]).start_timer();
 
                 async move {
+                    if req.uri().path() == "/api/v1/ws" {
+                        let mut resp =
+                            handle_mwck_upgrade(req, allow, hub, config.public_health).await;
+                        apply_common_headers(&mut resp, &config);
+                        timer.observe_duration();
+                        return Ok::<_, hyper::Error>(resp);
+                    }
+
+                    let authorization = auth_header_from(&req);
+                    let absolute = reconstruct_from_req(&req);
                     let method = req.method().clone();
                     let uri = req.uri().clone();
-                    let body = hyper::body::to_bytes(req.into_body()).await?;
+                    let body_result =
+                        timeout(REQUEST_BODY_TIMEOUT, hyper::body::to_bytes(req.into_body())).await;
+
+                    let body = match body_result {
+                        Ok(Ok(bytes)) if bytes.len() > MAX_BODY_SIZE => {
+                            return Ok(Response::builder()
+                                .status(StatusCode::PAYLOAD_TOO_LARGE)
+                                .header("Content-Type", "text/plain")
+                                .body(Body::from("Request body too large"))
+                                .unwrap());
+                        }
+                        Ok(Ok(bytes)) => bytes,
+                        Ok(Err(e)) => return Err(e),
+                        Err(_) => {
+                            return Ok(Response::builder()
+                                .status(StatusCode::REQUEST_TIMEOUT)
+                                .header("Content-Type", "text/plain")
+                                .body(Body::from("Request timeout"))
+                                .unwrap());
+                        }
+                    };
+
+                    if let Err(e) = http_ws_auth_gate(
+                        method.as_str(),
+                        uri.path(),
+                        authorization.as_deref(),
+                        &absolute,
+                        &body,
+                        now_unix(),
+                        config.public_health,
+                        &allow,
+                    ) {
+                        let mut resp = unauthorized_response(&e);
+                        apply_common_headers(&mut resp, &config);
+                        timer.observe_duration();
+                        return Ok(resp);
+                    }
 
                     let mut resp = tokio::task::block_in_place(|| {
                         handle_request(method, uri, body, &query, &config)
@@ -693,16 +1073,7 @@ async fn run_server(
                             .body(Body::from(err.1))
                             .unwrap()
                     });
-                    resp.headers_mut()
-                        .insert("X-Powered-By", HeaderValue::from_static(&VERSION_STRING));
-                    if let Some(ref origins) = config.cors {
-                        resp.headers_mut()
-                            .insert("Access-Control-Allow-Origin", origins.parse().unwrap());
-                    }
-                    if let Some(subver) = BITCOIND_SUBVER.get() {
-                        resp.headers_mut()
-                            .insert("X-Bitcoin-Version", HeaderValue::from_static(subver));
-                    }
+                    apply_common_headers(&mut resp, &config);
                     timer.observe_duration();
                     Ok::<_, hyper::Error>(resp)
                 }
@@ -750,7 +1121,13 @@ async fn run_server(
     }
 }
 
-pub fn start(config: Arc<Config>, query: Arc<Query>, metrics: &Metrics) -> Handle {
+pub fn start(
+    config: Arc<Config>,
+    query: Arc<Query>,
+    metrics: &Metrics,
+    allow: Arc<Allowlist>,
+    hub: Arc<MwckHub>,
+) -> Handle {
     let (tx, rx) = oneshot::channel::<()>();
     let response_timer = metrics.histogram_vec(
         HistogramOpts::new("electrs_rest_api", "Electrs REST API response timings"),
@@ -760,7 +1137,7 @@ pub fn start(config: Arc<Config>, query: Arc<Query>, metrics: &Metrics) -> Handl
     Handle {
         tx,
         thread: crate::util::spawn_thread("rest-server", move || {
-            run_server(config, query, rx, response_timer);
+            run_server(config, query, rx, response_timer, allow, hub);
         }),
     }
 }
@@ -813,6 +1190,20 @@ fn handle_request(
             query.chain().best_height().to_string(),
             TTL_SHORT,
         ),
+
+        (&Method::GET, Some(&"block-template"), None, None, None, None) => {
+            handle_block_template(query, config)
+        }
+
+        // Authenticated Electrum JSON-RPC over HTTP. Production Electrum is
+        // this path plus `--rpc-socket-file`. Do not treat raw TCP Electrum
+        // as the production listener.
+        (&Method::POST, Some(&"electrum"), None, None, None, None) => {
+            let body_str = std::str::from_utf8(&body)
+                .map_err(|_| HttpError::from("Electrum JSON-RPC body must be UTF-8".to_string()))?;
+            let value = crate::electrum::handle_http_jsonrpc_body(query, body_str);
+            json_response_no_store(value)
+        }
 
         (&Method::GET, Some(&"blocks"), start_height, None, None, None) => {
             let start_height = start_height.and_then(|height| height.parse::<usize>().ok());
@@ -1526,9 +1917,7 @@ fn handle_request(
                     .ok_or_else(|| HttpError::from("Missing tx".to_string()))?,
                 _ => return http_message(StatusCode::METHOD_NOT_ALLOWED, "Invalid method", 0),
             };
-            let txid = query
-                .broadcast_raw(&txhex)
-                .map_err(|err| HttpError::from(err.description().to_string()))?;
+            let txid = query.broadcast_raw(&txhex)?;
             http_message(StatusCode::OK, txid.to_string(), 0)
         }
         (&Method::POST, Some(&"txs"), Some(&"test"), None, None, None) => {
@@ -1567,9 +1956,7 @@ fn handle_request(
                 }
             })?;
 
-            let result = query
-                .test_mempool_accept(txhexes, maxfeerate)
-                .map_err(|err| HttpError::from(err.description().to_string()))?;
+            let result = query.test_mempool_accept(txhexes, maxfeerate)?;
 
             json_response(result, TTL_SHORT)
         }
@@ -1617,9 +2004,7 @@ fn handle_request(
                 }
             })?;
 
-            let result = query
-                .submit_package(txhexes, maxfeerate, maxburnamount)
-                .map_err(|err| HttpError::from(err.description().to_string()))?;
+            let result = query.submit_package(txhexes, maxfeerate, maxburnamount)?;
 
             json_response(result, TTL_SHORT)
         }
@@ -2034,6 +2419,43 @@ fn json_response<T: Serialize>(value: T, ttl: u32) -> Result<Response<Body>, Htt
         .unwrap())
 }
 
+fn json_response_no_store<T: Serialize>(value: T) -> Result<Response<Body>, HttpError> {
+    let value = serde_json::to_string(&value)?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .header("Cache-Control", "no-store")
+        .body(Body::from(value))
+        .unwrap())
+}
+
+/// When mining REST is off, GET /block-template is forbidden.
+fn mining_rest_disabled_error(enable_mining_rest: bool) -> Option<HttpError> {
+    if enable_mining_rest {
+        None
+    } else {
+        Some(HttpError::forbidden(
+            "mining REST endpoints are disabled".to_string(),
+        ))
+    }
+}
+
+fn handle_block_template(query: &Query, config: &Config) -> Result<Response<Body>, HttpError> {
+    if let Some(err) = mining_rest_disabled_error(config.enable_mining_rest) {
+        return Err(err);
+    }
+    #[cfg(not(feature = "liquid"))]
+    {
+        let value = query.getblocktemplate()?;
+        json_response_no_store(value)
+    }
+    #[cfg(feature = "liquid")]
+    {
+        let hex = query.getnewblockhex()?;
+        json_response_no_store(hex)
+    }
+}
+
 // fn json_maybe_error_response<T: Serialize>(
 //     value: Result<T, errors::Error>,
 //     ttl: u32,
@@ -2169,6 +2591,10 @@ impl HttpError {
     fn not_found(msg: String) -> Self {
         HttpError(StatusCode::NOT_FOUND, msg)
     }
+
+    fn forbidden(msg: String) -> Self {
+        HttpError(StatusCode::FORBIDDEN, msg)
+    }
 }
 
 impl From<String> for HttpError {
@@ -2202,6 +2628,19 @@ impl From<bitcoin::address::ParseError> for HttpError {
 impl From<errors::Error> for HttpError {
     fn from(e: errors::Error) -> Self {
         warn!("errors::Error: {:?}", e);
+        // Downstream daemon failures on REST proxy paths are not client 400s.
+        match e.kind() {
+            errors::ErrorKind::DaemonBusy(_) => {
+                return HttpError(StatusCode::SERVICE_UNAVAILABLE, e.to_string());
+            }
+            errors::ErrorKind::DaemonUnavailable(_) => {
+                return HttpError(StatusCode::GATEWAY_TIMEOUT, e.to_string());
+            }
+            errors::ErrorKind::Connection(msg) => {
+                return HttpError(StatusCode::GATEWAY_TIMEOUT, msg.clone());
+            }
+            _ => {}
+        }
         match e.description().to_string().as_ref() {
             "getblock RPC error: {\"code\":-5,\"message\":\"Block not found\"}" => {
                 HttpError::not_found("Block not found".to_string())
@@ -2234,11 +2673,433 @@ impl From<address::AddressError> for HttpError {
 
 #[cfg(test)]
 mod tests {
-    use super::{confirmed_after_txid, TxidLocation};
+    use super::{confirmed_after_txid, mining_rest_disabled_error, TxidLocation};
     use crate::chain::Txid;
     use crate::rest::HttpError;
+    use hyper::StatusCode;
+    use nostr::prelude::*;
     use serde_json::Value;
     use std::collections::HashMap;
+
+    #[test]
+    fn mining_rest_disabled_is_forbidden() {
+        let err = mining_rest_disabled_error(false).expect("forbidden when mining REST is off");
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
+        assert!(mining_rest_disabled_error(true).is_none());
+    }
+
+    /// Named contract: REST paths that proxy to bitcoind (broadcast, package,
+    /// block-template, testmempoolaccept) map daemon occupancy to HTTP 503 and
+    /// a missing or timed-out daemon to HTTP 504. Electrum JSON-RPC stays JSON
+    /// on the wire, not these HTTP statuses.
+    #[test]
+    fn daemon_proxy_failures_map_to_503_and_504() {
+        use crate::errors::{Error, ErrorKind};
+
+        let busy = HttpError::from(Error::from(ErrorKind::DaemonBusy(
+            "all client RPC slots are in use".to_string(),
+        )));
+        assert_eq!(busy.0, StatusCode::SERVICE_UNAVAILABLE);
+
+        let unavailable = HttpError::from(Error::from(ErrorKind::DaemonUnavailable(
+            "sendrawtransaction failed".to_string(),
+        )));
+        assert_eq!(unavailable.0, StatusCode::GATEWAY_TIMEOUT);
+
+        let rejected = HttpError::from("min relay fee not met".to_string());
+        assert_eq!(rejected.0, StatusCode::BAD_REQUEST);
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    fn npub_of(keys: &Keys) -> String {
+        keys.public_key().to_bech32().unwrap()
+    }
+
+    fn write_allowlist(dir: &tempfile::TempDir, npubs: &[&str]) -> std::path::PathBuf {
+        let path = dir.path().join("allowlist");
+        let mut body = String::new();
+        for n in npubs {
+            body.push_str(n);
+            body.push('\n');
+        }
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    fn sign_header(
+        keys: &nostr::Keys,
+        method: nostr::nips::nip98::HttpMethod,
+        url: &str,
+        created_at: u64,
+    ) -> String {
+        use nostr::event::EventBuilder;
+        use nostr::nips::nip98::HttpData;
+        use nostr::prelude::*;
+        let parsed = nostr::Url::parse(url).expect("url");
+        let data = HttpData::new(parsed, method);
+        let event = EventBuilder::http_auth(data)
+            .custom_created_at(Timestamp::from(created_at))
+            .sign_with_keys(keys)
+            .expect("sign");
+        let json = serde_json::to_vec(&event).expect("json");
+        format!("Nostr {}", base64::encode(&json))
+    }
+
+    /// Named contract: HTTP and WS gate use the live allowlist. Localhost is
+    /// not an exception. Empty allowlist is 401 except public-health tip routes.
+    #[test]
+    fn http_ws_gate_uses_live_allowlist() {
+        use super::{http_ws_auth_gate, HttpAuthOutcome};
+        use crate::auth::Allowlist;
+        use nostr::nips::nip98::HttpMethod;
+
+        let keys = Keys::generate();
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[&npub_of(&keys)]);
+        let allow = Allowlist::load(&path).unwrap();
+        let url = "http://127.0.0.1:3000/api/v1/ws";
+        let t = now();
+        let header = sign_header(&keys, HttpMethod::GET, url, t);
+        let out = http_ws_auth_gate(
+            "GET",
+            "/api/v1/ws",
+            Some(&header),
+            url,
+            b"",
+            t,
+            false,
+            &allow,
+        )
+        .expect("listed npub on WS upgrade");
+        match out {
+            HttpAuthOutcome::Pubkey(_) => {}
+            other => panic!("expected pubkey, got {:?}", other),
+        }
+
+        std::fs::write(&path, "").unwrap();
+        allow.reload().unwrap();
+        let header2 = sign_header(&keys, HttpMethod::GET, url, now());
+        let err = http_ws_auth_gate(
+            "GET",
+            "/api/v1/ws",
+            Some(&header2),
+            url,
+            b"",
+            now(),
+            false,
+            &allow,
+        )
+        .unwrap_err();
+        assert_eq!(err, crate::auth::AuthError::NotAllowlisted);
+    }
+
+    #[test]
+    fn http_ws_gate_empty_allowlist_is_401_even_localhost() {
+        use super::http_ws_auth_gate;
+        use crate::auth::Allowlist;
+        use nostr::nips::nip98::HttpMethod;
+
+        let keys = Keys::generate();
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[]);
+        let allow = Allowlist::load(&path).unwrap();
+        let url = "http://127.0.0.1/blocks/tip/hash";
+        let header = sign_header(&keys, HttpMethod::GET, url, now());
+        let err = http_ws_auth_gate(
+            "GET",
+            "/blocks/tip/hash",
+            Some(&header),
+            url,
+            b"",
+            now(),
+            false,
+            &allow,
+        )
+        .unwrap_err();
+        assert_eq!(err, crate::auth::AuthError::NotAllowlisted);
+
+        let err = http_ws_auth_gate(
+            "GET",
+            "/tx/abc",
+            None,
+            "http://127.0.0.1/tx/abc",
+            b"",
+            now(),
+            false,
+            &allow,
+        )
+        .unwrap_err();
+        assert_eq!(err, crate::auth::AuthError::MissingHeader);
+    }
+
+    #[test]
+    fn http_ws_gate_public_health_allows_tip_without_auth() {
+        use super::{http_ws_auth_gate, HttpAuthOutcome};
+        use crate::auth::Allowlist;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[]);
+        let allow = Allowlist::load(&path).unwrap();
+        let out = http_ws_auth_gate(
+            "GET",
+            "/blocks/tip/hash",
+            None,
+            "http://example/blocks/tip/hash",
+            b"",
+            now(),
+            true,
+            &allow,
+        )
+        .unwrap();
+        assert_eq!(out, HttpAuthOutcome::PublicHealth);
+        let out = http_ws_auth_gate(
+            "GET",
+            "/blocks/tip/height",
+            None,
+            "http://example/blocks/tip/height",
+            b"",
+            now(),
+            true,
+            &allow,
+        )
+        .unwrap();
+        assert_eq!(out, HttpAuthOutcome::PublicHealth);
+        let err = http_ws_auth_gate(
+            "GET",
+            "/block-template",
+            None,
+            "http://example/block-template",
+            b"",
+            now(),
+            true,
+            &allow,
+        )
+        .unwrap_err();
+        assert_eq!(err, crate::auth::AuthError::MissingHeader);
+    }
+
+    #[test]
+    fn reconstruct_absolute_url_uses_host_and_forwarded_proto() {
+        use super::reconstruct_absolute_url;
+        assert_eq!(
+            reconstruct_absolute_url(Some("https"), Some("splora.example"), "/electrum"),
+            "https://splora.example/electrum"
+        );
+        assert_eq!(
+            reconstruct_absolute_url(Some("https, http"), Some("splora.example"), "/api/v1/ws"),
+            "https://splora.example/api/v1/ws"
+        );
+        assert_eq!(
+            reconstruct_absolute_url(None, Some("127.0.0.1:3000"), "/blocks/tip/hash"),
+            "http://127.0.0.1:3000/blocks/tip/hash"
+        );
+    }
+
+    /// Named contract: empty allowlist is 401 on `/api/v1/ws`; listed npub plus
+    /// websocket headers is 101. This tests the upgrade decision, not a live
+    /// hyper SWITCHING_PROTOCOLS handshake.
+    #[test]
+    fn mwck_upgrade_requires_live_allowlist() {
+        use super::{http_ws_auth_gate, mwck_upgrade_http_status, HttpAuthOutcome};
+        use crate::auth::Allowlist;
+        use nostr::nips::nip98::HttpMethod;
+
+        let keys = Keys::generate();
+        let dir = tempfile::tempdir().unwrap();
+        let empty = write_allowlist(&dir, &[]);
+        let allow_empty = Allowlist::load(&empty).unwrap();
+        let url = "http://127.0.0.1:3000/api/v1/ws";
+        let t = now();
+        let header = sign_header(&keys, HttpMethod::GET, url, t);
+        let gate = http_ws_auth_gate(
+            "GET",
+            "/api/v1/ws",
+            Some(&header),
+            url,
+            b"",
+            t,
+            false,
+            &allow_empty,
+        );
+        assert_eq!(
+            mwck_upgrade_http_status(gate, true, true),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let path = write_allowlist(&dir, &[&npub_of(&keys)]);
+        let allow = Allowlist::load(&path).unwrap();
+        let header = sign_header(&keys, HttpMethod::GET, url, t);
+        let gate = http_ws_auth_gate(
+            "GET",
+            "/api/v1/ws",
+            Some(&header),
+            url,
+            b"",
+            t,
+            false,
+            &allow,
+        );
+        match &gate {
+            Ok(HttpAuthOutcome::Pubkey(_)) => {}
+            other => panic!("expected listed pubkey, got {:?}", other),
+        }
+        assert_eq!(
+            mwck_upgrade_http_status(gate.clone(), true, true),
+            StatusCode::SWITCHING_PROTOCOLS
+        );
+        assert_eq!(
+            mwck_upgrade_http_status(gate.clone(), false, true),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            mwck_upgrade_http_status(gate, true, false),
+            StatusCode::BAD_REQUEST
+        );
+
+        std::fs::write(&path, "").unwrap();
+        allow.reload().unwrap();
+        let header2 = sign_header(&keys, HttpMethod::GET, url, now());
+        let gate2 = http_ws_auth_gate(
+            "GET",
+            "/api/v1/ws",
+            Some(&header2),
+            url,
+            b"",
+            now(),
+            false,
+            &allow,
+        );
+        assert_eq!(
+            mwck_upgrade_http_status(gate2, true, true),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// Named contract: a live hyper 0.14 server (not the gate helper) returns
+    /// 401 on empty allowlist GET /api/v1/ws, 101 for a listed npub, and closes
+    /// the socket after an allowlist reload drops that npub. This fixture is
+    /// not a full indexer.
+    #[tokio::test]
+    async fn live_hyper_ws_101_handshake_allowlist() {
+        use super::{handle_mwck_upgrade, Server};
+        use crate::auth::Allowlist;
+        use crate::mwck::MwckHub;
+        use futures_util::{SinkExt, StreamExt};
+        use hyper::service::{make_service_fn, service_fn};
+        use hyper::{Body, Request};
+        use nostr::nips::nip98::HttpMethod;
+        use std::sync::Arc;
+        use std::time::Duration;
+        use tokio::net::TcpStream;
+        use tokio_tungstenite::client_async;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::Error as WsError;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let keys = Keys::generate();
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[]);
+        // Allowlist::load already returns Arc<Allowlist>.
+        let allow = Allowlist::load(&path).unwrap();
+        let allow_server = Arc::clone(&allow);
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hub = MwckHub::handshake_fixture();
+        let make_svc = make_service_fn(move |_| {
+            let allow = Arc::clone(&allow_server);
+            let hub = Arc::clone(&hub);
+            async move {
+                Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
+                    let allow = Arc::clone(&allow);
+                    let hub = Arc::clone(&hub);
+                    async move {
+                        Ok::<_, hyper::Error>(handle_mwck_upgrade(req, allow, hub, false).await)
+                    }
+                }))
+            }
+        });
+        let server = tokio::spawn(async move {
+            Server::from_tcp(listener)
+                .expect("from_tcp")
+                .serve(make_svc)
+                .await
+                .expect("serve");
+        });
+        for _ in 0..50 {
+            if TcpStream::connect(addr).await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let http_url = format!("http://{}/api/v1/ws", addr);
+        let ws_url = format!("ws://{}/api/v1/ws", addr);
+
+        async fn handshake(
+            addr: std::net::SocketAddr,
+            ws_url: &str,
+            auth: &str,
+        ) -> Result<
+            (
+                tokio_tungstenite::WebSocketStream<TcpStream>,
+                tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+            ),
+            WsError,
+        > {
+            let mut req = ws_url.into_client_request().expect("ws request");
+            req.headers_mut().insert(
+                tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+                auth.parse().expect("auth header"),
+            );
+            let stream = TcpStream::connect(addr).await.expect("connect");
+            client_async(req, stream).await
+        }
+
+        let header = sign_header(&keys, HttpMethod::GET, &http_url, now());
+        match handshake(addr, &ws_url, &header).await {
+            Err(WsError::Http(resp)) => {
+                // tungstenite http 1 vs hyper http 0.2 StatusCode. Compare 401.
+                assert_eq!(resp.status().as_u16(), StatusCode::UNAUTHORIZED.as_u16());
+            }
+            other => panic!("empty allowlist must be HTTP 401, got {:?}", other),
+        }
+
+        std::fs::write(&path, format!("{}\n", npub_of(&keys))).unwrap();
+        allow.reload().unwrap();
+        let header = sign_header(&keys, HttpMethod::GET, &http_url, now());
+        let (mut ws, resp) = handshake(addr, &ws_url, &header)
+            .await
+            .expect("listed npub yields a live 101 handshake");
+        assert_eq!(
+            resp.status().as_u16(),
+            StatusCode::SWITCHING_PROTOCOLS.as_u16()
+        );
+
+        std::fs::write(&path, "").unwrap();
+        allow.reload().unwrap();
+        let _ = ws.send(Message::Text("{}".into())).await;
+        let closed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return true,
+                    Some(Ok(_)) => {}
+                }
+            }
+        })
+        .await
+        .expect("socket must close after allowlist reload drop");
+        assert!(closed);
+
+        server.abort();
+    }
 
     #[test]
     fn test_parse_query_param() {

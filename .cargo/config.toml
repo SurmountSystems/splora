@@ -1,0 +1,5 @@
+[source.crates-io]
+replace-with = "menhera-cooldown"
+
+[source.menhera-cooldown]
+registry = "sparse+https://index.crates.menhera.org/7d/"

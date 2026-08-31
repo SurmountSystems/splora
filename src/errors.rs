@@ -25,6 +25,18 @@ error_chain! {
             display("Too many history transactions (>{}). Contact support to raise limits.", limit)
         }
 
+        // Client-proxied bitcoind RPC occupancy. REST maps this to HTTP 503.
+        DaemonBusy(msg: String) {
+            description("Daemon RPC concurrency limit reached")
+            display("Daemon is busy: {}", msg)
+        }
+
+        // Client-proxied bitcoind RPC transport failure or timeout. REST maps this to HTTP 504.
+        DaemonUnavailable(msg: String) {
+            description("Daemon RPC unavailable")
+            display("Daemon is unavailable: {}", msg)
+        }
+
         #[cfg(feature = "electrum-discovery")]
         ElectrumClient(e: electrum_client::Error) {
             description("Electrum client error")

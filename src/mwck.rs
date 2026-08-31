@@ -1,0 +1,992 @@
+// SPDX-License-Identifier: Unlicense
+//! Mempool Wallet Connector Kit websocket JSON dialect.
+//!
+//! Speaks `track-address` / `track-addresses` / `track-scriptpubkeys` in and
+//! emits `address-transactions` / `address-removed-transactions` /
+//! `block-transactions` plus `multi-address-transactions` /
+//! `multi-scriptpubkey-transactions` with `{mempool, confirmed, removed}`
+//! per key.
+//!
+//! Hyper 0.14 WebSocket upgrade is wired from `rest.rs` later. This module is
+//! the in-process JSON state machine. Do not HTTP self-poll.
+//!
+//! The `/api/v1/ws` upgrade must require [`crate::auth::Allowlist`]. After
+//! upgrade, that pubkey owns the connection.
+
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::auth::Allowlist;
+use crate::chain::{Network, Script};
+use crate::new_index::{compute_script_hash, Query};
+
+struct HubClient {
+    state: ClientState,
+    out: Option<UnboundedSender<Value>>,
+}
+
+/// Per-key buckets that [`emit_multi`] fills for MWCK multi-* events.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct TxBuckets {
+    pub mempool: Vec<Value>,
+    pub confirmed: Vec<Value>,
+    pub removed: Vec<Value>,
+}
+
+/// One websocket client's active MWCK subscriptions.
+///
+/// Each client has at most one active subscription of each type. A later
+/// message of the same type replaces the previous one. An empty array on
+/// `track-addresses` or `track-scriptpubkeys` unsubscribes that type.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClientState {
+    /// Canonical match key for the single-address subscription.
+    pub track_address: Option<String>,
+    /// Original `track-address` string (P2PK hex or address).
+    pub track_address_original: Option<String>,
+    /// Original address/pubkey -> canonical match key.
+    pub track_addresses: BTreeMap<String, String>,
+    /// Canonical lowercase scriptpubkey hex strings.
+    pub track_scriptpubkeys: Vec<String>,
+}
+
+/// In-process MWCK hub. Reuses [`Query`] for subscribe snapshot fills; notify
+/// paths take transaction JSON already loaded from mempool/chain.
+pub struct MwckHub {
+    query: Option<Arc<Query>>,
+    clients: Mutex<BTreeMap<u64, HubClient>>,
+    next_id: Mutex<u64>,
+    /// Test-only current history keyed by original `track-addresses` /
+    /// `track-scriptpubkeys` string. Production fills from [`Query`].
+    #[cfg(test)]
+    test_history: Option<BTreeMap<String, TxBuckets>>,
+}
+
+impl MwckHub {
+    pub fn new(query: Arc<Query>) -> Arc<Self> {
+        Arc::new(MwckHub {
+            query: Some(query),
+            clients: Mutex::new(BTreeMap::new()),
+            next_id: Mutex::new(1),
+            #[cfg(test)]
+            test_history: None,
+        })
+    }
+
+    /// Handshake-only hub. No chain [`Query`]. REST tests use this so a live
+    /// hyper 0.14 upgrade does not boot the indexer.
+    #[cfg(test)]
+    pub fn handshake_fixture() -> Arc<Self> {
+        Arc::new(MwckHub {
+            query: None,
+            clients: Mutex::new(BTreeMap::new()),
+            next_id: Mutex::new(1),
+            test_history: None,
+        })
+    }
+
+    /// Subscribe-fill fixture: known mempool/confirmed history without a live
+    /// indexer. Keys are original track-addresses / track-scriptpubkeys strings.
+    #[cfg(test)]
+    pub fn with_history_fixture(history: BTreeMap<String, TxBuckets>) -> Arc<Self> {
+        Arc::new(MwckHub {
+            query: None,
+            clients: Mutex::new(BTreeMap::new()),
+            next_id: Mutex::new(1),
+            test_history: Some(history),
+        })
+    }
+
+    pub fn query(&self) -> &Query {
+        self.query
+            .as_ref()
+            .expect("MwckHub handshake fixture has no Query")
+    }
+
+    pub fn attach_client(&self, state: ClientState) -> u64 {
+        self.attach(state, None)
+    }
+
+    /// Register a live websocket. `out` receives notify JSON and subscribe replies
+    /// are written by the rest.rs socket loop.
+    pub fn register_socket(&self, out: UnboundedSender<Value>) -> u64 {
+        self.attach(ClientState::default(), Some(out))
+    }
+
+    fn attach(&self, state: ClientState, out: Option<UnboundedSender<Value>>) -> u64 {
+        let mut next = self.next_id.lock().expect("mwck next_id");
+        let id = *next;
+        *next += 1;
+        self.clients
+            .lock()
+            .expect("mwck clients")
+            .insert(id, HubClient { state, out });
+        id
+    }
+
+    pub fn set_client_state(&self, id: u64, state: ClientState) {
+        if let Some(client) = self.clients.lock().expect("mwck clients").get_mut(&id) {
+            client.state = state;
+        }
+    }
+
+    pub fn detach_client(&self, id: u64) {
+        self.clients.lock().expect("mwck clients").remove(&id);
+    }
+
+    pub fn notify_mempool(&self, added: &[Value], removed: &[Value]) {
+        let pending: Vec<(Option<UnboundedSender<Value>>, Value)> = {
+            let clients = self.clients.lock().expect("mwck clients");
+            clients
+                .values()
+                .filter_map(|c| {
+                    c.state
+                        .on_mempool(added, removed)
+                        .map(|ev| (c.out.clone(), ev))
+                })
+                .collect()
+        };
+        for (out, ev) in pending {
+            if let Some(tx) = out {
+                let _ = tx.send(ev);
+            }
+        }
+    }
+
+    pub fn notify_block(&self, confirmed: &[Value]) {
+        let pending: Vec<(Option<UnboundedSender<Value>>, Value)> = {
+            let clients = self.clients.lock().expect("mwck clients");
+            clients
+                .values()
+                .filter_map(|c| c.state.on_block(confirmed).map(|ev| (c.out.clone(), ev)))
+                .collect()
+        };
+        for (out, ev) in pending {
+            if let Some(tx) = out {
+                let _ = tx.send(ev);
+            }
+        }
+    }
+
+    /// Apply one client JSON message. REST must not call this unless the
+    /// upgrade already proved `pubkey` is on `allow`. Hyper 0.14 upgrade
+    /// stays in `rest.rs`.
+    ///
+    /// The first `multi-address-transactions` / `multi-scriptpubkey-transactions`
+    /// after track-* is filled from in-process [`Query`] (mempool + chain), not
+    /// left empty until a later notify.
+    pub async fn handle_socket(
+        &self,
+        allow: &Allowlist,
+        pubkey: &[u8; 32],
+        state: &mut ClientState,
+        msg: Value,
+    ) -> Option<Value> {
+        let reply = handle_authorized_json(allow, pubkey, state, msg)?;
+        Some(self.fill_subscribe_snapshot(state, reply))
+    }
+
+    fn fill_subscribe_snapshot(&self, state: &ClientState, mut reply: Value) -> Value {
+        if let Some(obj) = reply
+            .get_mut("multi-address-transactions")
+            .and_then(|v| v.as_object_mut())
+        {
+            for (orig, canon) in &state.track_addresses {
+                let buckets = self.snapshot_for(orig, Some(canon));
+                if let Ok(v) = serde_json::to_value(&buckets) {
+                    obj.insert(orig.clone(), v);
+                }
+            }
+        }
+        if let Some(obj) = reply
+            .get_mut("multi-scriptpubkey-transactions")
+            .and_then(|v| v.as_object_mut())
+        {
+            for spk in &state.track_scriptpubkeys {
+                let buckets = self.snapshot_for(spk, None);
+                if let Ok(v) = serde_json::to_value(&buckets) {
+                    obj.insert(spk.clone(), v);
+                }
+            }
+        }
+        reply
+    }
+
+    fn snapshot_for(&self, orig: &str, canon: Option<&str>) -> TxBuckets {
+        #[cfg(test)]
+        if let Some(map) = &self.test_history {
+            if let Some(b) = map.get(orig) {
+                return b.clone();
+            }
+            if let Some(c) = canon {
+                if let Some(b) = map.get(c) {
+                    return b.clone();
+                }
+            }
+        }
+        let Some(query) = self.query.as_ref() else {
+            return TxBuckets::default();
+        };
+        match canon {
+            Some(canon) => snapshot_from_address(query, orig, canon),
+            None => snapshot_from_spk(query, orig),
+        }
+    }
+}
+
+/// Sync helper: same gate as [`MwckHub::handle_socket`] without a `Query`.
+pub fn handle_authorized_json(
+    allow: &Allowlist,
+    pubkey: &[u8; 32],
+    state: &mut ClientState,
+    msg: Value,
+) -> Option<Value> {
+    if !allow.contains(pubkey) {
+        return None;
+    }
+    handle_client_json(state, msg)
+}
+
+fn snapshot_from_address(query: &Query, orig: &str, canon: &str) -> TxBuckets {
+    match script_from_address_key(orig, canon, query.network()) {
+        Some(script) => snapshot_from_script(query, &script),
+        None => TxBuckets::default(),
+    }
+}
+
+fn snapshot_from_spk(query: &Query, spk: &str) -> TxBuckets {
+    match hex::decode(spk)
+        .ok()
+        .filter(|b| !b.is_empty())
+        .map(Script::from)
+    {
+        Some(script) => snapshot_from_script(query, &script),
+        None => TxBuckets::default(),
+    }
+}
+
+fn script_from_address_key(orig: &str, canon: &str, network: Network) -> Option<Script> {
+    if is_hex_len(orig, 66) || is_hex_len(orig, 130) {
+        return hex::decode(canon)
+            .ok()
+            .filter(|b| !b.is_empty())
+            .map(Script::from);
+    }
+    parse_address_script(orig, network)
+}
+
+fn parse_address_script(addr: &str, network: Network) -> Option<Script> {
+    #[cfg(not(feature = "liquid"))]
+    {
+        use bitcoin::address::NetworkUnchecked;
+        let unchecked: bitcoin::Address<NetworkUnchecked> = addr.parse().ok()?;
+        let bnetwork = bitcoin::Network::from(network);
+        let testnet_family = [
+            bitcoin::Network::Testnet,
+            bitcoin::Network::Regtest,
+            bitcoin::Network::Signet,
+            bitcoin::Network::Testnet4,
+        ];
+        if testnet_family.contains(&bnetwork) {
+            testnet_family
+                .iter()
+                .find_map(|&net| unchecked.clone().require_network(net).ok())
+        } else {
+            unchecked.require_network(bnetwork).ok()
+        }
+        .map(|a| a.script_pubkey())
+    }
+    #[cfg(feature = "liquid")]
+    {
+        crate::chain::address::Address::parse_with_params(addr, network.address_params())
+            .ok()
+            .map(|a| a.script_pubkey())
+    }
+}
+
+fn snapshot_from_script(query: &Query, script: &Script) -> TxBuckets {
+    let scripthash = compute_script_hash(script);
+    let limit = query.config().rest_default_max_mempool_txs;
+
+    let mempool_pairs: Vec<_> = query
+        .mempool()
+        .history(&scripthash[..], None, limit)
+        .into_iter()
+        .map(|tx| (tx, None))
+        .collect();
+    let mempool = crate::rest::transactions_as_json(mempool_pairs, query, query.config());
+
+    let remaining = limit.saturating_sub(mempool.len());
+    let confirmed_pairs: Vec<_> = query
+        .chain()
+        .history_txids(&scripthash[..], remaining)
+        .into_iter()
+        .filter_map(|(txid, blockid)| query.lookup_txn(&txid).map(|tx| (tx, Some(blockid))))
+        .collect();
+    let confirmed = crate::rest::transactions_as_json(confirmed_pairs, query, query.config());
+
+    TxBuckets {
+        mempool,
+        confirmed,
+        removed: vec![],
+    }
+}
+
+/// Canonical MWCK match key: lowercase bech32, P2PK hex as a script.
+///
+/// `02|03` + 32 bytes -> `21{pk}ac`. `04` + 64 bytes -> `41{pk}ac`.
+pub fn canonical_track_key(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if is_hex_len(s, 66) {
+        let prefix = &s[..2];
+        if prefix.eq_ignore_ascii_case("02") || prefix.eq_ignore_ascii_case("03") {
+            return Some(format!("21{}ac", s.to_ascii_lowercase()));
+        }
+    }
+    if is_hex_len(s, 130) && s[..2].eq_ignore_ascii_case("04") {
+        return Some(format!("41{}ac", s.to_ascii_lowercase()));
+    }
+    if is_bech32_upper(s) {
+        return Some(s.to_ascii_lowercase());
+    }
+    if is_bech32_lower(s) || is_base58_addr(s) {
+        return Some(s.to_string());
+    }
+    None
+}
+
+/// Build a `multi-address-transactions` or `multi-scriptpubkey-transactions`
+/// object with `{mempool, confirmed, removed}` per key.
+pub fn emit_multi(event_key: &str, per_key: &BTreeMap<String, TxBuckets>) -> Value {
+    json!({ event_key: per_key })
+}
+
+/// Pure JSON state machine. No network. Tests call this directly.
+pub fn handle_client_json(state: &mut ClientState, msg: Value) -> Option<Value> {
+    if !msg.is_object() {
+        return None;
+    }
+    let mut out = serde_json::Map::new();
+
+    if let Some(v) = msg.get("track-address") {
+        apply_track_address(state, v);
+    }
+
+    if let Some(v) = msg.get("track-addresses") {
+        if let Some(map) = apply_track_addresses(state, v) {
+            let mut buckets = BTreeMap::new();
+            for orig in map.keys() {
+                buckets.insert(orig.clone(), TxBuckets::default());
+            }
+            if let Value::Object(obj) = emit_multi("multi-address-transactions", &buckets) {
+                out.extend(obj);
+            }
+        }
+    }
+
+    if let Some(v) = msg.get("track-scriptpubkeys") {
+        if let Some(spks) = apply_track_scriptpubkeys(state, v) {
+            let mut buckets = BTreeMap::new();
+            for spk in &spks {
+                buckets.insert(spk.clone(), TxBuckets::default());
+            }
+            if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &buckets) {
+                out.extend(obj);
+            }
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
+}
+
+impl ClientState {
+    /// Mempool delta for this client's subscriptions.
+    pub fn on_mempool(&self, added: &[Value], removed: &[Value]) -> Option<Value> {
+        let mut out = serde_json::Map::new();
+
+        if let Some(canon) = self.track_address.as_ref() {
+            let added_hit: Vec<Value> = added
+                .iter()
+                .filter(|tx| tx_matches(tx, canon))
+                .cloned()
+                .collect();
+            let removed_hit: Vec<Value> = removed
+                .iter()
+                .filter(|tx| tx_matches(tx, canon))
+                .cloned()
+                .collect();
+            if !added_hit.is_empty() {
+                out.insert("address-transactions".into(), Value::Array(added_hit));
+            }
+            if !removed_hit.is_empty() {
+                out.insert(
+                    "address-removed-transactions".into(),
+                    Value::Array(removed_hit),
+                );
+            }
+        }
+
+        if !self.track_addresses.is_empty() {
+            let mut per_key = BTreeMap::new();
+            for (orig, canon) in &self.track_addresses {
+                let mut b = TxBuckets::default();
+                b.mempool = added
+                    .iter()
+                    .filter(|tx| tx_matches(tx, canon))
+                    .cloned()
+                    .collect();
+                b.removed = removed
+                    .iter()
+                    .filter(|tx| tx_matches(tx, canon))
+                    .cloned()
+                    .collect();
+                if !b.mempool.is_empty() || !b.removed.is_empty() {
+                    per_key.insert(orig.clone(), b);
+                }
+            }
+            if !per_key.is_empty() {
+                if let Value::Object(obj) = emit_multi("multi-address-transactions", &per_key) {
+                    out.extend(obj);
+                }
+            }
+        }
+
+        if !self.track_scriptpubkeys.is_empty() {
+            let mut per_key = BTreeMap::new();
+            for spk in &self.track_scriptpubkeys {
+                let mut b = TxBuckets::default();
+                b.mempool = added
+                    .iter()
+                    .filter(|tx| tx_matches(tx, spk))
+                    .cloned()
+                    .collect();
+                b.removed = removed
+                    .iter()
+                    .filter(|tx| tx_matches(tx, spk))
+                    .cloned()
+                    .collect();
+                if !b.mempool.is_empty() || !b.removed.is_empty() {
+                    per_key.insert(spk.clone(), b);
+                }
+            }
+            if !per_key.is_empty() {
+                if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &per_key)
+                {
+                    out.extend(obj);
+                }
+            }
+        }
+
+        if out.is_empty() {
+            None
+        } else {
+            Some(Value::Object(out))
+        }
+    }
+
+    /// Confirmed-block delta for this client's subscriptions.
+    pub fn on_block(&self, confirmed: &[Value]) -> Option<Value> {
+        let mut out = serde_json::Map::new();
+
+        if let Some(canon) = self.track_address.as_ref() {
+            let hit: Vec<Value> = confirmed
+                .iter()
+                .filter(|tx| tx_matches(tx, canon))
+                .cloned()
+                .collect();
+            if !hit.is_empty() {
+                out.insert("block-transactions".into(), Value::Array(hit));
+            }
+        }
+
+        if !self.track_addresses.is_empty() {
+            let mut per_key = BTreeMap::new();
+            for (orig, canon) in &self.track_addresses {
+                let mut b = TxBuckets::default();
+                b.confirmed = confirmed
+                    .iter()
+                    .filter(|tx| tx_matches(tx, canon))
+                    .cloned()
+                    .collect();
+                if !b.confirmed.is_empty() {
+                    per_key.insert(orig.clone(), b);
+                }
+            }
+            if !per_key.is_empty() {
+                if let Value::Object(obj) = emit_multi("multi-address-transactions", &per_key) {
+                    out.extend(obj);
+                }
+            }
+        }
+
+        if !self.track_scriptpubkeys.is_empty() {
+            let mut per_key = BTreeMap::new();
+            for spk in &self.track_scriptpubkeys {
+                let mut b = TxBuckets::default();
+                b.confirmed = confirmed
+                    .iter()
+                    .filter(|tx| tx_matches(tx, spk))
+                    .cloned()
+                    .collect();
+                if !b.confirmed.is_empty() {
+                    per_key.insert(spk.clone(), b);
+                }
+            }
+            if !per_key.is_empty() {
+                if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &per_key)
+                {
+                    out.extend(obj);
+                }
+            }
+        }
+
+        if out.is_empty() {
+            None
+        } else {
+            Some(Value::Object(out))
+        }
+    }
+}
+
+fn apply_track_address(state: &mut ClientState, v: &Value) {
+    let s = match v.as_str() {
+        Some(s) => s,
+        None => {
+            state.track_address = None;
+            state.track_address_original = None;
+            return;
+        }
+    };
+    match canonical_track_key(s) {
+        Some(canon) => {
+            state.track_address_original = Some(s.to_string());
+            state.track_address = Some(canon);
+        }
+        None => {
+            state.track_address = None;
+            state.track_address_original = None;
+        }
+    }
+}
+
+fn apply_track_addresses(state: &mut ClientState, v: &Value) -> Option<BTreeMap<String, String>> {
+    let arr = match v.as_array() {
+        Some(arr) => arr,
+        None => {
+            state.track_addresses.clear();
+            return None;
+        }
+    };
+    if arr.is_empty() {
+        state.track_addresses.clear();
+        return None;
+    }
+    let mut map = BTreeMap::new();
+    for item in arr {
+        if let Some(s) = item.as_str() {
+            if let Some(canon) = canonical_track_key(s) {
+                map.insert(s.to_string(), canon);
+            }
+        }
+    }
+    if map.is_empty() {
+        state.track_addresses.clear();
+        None
+    } else {
+        state.track_addresses = map.clone();
+        Some(map)
+    }
+}
+
+fn apply_track_scriptpubkeys(state: &mut ClientState, v: &Value) -> Option<Vec<String>> {
+    let arr = match v.as_array() {
+        Some(arr) => arr,
+        None => {
+            state.track_scriptpubkeys.clear();
+            return None;
+        }
+    };
+    if arr.is_empty() {
+        state.track_scriptpubkeys.clear();
+        return None;
+    }
+    let mut spks = Vec::new();
+    let mut seen = HashSet::new();
+    for item in arr {
+        if let Some(s) = item.as_str() {
+            if is_hex(s) {
+                let lower = s.to_ascii_lowercase();
+                if seen.insert(lower.clone()) {
+                    spks.push(lower);
+                }
+            }
+        }
+    }
+    if spks.is_empty() {
+        state.track_scriptpubkeys.clear();
+        None
+    } else {
+        state.track_scriptpubkeys = spks.clone();
+        Some(spks)
+    }
+}
+
+fn tx_matches(tx: &Value, key: &str) -> bool {
+    let (addresses, spks) = tx_touch_set(tx);
+    addresses.contains(key) || spks.contains(key)
+}
+
+fn tx_touch_set(tx: &Value) -> (HashSet<String>, HashSet<String>) {
+    let mut addresses = HashSet::new();
+    let mut spks = HashSet::new();
+    for side in &["vin", "vout"] {
+        let Some(arr) = tx.get(*side).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for el in arr {
+            let prev = if *side == "vin" {
+                el.get("prevout").unwrap_or(el)
+            } else {
+                el
+            };
+            if let Some(a) = prev.get("scriptpubkey_address").and_then(|v| v.as_str()) {
+                addresses.insert(a.to_string());
+                if let Some(canon) = canonical_track_key(a) {
+                    addresses.insert(canon);
+                }
+            }
+            if let Some(s) = prev.get("scriptpubkey").and_then(|v| v.as_str()) {
+                spks.insert(s.to_ascii_lowercase());
+            }
+        }
+    }
+    (addresses, spks)
+}
+
+fn is_hex(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_hex_len(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_base58_char(b: u8) -> bool {
+    matches!(b,
+        b'1'..=b'9' | b'A'..=b'H' | b'J'..=b'N' | b'P'..=b'Z' | b'a'..=b'k' | b'm'..=b'z'
+    )
+}
+
+fn is_base58_addr(s: &str) -> bool {
+    let n = s.len();
+    if n != 80 && !(26..=35).contains(&n) {
+        return false;
+    }
+    s.bytes().all(is_base58_char)
+}
+
+fn is_bech32_hrp_lower(b: u8) -> bool {
+    (b'a'..=b'z').contains(&b)
+}
+
+fn is_bech32_hrp_upper(b: u8) -> bool {
+    (b'A'..=b'Z').contains(&b)
+}
+
+fn is_bech32_data_lower(b: u8) -> bool {
+    matches!(b, b'a'..=b'h' | b'j' | b'k' | b'm' | b'n' | b'p'..=b'z' | b'0' | b'2'..=b'9')
+}
+
+fn is_bech32_data_upper(b: u8) -> bool {
+    matches!(b, b'A'..=b'H' | b'J' | b'K' | b'M' | b'N' | b'P'..=b'Z' | b'0' | b'2'..=b'9')
+}
+
+fn is_bech32_lower(s: &str) -> bool {
+    bech32_shape(s, is_bech32_hrp_lower, is_bech32_data_lower)
+}
+
+fn is_bech32_upper(s: &str) -> bool {
+    bech32_shape(s, is_bech32_hrp_upper, is_bech32_data_upper)
+}
+
+fn bech32_shape(s: &str, hrp: fn(u8) -> bool, data: fn(u8) -> bool) -> bool {
+    let bytes = s.as_bytes();
+    let sep = match bytes.iter().position(|&b| b == b'1') {
+        Some(i) => i,
+        None => return false,
+    };
+    if !(2..=5).contains(&sep) {
+        return false;
+    }
+    let rest = bytes.len() - sep - 1;
+    if !(8..=100).contains(&rest) {
+        return false;
+    }
+    bytes[..sep].iter().all(|&b| hrp(b)) && bytes[sep + 1..].iter().all(|&b| data(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn genesis_addr() -> &'static str {
+        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+    }
+
+    fn sample_spk() -> &'static str {
+        "0014751e76e8199196d454941c45d1b3a323f1433bd6"
+    }
+
+    /// Named contract: `track-addresses` in yields `multi-address-transactions`
+    /// with mempool / confirmed / removed keys that emit_multi fills.
+    #[test]
+    fn handle_client_json_track_addresses_emits_multi_buckets() {
+        let mut state = ClientState::default();
+        let msg = json!({
+            "track-addresses": [genesis_addr(), "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"]
+        });
+        let out = handle_client_json(&mut state, msg).expect("subscribe reply");
+        let multi = out
+            .get("multi-address-transactions")
+            .expect("multi-address-transactions")
+            .as_object()
+            .expect("object");
+        let first = multi.get(genesis_addr()).expect("genesis key");
+        assert!(first.get("mempool").unwrap().is_array());
+        assert!(first.get("confirmed").unwrap().is_array());
+        assert!(first.get("removed").unwrap().is_array());
+        let second = multi
+            .get("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+            .expect("bech32 key");
+        assert!(second.get("mempool").unwrap().is_array());
+        assert!(second.get("confirmed").unwrap().is_array());
+        assert!(second.get("removed").unwrap().is_array());
+        assert_eq!(state.track_addresses.len(), 2);
+    }
+
+    #[test]
+    fn handle_client_json_track_addresses_empty_unsubscribes() {
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        assert!(!state.track_addresses.is_empty());
+        let out = handle_client_json(&mut state, json!({ "track-addresses": [] }));
+        assert!(out.is_none());
+        assert!(state.track_addresses.is_empty());
+    }
+
+    #[test]
+    fn handle_client_json_track_addresses_replaces_prior() {
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        let out = handle_client_json(
+            &mut state,
+            json!({ "track-addresses": ["bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"] }),
+        )
+        .unwrap();
+        let multi = out["multi-address-transactions"].as_object().unwrap();
+        assert!(!multi.contains_key(genesis_addr()));
+        assert!(multi.contains_key("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"));
+        assert_eq!(state.track_addresses.len(), 1);
+    }
+
+    #[test]
+    fn handle_client_json_track_scriptpubkeys_emits_multi_buckets() {
+        let mut state = ClientState::default();
+        let msg = json!({ "track-scriptpubkeys": [sample_spk()] });
+        let out = handle_client_json(&mut state, msg).expect("spk subscribe");
+        let multi = out
+            .get("multi-scriptpubkey-transactions")
+            .expect("multi-scriptpubkey-transactions")
+            .as_object()
+            .unwrap();
+        let buckets = multi.get(sample_spk()).expect("spk key");
+        assert!(buckets.get("mempool").unwrap().is_array());
+        assert!(buckets.get("confirmed").unwrap().is_array());
+        assert!(buckets.get("removed").unwrap().is_array());
+    }
+
+    #[test]
+    fn p2pk_compressed_pubkey_canonicalizes_to_p2pk_script() {
+        let pk = "02".to_string() + &"ab".repeat(32);
+        let canon = canonical_track_key(&pk).expect("compressed p2pk");
+        assert_eq!(canon, format!("21{}ac", pk));
+        let mut state = ClientState::default();
+        let out = handle_client_json(&mut state, json!({ "track-addresses": [pk] })).unwrap();
+        assert!(out["multi-address-transactions"]
+            .as_object()
+            .unwrap()
+            .contains_key(&pk));
+        assert_eq!(state.track_addresses.get(&pk).unwrap(), &canon);
+    }
+
+    #[test]
+    fn p2pk_uncompressed_pubkey_canonicalizes_to_p2pk_script() {
+        let pk = "04".to_string() + &"cd".repeat(64);
+        let canon = canonical_track_key(&pk).expect("uncompressed p2pk");
+        assert_eq!(canon, format!("41{}ac", pk));
+    }
+
+    #[test]
+    fn track_address_is_independent_of_track_addresses() {
+        let mut state = ClientState::default();
+        let _ = handle_client_json(
+            &mut state,
+            json!({
+                "track-address": genesis_addr(),
+                "track-addresses": ["bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"],
+            }),
+        );
+        assert_eq!(
+            state.track_address_original.as_deref(),
+            Some(genesis_addr())
+        );
+        assert_eq!(state.track_addresses.len(), 1);
+    }
+
+    #[test]
+    fn emit_multi_and_on_mempool_fill_matching_keys() {
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        let tx = json!({
+            "txid": "aa".repeat(32),
+            "vin": [],
+            "vout": [{
+                "scriptpubkey": "76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac",
+                "scriptpubkey_address": genesis_addr(),
+            }]
+        });
+        let ev = state.on_mempool(&[tx.clone()], &[]).expect("mempool event");
+        let buckets = &ev["multi-address-transactions"][genesis_addr()];
+        assert_eq!(buckets["mempool"].as_array().unwrap().len(), 1);
+        assert!(buckets["confirmed"].as_array().unwrap().is_empty());
+        assert!(buckets["removed"].as_array().unwrap().is_empty());
+
+        let ev = state.on_block(&[tx]).expect("block event");
+        let buckets = &ev["multi-address-transactions"][genesis_addr()];
+        assert!(buckets["mempool"].as_array().unwrap().is_empty());
+        assert_eq!(buckets["confirmed"].as_array().unwrap().len(), 1);
+        assert!(buckets["removed"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn handle_socket_requires_allowlist() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist");
+        std::fs::write(&path, "").unwrap();
+        let allow = Allowlist::load(&path).unwrap();
+        let pk = [0u8; 32];
+        let mut state = ClientState::default();
+        let msg = json!({ "track-addresses": [genesis_addr()] });
+        assert!(handle_authorized_json(&allow, &pk, &mut state, msg.clone()).is_none());
+        assert!(state.track_addresses.is_empty());
+        assert!(handle_client_json(&mut state, msg).is_some());
+    }
+
+    fn listed_allow() -> (tempfile::TempDir, Arc<Allowlist>, [u8; 32]) {
+        use nostr::ToBech32;
+        let keys = nostr::Keys::generate();
+        let pk = *keys.public_key().as_bytes();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist");
+        std::fs::write(
+            &path,
+            format!("{}\n", keys.public_key().to_bech32().unwrap()),
+        )
+        .unwrap();
+        let allow = Allowlist::load(&path).unwrap();
+        (dir, allow, pk)
+    }
+
+    fn sample_tx_for(addr: &str) -> Value {
+        json!({
+            "txid": "aa".repeat(32),
+            "vin": [],
+            "vout": [{
+                "scriptpubkey": "76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac",
+                "scriptpubkey_address": addr,
+            }]
+        })
+    }
+
+    /// Named contract: `track-addresses` against a fixture with known history
+    /// yields non-empty mempool and/or confirmed. Empty arrays until a later
+    /// notify is not the only path.
+    #[tokio::test]
+    async fn handle_socket_track_addresses_fills_known_history() {
+        let (_dir, allow, pk) = listed_allow();
+        let mut history = BTreeMap::new();
+        history.insert(
+            genesis_addr().to_string(),
+            TxBuckets {
+                mempool: vec![sample_tx_for(genesis_addr())],
+                confirmed: vec![],
+                removed: vec![],
+            },
+        );
+        let hub = MwckHub::with_history_fixture(history);
+        let mut state = ClientState::default();
+        let out = hub
+            .handle_socket(
+                &allow,
+                &pk,
+                &mut state,
+                json!({ "track-addresses": [genesis_addr()] }),
+            )
+            .await
+            .expect("subscribe reply");
+        let buckets = &out["multi-address-transactions"][genesis_addr()];
+        let mempool = buckets["mempool"].as_array().expect("mempool");
+        let confirmed = buckets["confirmed"].as_array().expect("confirmed");
+        assert!(
+            !mempool.is_empty() || !confirmed.is_empty(),
+            "subscribe must include current history, not only empty arrays until notify"
+        );
+        assert_eq!(mempool.len(), 1);
+        assert!(confirmed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_socket_track_scriptpubkeys_fills_known_history() {
+        let (_dir, allow, pk) = listed_allow();
+        let mut history = BTreeMap::new();
+        history.insert(
+            sample_spk().to_string(),
+            TxBuckets {
+                mempool: vec![],
+                confirmed: vec![json!({
+                    "txid": "bb".repeat(32),
+                    "vin": [],
+                    "vout": [{ "scriptpubkey": sample_spk() }],
+                })],
+                removed: vec![],
+            },
+        );
+        let hub = MwckHub::with_history_fixture(history);
+        let mut state = ClientState::default();
+        let out = hub
+            .handle_socket(
+                &allow,
+                &pk,
+                &mut state,
+                json!({ "track-scriptpubkeys": [sample_spk()] }),
+            )
+            .await
+            .expect("spk subscribe");
+        let buckets = &out["multi-scriptpubkey-transactions"][sample_spk()];
+        let confirmed = buckets["confirmed"].as_array().expect("confirmed");
+        assert!(
+            !confirmed.is_empty(),
+            "spk subscribe must include current confirmed history"
+        );
+        assert_eq!(confirmed.len(), 1);
+    }
+}

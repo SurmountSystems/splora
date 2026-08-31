@@ -41,6 +41,9 @@ pub struct Config {
     pub blocks_dir: PathBuf,
     pub daemon_rpc_addr: SocketAddr,
     pub cookie: Option<String>,
+    /// Path to a bitcoind cookie file (`--cookie-file`). When set, read this
+    /// path instead of `daemon_dir/.cookie`. Never a cookie value.
+    pub cookie_file: Option<PathBuf>,
     pub electrum_rpc_addr: SocketAddr,
     pub http_addr: SocketAddr,
     pub http_socket_file: Option<PathBuf>,
@@ -51,6 +54,12 @@ pub struct Config {
     pub main_loop_delay: u64,
     pub address_search: bool,
     pub index_unspendables: bool,
+    /// Enable GET /block-template (daemon getblocktemplate / Elements getnewblockhex).
+    pub enable_mining_rest: bool,
+    /// RocksDB LRU block cache size in MiB for each of txstore, history, and cache.
+    pub db_block_cache_mb: usize,
+    /// RocksDB background compaction and flush thread count (increase_parallelism).
+    pub db_parallelism: usize,
     pub cors: Option<String>,
     pub precache_scripts: Option<String>,
     pub precache_threads: usize,
@@ -72,6 +81,10 @@ pub struct Config {
     pub electrum_haproxy_depth: usize,
     pub electrum_connections_per_client: usize,
     pub electrum_public_hosts: Option<crate::electrum::ServerHosts>,
+    /// Path to the read-only npub allowlist file. None means nobody is authorized.
+    pub allow_npubs_file: Option<PathBuf>,
+    /// When true, health routes may be served without NIP-98.
+    pub public_health: bool,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -94,11 +107,20 @@ fn str_to_socketaddr(address: &str, what: &str) -> SocketAddr {
 }
 
 impl Config {
-    pub fn from_args() -> Config {
-        let network_help = format!("Select network type ({})", Network::names().join(", "));
+    /// Indexer clap app (`splora`). This is not `splora-queue` and has no
+    /// `queue` subcommand.
+    pub fn indexer_clap_app() -> App<'static, 'static> {
+        let network_help: &'static str = Box::leak(
+            format!("Select network type ({})", Network::names().join(", ")).into_boxed_str(),
+        );
 
         let args = App::new("Mempool Electrum Rust Server")
             .version(crate_version!())
+            .after_help(
+                "Authenticated HTTP uses NIP-98. Routes include POST /electrum and POST /txs/package. \
+Behind a TLS terminator, set X-Forwarded-Proto (https) so NIP-98 u matches. \
+Electrum does not bind raw TCP; use --rpc-socket-file or POST /electrum.",
+            )
             .arg(
                 Arg::with_name("version")
                     .long("version")
@@ -137,7 +159,15 @@ impl Config {
                 Arg::with_name("cookie")
                     .long("cookie")
                     .help("JSONRPC authentication cookie ('USER:PASSWORD', default: read from ~/.bitcoin/.cookie)")
-                    .takes_value(true),
+                    .takes_value(true)
+                    .conflicts_with("cookie_file"),
+            )
+            .arg(
+                Arg::with_name("cookie_file")
+                    .long("cookie-file")
+                    .help("Path to the bitcoind JSONRPC cookie file. Alias of reading daemon-dir/.cookie. Never pass cookie contents. Conflicts with --cookie.")
+                    .takes_value(true)
+                    .conflicts_with("cookie"),
             )
             .arg(
                 Arg::with_name("network")
@@ -154,7 +184,7 @@ impl Config {
             .arg(
                 Arg::with_name("electrum_rpc_addr")
                     .long("electrum-rpc-addr")
-                    .help("Electrum server JSONRPC 'addr:port' to listen on (default: '127.0.0.1:50001' for mainnet, '127.0.0.1:60001' for testnet and '127.0.0.1:60401' for regtest)")
+                    .help("Legacy Electrum TCP address. Production does not bind this port. Use --rpc-socket-file or POST /electrum after NIP-98.")
                     .takes_value(true),
             )
             .arg(
@@ -200,6 +230,25 @@ impl Config {
                 Arg::with_name("index_unspendables")
                     .long("index-unspendables")
                     .help("Enable indexing of provably unspendable outputs")
+            )
+            .arg(
+                Arg::with_name("enable_mining_rest")
+                    .long("enable-mining-rest")
+                    .help("Enable GET /block-template (bitcoind getblocktemplate / Elements getnewblockhex)")
+            )
+            .arg(
+                Arg::with_name("db_block_cache_mb")
+                    .long("db-block-cache-mb")
+                    .help("RocksDB LRU block cache size in MiB per database (txstore, history, cache). CLI default 24.")
+                    .takes_value(true)
+                    .default_value("24")
+            )
+            .arg(
+                Arg::with_name("db_parallelism")
+                    .long("db-parallelism")
+                    .help("RocksDB compaction/flush parallelism. CLI default 2.")
+                    .takes_value(true)
+                    .default_value("2")
             )
             .arg(
                 Arg::with_name("cors")
@@ -313,6 +362,16 @@ impl Config {
                     .long("electrum-connections-per-client")
                     .help("Maximum number of concurrent Electrum connections allowed per client (keyed by the HAProxy-reported address when available, otherwise the peer IP). 0 disables the per-client limit.")
                     .default_value("10")
+            ).arg(
+                Arg::with_name("allow_npubs_file")
+                    .long("allow-npubs-file")
+                    .help("Path to the read-only npub allowlist (one npub1... per line). Missing file refuses start. Empty file authorizes nobody. No --allow-npubs list.")
+                    .takes_value(true)
+                    .required(false)
+            ).arg(
+                Arg::with_name("public_health")
+                    .long("public-health")
+                    .help("Serve indexer health routes without NIP-98. Default off.")
             );
 
         #[cfg(unix)]
@@ -327,7 +386,7 @@ impl Config {
         let args = args.arg(
                 Arg::with_name("rpc_socket_file")
                     .long("rpc-socket-file")
-                    .help("Electrum RPC 'unix socket file' to listen on (default disabled, enabling this ignores the electrum_rpc_addr arg)")
+                    .help("Electrum RPC unix socket to listen on. Required for the native Electrum listener. Omitting this does not bind TCP; use POST /electrum instead.")
                     .takes_value(true),
             );
 
@@ -363,7 +422,11 @@ impl Config {
                 .takes_value(true),
         );
 
-        let m = args.get_matches();
+        args
+    }
+
+    pub fn from_args() -> Config {
+        let m = Self::indexer_clap_app().get_matches();
 
         if m.is_present("version") {
             eprintln!("{}", *VERSION_STRING);
@@ -552,6 +615,7 @@ impl Config {
             blocks_dir,
             daemon_rpc_addr,
             cookie,
+            cookie_file: m.value_of("cookie_file").map(PathBuf::from),
             utxos_limit: value_t_or_exit!(m, "utxos_limit", usize),
             electrum_rpc_addr,
             electrum_txs_limit: value_t_or_exit!(m, "electrum_txs_limit", usize),
@@ -599,6 +663,9 @@ impl Config {
             main_loop_delay: value_t_or_exit!(m, "main_loop_delay", u64),
             address_search: m.is_present("address_search"),
             index_unspendables: m.is_present("index_unspendables"),
+            enable_mining_rest: m.is_present("enable_mining_rest"),
+            db_block_cache_mb: value_t_or_exit!(m, "db_block_cache_mb", usize),
+            db_parallelism: value_t_or_exit!(m, "db_parallelism", usize),
             cors: m.value_of("cors").map(|s| s.to_string()),
             precache_scripts: m.value_of("precache_scripts").map(|s| s.to_string()),
             precache_threads: m.value_of("precache_threads").map_or_else(
@@ -624,6 +691,8 @@ impl Config {
             asset_db_path,
 
             electrum_public_hosts,
+            allow_npubs_file: m.value_of("allow_npubs_file").map(PathBuf::from),
+            public_health: m.is_present("public_health"),
             #[cfg(feature = "electrum-discovery")]
             electrum_announce: m.is_present("electrum_announce"),
             #[cfg(feature = "electrum-discovery")]
@@ -638,9 +707,11 @@ impl Config {
             Arc::new(StaticCookie {
                 value: value.as_bytes().to_vec(),
             })
+        } else if let Some(ref path) = self.cookie_file {
+            Arc::new(CookieFile { path: path.clone() })
         } else {
             Arc::new(CookieFile {
-                daemon_dir: self.daemon_dir.clone(),
+                path: self.daemon_dir.join(".cookie"),
             })
         }
     }
@@ -657,15 +728,187 @@ impl CookieGetter for StaticCookie {
 }
 
 struct CookieFile {
-    daemon_dir: PathBuf,
+    path: PathBuf,
 }
 
 impl CookieGetter for CookieFile {
     fn get(&self) -> Result<Vec<u8>> {
-        let path = self.daemon_dir.join(".cookie");
-        let contents = fs::read(&path).chain_err(|| {
+        let path = &self.path;
+        let contents = fs::read(path).chain_err(|| {
             ErrorKind::Connection(format!("failed to read cookie from {:?}", path))
         })?;
         Ok(contents)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn clap_long_help() -> String {
+        let mut app = super::Config::indexer_clap_app();
+        let mut buf = Vec::new();
+        app.write_long_help(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    /// Clap prints each long option on its own definition line. Help prose that
+    /// mentions `--allow-npubs` (for example under `--allow-npubs-file`) is not
+    /// a list flag.
+    fn clap_help_declares_long_flag(help: &str, flag: &str) -> bool {
+        help.lines().any(|line| {
+            let t = line.trim_start();
+            let rest = if t.starts_with("--") {
+                t
+            } else if let Some(i) = t.find(" --") {
+                &t[i + 1..]
+            } else {
+                return false;
+            };
+            if !rest.starts_with(flag) {
+                return false;
+            }
+            match rest.as_bytes().get(flag.len()) {
+                None => true,
+                Some(b' ') | Some(b'<') | Some(b'=') | Some(b',') => true,
+                Some(_) => false,
+            }
+        })
+    }
+
+    /// Named contract: `splora --help` lists the HTTP-wire flags and has no
+    /// `--allow-npubs` list flag.
+    #[test]
+    fn help_source_lists_http_wire_flags_not_allow_npubs_list() {
+        let help = clap_long_help();
+        assert!(help.contains("--allow-npubs-file"));
+        assert!(help.contains("--db-block-cache-mb"));
+        assert!(
+            help.contains("default 24"),
+            "CLI help must name RocksDB cache default 24, got: {}",
+            help
+        );
+        let parsed = super::Config::indexer_clap_app()
+            .get_matches_from_safe(vec!["splora"])
+            .expect("indexer clap parses with no argv");
+        assert_eq!(parsed.value_of("db_block_cache_mb"), Some("24"));
+        assert!(help.contains("--db-parallelism"));
+        assert!(help.contains("--enable-mining-rest"));
+        assert!(help.contains("--cookie-file"));
+        assert!(help.contains("POST /electrum"));
+        assert!(help.contains("POST /txs/package"));
+        assert!(
+            clap_help_declares_long_flag(&help, "--allow-npubs-file"),
+            "keep --allow-npubs-file"
+        );
+        assert!(
+            !clap_help_declares_long_flag(&help, "--allow-npubs"),
+            "do not add a --allow-npubs list flag"
+        );
+        assert!(super::Config::indexer_clap_app()
+            .get_matches_from_safe(vec!["splora", "queue"])
+            .is_err());
+    }
+
+    /// NixOS binds the allowlist parent directory (rename/inotify) and the
+    /// queue directory (sibling `.tmp` writes).
+    #[test]
+    fn nixos_module_binds_allowlist_parent_and_queue_dir() {
+        let src = include_str!("../nix/module.nix");
+        assert!(src.contains("dirOf cfg.allowNpubsFile"));
+        assert!(src.contains("dirOf cfg.queueFile"));
+        assert!(src.contains("getExe' cfg.package \"splora-queue\""));
+        assert!(src.contains("splora-import"));
+        assert!(!src.contains("\"queue\"\n            \"--bind\""));
+    }
+
+    /// Named contract: default queue file is not in the allowlist parent, so
+    /// queue unit ReadWritePaths cannot write the allowlist.
+    #[test]
+    fn queue_unit_read_write_paths_exclude_allowlist_parent() {
+        let src = include_str!("../nix/module.nix");
+        assert!(src.contains("default = \"/var/lib/splora/allow-npubs\""));
+        assert!(src.contains("default = \"/var/lib/splora/queue/import-queue\""));
+        let allow_parent = std::path::Path::new("/var/lib/splora/allow-npubs")
+            .parent()
+            .unwrap();
+        let queue_parent = std::path::Path::new("/var/lib/splora/queue/import-queue")
+            .parent()
+            .unwrap();
+        assert_ne!(
+            allow_parent, queue_parent,
+            "queue ReadWritePaths must not be the allowlist parent"
+        );
+        assert_eq!(allow_parent, std::path::Path::new("/var/lib/splora"));
+        assert_eq!(queue_parent, std::path::Path::new("/var/lib/splora/queue"));
+        assert!(src.contains("ReadWritePaths = [ (dirOf cfg.queueFile) ]"));
+        assert!(src.contains("dirOf cfg.queueFile != dirOf cfg.allowNpubsFile"));
+        assert!(
+            !src.contains("default = \"/var/lib/splora/import-queue\""),
+            "do not put the queue file in the allowlist parent"
+        );
+    }
+
+    /// Named contract: nixosFiveInstances eval matches the module default.
+    /// Queue unit is `--socket-file` `/run/splora/queue.sock`, not TCP `--bind`.
+    #[test]
+    fn flake_nixos_five_instances_uses_queue_socket_file() {
+        let src = include_str!("../flake.nix");
+        let module = include_str!("../nix/module.nix");
+        assert!(module.contains("default = \"/run/splora/queue.sock\""));
+        assert!(module.contains("\"--socket-file\""));
+        assert!(src.contains("lib.hasInfix \"--socket-file\" queueStart"));
+        assert!(src.contains("lib.hasInfix \"/run/splora/queue.sock\" queueStart"));
+        assert!(src.contains("!(lib.hasInfix \"--bind\" queueStart)"));
+    }
+
+    /// Named contract: CLI cache default stays 24. The module default is
+    /// 4096 and indexer argv still passes `--db-block-cache-mb`.
+    #[test]
+    fn cli_db_block_cache_default_24_module_4096() {
+        let help = clap_long_help();
+        assert!(help.contains("CLI default 24"));
+        let parsed = super::Config::indexer_clap_app()
+            .get_matches_from_safe(vec!["splora"])
+            .expect("indexer clap parses with no argv");
+        assert_eq!(parsed.value_of("db_block_cache_mb"), Some("24"));
+        let module = include_str!("../nix/module.nix");
+        assert!(module.contains("dbBlockCacheMb"));
+        assert!(module.contains("default = 4096"));
+        assert!(module.contains("\"--db-block-cache-mb\""));
+        assert!(module.contains("(toString inst.dbBlockCacheMb)"));
+    }
+
+    /// Named contract: queue TCP plus the default unix socket must fail
+    /// the NixOS assertion (not clap at unit start).
+    #[test]
+    fn nixos_queue_listen_and_socket_file_are_exclusive() {
+        let module = include_str!("../nix/module.nix");
+        assert!(module.contains("!(cfg.queueEnable && queueHasSocket && queueHasListen)"));
+        assert!(module.contains("TCP needs queueSocketFile = null"));
+        let flake = include_str!("../flake.nix");
+        assert!(flake.contains("evalQueueListenWithDefaultSocket"));
+        assert!(flake.contains("nixosQueueListenXorSocket"));
+        assert!(flake.contains("queueListen = \"127.0.0.1:18493\""));
+    }
+
+    /// popular-scripts stdout is isolated from the allowlist parent.
+    #[test]
+    fn popular_scripts_output_dir_is_not_allowlist_parent() {
+        let module = include_str!("../nix/module.nix");
+        assert!(
+            module.contains("default = \"/var/lib/splora/popular-scripts/popular-scripts.txt\"")
+        );
+        assert!(module.contains("dirOf cfg.popularScripts.outputFile"));
+        assert!(
+            !module.contains("default = \"/var/lib/splora/popular-scripts.txt\""),
+            "do not write popular-scripts into the allowlist parent"
+        );
+        let allow_parent = std::path::Path::new("/var/lib/splora/allow-npubs")
+            .parent()
+            .unwrap();
+        let out_parent =
+            std::path::Path::new("/var/lib/splora/popular-scripts/popular-scripts.txt")
+                .parent()
+                .unwrap();
+        assert_ne!(allow_parent, out_parent);
     }
 }

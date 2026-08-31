@@ -5,16 +5,19 @@ extern crate log;
 extern crate electrs;
 
 use error_chain::ChainedError;
+use serde_json::json;
 use std::process;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use electrs::{
+    auth::Allowlist,
     config::Config,
     daemon::Daemon,
     electrum::RPC as ElectrumRPC,
     errors::*,
     metrics::Metrics,
+    mwck::MwckHub,
     new_index::{precache, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
     rest,
     signal::Waiter,
@@ -104,8 +107,31 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         asset_db,
     ));
 
-    // TODO: configuration for which servers to start
-    let rest_server = rest::start(Arc::clone(&config), Arc::clone(&query), &metrics);
+    let allow = if let Some(path) = config.allow_npubs_file.as_ref() {
+        Allowlist::load(path).chain_err(|| "failed to load --allow-npubs-file")?
+    } else {
+        warn!("no --allow-npubs-file: HTTP REST, POST /electrum, and /api/v1/ws authorize nobody");
+        Allowlist::deny_all()
+    };
+    let _allow_watch = if config.allow_npubs_file.is_some() {
+        Some(
+            Arc::clone(&allow)
+                .watch()
+                .chain_err(|| "failed to watch --allow-npubs-file")?,
+        )
+    } else {
+        None
+    };
+    let hub = MwckHub::new(Arc::clone(&query));
+
+    // Queue HTTP is a separate binary. Do not put unauthenticated POST on the indexer.
+    let rest_server = rest::start(
+        Arc::clone(&config),
+        Arc::clone(&query),
+        &metrics,
+        Arc::clone(&allow),
+        Arc::clone(&hub),
+    );
     let electrum_server = ElectrumRPC::start(Arc::clone(&config), Arc::clone(&query), &metrics);
 
     if let Some(ref precache_file) = config.precache_scripts {
@@ -141,10 +167,23 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
 
         // Index new blocks
+        let prev_height = chain.best_height();
+        let prev_txids = mempool.read().unwrap().unique_txids();
         let current_tip = daemon.getbestblockhash()?;
         if current_tip != tip {
             indexer.update(&daemon)?;
             tip = current_tip;
+            let new_height = chain.best_height();
+            for height in prev_height.saturating_add(1)..=new_height {
+                if let Some(hash) = chain.hash_by_height(height) {
+                    if let Some(txs) = chain.get_block_txs(&hash) {
+                        let blockid = chain.blockid_by_hash(&hash);
+                        let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
+                        let json_txs = rest::transactions_as_json(pairs, &query, &config);
+                        hub.notify_block(&json_txs);
+                    }
+                }
+            }
         };
 
         // Update mempool
@@ -154,6 +193,34 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                 "Error updating mempool, skipping mempool update: {}",
                 e.display_chain()
             );
+        } else {
+            let now_txids = mempool.read().unwrap().unique_txids();
+            let added: Vec<serde_json::Value> = now_txids
+                .difference(&prev_txids)
+                .filter_map(|txid| {
+                    query.lookup_txn(txid).and_then(|tx| {
+                        rest::transactions_as_json(vec![(tx, None)], &query, &config)
+                            .into_iter()
+                            .next()
+                    })
+                })
+                .collect();
+            let removed: Vec<serde_json::Value> = prev_txids
+                .difference(&now_txids)
+                .map(|txid| {
+                    query
+                        .lookup_txn(txid)
+                        .and_then(|tx| {
+                            rest::transactions_as_json(vec![(tx, None)], &query, &config)
+                                .into_iter()
+                                .next()
+                        })
+                        .unwrap_or_else(|| json!({ "txid": txid.to_string() }))
+                })
+                .collect();
+            if !added.is_empty() || !removed.is_empty() {
+                hub.notify_mempool(&added, &removed);
+            }
         }
 
         // Update subscribed clients

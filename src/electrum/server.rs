@@ -27,7 +27,7 @@ use elements::encode::serialize;
 
 use crate::chain::Txid;
 use crate::config::{Config, VERSION_STRING};
-use crate::electrum::{get_electrum_height, ProtocolVersion, ServerFeatures};
+use crate::electrum::{get_electrum_height, ElectrumListenPlan, ProtocolVersion, ServerFeatures};
 use crate::errors::*;
 use crate::metrics::{Gauge, HistogramOpts, HistogramVec, MetricOpts, Metrics};
 use crate::new_index::{Query, Utxo};
@@ -449,6 +449,25 @@ impl Connection {
         Ok(json!(txid))
     }
 
+    fn blockchain_transaction_broadcast_package(&self, params: &[Value]) -> Result<Value> {
+        let txhexes: Vec<String> = params
+            .first()
+            .chain_err(|| "missing transactions")
+            .and_then(|txs| {
+                serde_json::from_value(txs.clone()).chain_err(|| "non-array transactions")
+            })?;
+        let verbose = bool_from_value_or(params.get(1), "verbose", false)?;
+
+        let result = self.query.submit_package(txhexes, None, None)?;
+        if let Err(e) = self.chan.sender().try_send(Message::PeriodicUpdate) {
+            warn!(
+                "failed to issue PeriodicUpdate after broadcast_package: {}",
+                e
+            );
+        }
+        Ok(result.into_electrum_response(verbose))
+    }
+
     fn blockchain_transaction_get(&self, params: &[Value]) -> Result<Value> {
         let tx_hash = Txid::from(hash_from_value(params.first()).chain_err(|| "bad tx_hash")?);
         let verbose = match params.get(1) {
@@ -522,6 +541,9 @@ impl Connection {
             "blockchain.scripthash.subscribe" => self.blockchain_scripthash_subscribe(params),
             "blockchain.scripthash.unsubscribe" => self.blockchain_scripthash_unsubscribe(params),
             "blockchain.transaction.broadcast" => self.blockchain_transaction_broadcast(params),
+            "blockchain.transaction.broadcast_package" => {
+                self.blockchain_transaction_broadcast_package(params)
+            }
             "blockchain.transaction.get" => self.blockchain_transaction_get(params),
             "blockchain.transaction.get_merkle" => self.blockchain_transaction_get_merkle(params),
             "blockchain.transaction.id_from_pos" => self.blockchain_transaction_id_from_pos(params),
@@ -738,7 +760,7 @@ impl Connection {
     }
 
     #[inline]
-    fn handle_line(&mut self, line: &String) -> Value {
+    fn handle_line(&mut self, line: &str) -> Value {
         if let Ok(json_value) = from_str(line) {
             match json_value {
                 Value::Array(mut arr) => {
@@ -976,6 +998,99 @@ impl Connection {
     }
 }
 
+/// Handle one Electrum JSON-RPC HTTP body (a single object or a JSON-RPC batch).
+/// Does not bind TCP. Production Electrum is this adapter plus `--rpc-socket-file`.
+/// Subscriptions are not available over HTTP; those stay on the unix socket session.
+pub fn handle_http_jsonrpc_body(query: &Query, body: &str) -> Value {
+    match from_str::<Value>(body) {
+        Ok(Value::Array(arr)) => Value::Array(
+            arr.into_iter()
+                .map(|cmd| handle_http_jsonrpc_value(query, cmd))
+                .collect(),
+        ),
+        Ok(cmd) => handle_http_jsonrpc_value(query, cmd),
+        Err(err) => json_rpc_error(
+            format!("Invalid JSON: {err}"),
+            None,
+            JsonRpcV2Error::ParseError,
+        ),
+    }
+}
+
+fn handle_http_jsonrpc_value(query: &Query, value: Value) -> Value {
+    match (
+        value.get("method"),
+        value.get("params").unwrap_or(&json!([])),
+        value.get("id"),
+    ) {
+        (Some(Value::String(method)), Value::Array(params), Some(id)) => {
+            let mut code = JsonRpcV2Error::InternalError;
+            let result = match method.as_str() {
+                "server.version" => Ok(json!([VERSION_STRING.as_str(), PROTOCOL_VERSION])),
+                "server.banner" => Ok(json!(query.config().electrum_banner.clone())),
+                "server.ping" => Ok(Value::Null),
+                "server.donation_address" => Ok(Value::Null),
+                "blockchain.relayfee" => query.get_relayfee().map(|f| json!(f)),
+                "blockchain.estimatefee" => usize_from_value(params.first(), "blocks")
+                    .map(|blocks| json!(query.estimate_fee(blocks as u16).unwrap_or(-1.0))),
+                "blockchain.transaction.broadcast" => params
+                    .first()
+                    .ok_or_else(|| Error::from("missing tx"))
+                    .and_then(|tx| {
+                        tx.as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| Error::from("non-string tx"))
+                    })
+                    .and_then(|tx| query.broadcast_raw(&tx).map(|txid| json!(txid))),
+                "blockchain.transaction.broadcast_package" => {
+                    let txhexes: Result<Vec<String>> = params
+                        .first()
+                        .ok_or_else(|| Error::from("missing transactions"))
+                        .and_then(|txs| {
+                            serde_json::from_value(txs.clone())
+                                .chain_err(|| "non-array transactions")
+                        });
+                    let verbose = bool_from_value_or(params.get(1), "verbose", false);
+                    match (txhexes, verbose) {
+                        (Ok(txhexes), Ok(verbose)) => query
+                            .submit_package(txhexes, None, None)
+                            .map(|r| r.into_electrum_response(verbose)),
+                        (Err(e), _) | (_, Err(e)) => Err(e),
+                    }
+                }
+                "blockchain.transaction.get" => {
+                    match hash_from_value(params.first()).map(Txid::from) {
+                        Ok(tx_hash) => query
+                            .lookup_raw_txn(&tx_hash)
+                            .map(|tx| json!(hex::encode(tx)))
+                            .ok_or_else(|| Error::from("missing transaction")),
+                        Err(e) => Err(e),
+                    }
+                }
+                "mempool.get_fee_histogram" => {
+                    Ok(json!(&query.mempool().backlog_stats().fee_histogram))
+                }
+                "blockchain.headers.subscribe" | "blockchain.scripthash.subscribe" => {
+                    code = JsonRpcV2Error::InvalidRequest;
+                    Err(Error::from(
+                        "subscriptions are not available over HTTP JSON-RPC; use the unix socket",
+                    ))
+                }
+                other => {
+                    code = JsonRpcV2Error::MethodNotFound;
+                    Err(Error::from(format!("Method {other} not found")))
+                }
+            };
+            match result {
+                Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+                Err(e) => json_rpc_error(e, Some(id), code),
+            }
+        }
+        (_, _, Some(id)) => json_rpc_error(&value, Some(id), JsonRpcV2Error::InvalidRequest),
+        _ => json_rpc_error(&value, None, JsonRpcV2Error::InvalidRequest),
+    }
+}
+
 #[inline]
 fn json_rpc_error(
     input: impl core::fmt::Display,
@@ -1084,17 +1199,20 @@ impl RPC {
         let chan = Channel::unbounded();
         let acceptor = chan.sender();
         spawn_thread("acceptor", move || {
-            let addr = config.electrum_rpc_addr;
-            let listener = if let Some(path) = config.rpc_socket_file.as_ref() {
-                // We can leak this Path because we know that this function is only
-                // called once on startup.
-                let path: &'static Path = Box::leak(path.clone().into_boxed_path());
-
-                ConnectionListener::new_unix(path)
-            } else {
-                ConnectionListener::new_tcp(&addr)
-            };
-            listener.run(acceptor, shutdown_channel);
+            match ElectrumListenPlan::from_rpc_socket_file(config.rpc_socket_file.as_deref()) {
+                ElectrumListenPlan::Unix(path) => {
+                    // We can leak this Path because we know that this function is only
+                    // called once on startup.
+                    let path: &'static Path = Box::leak(path.into_boxed_path());
+                    ConnectionListener::new_unix(path).run(acceptor, shutdown_channel);
+                }
+                ElectrumListenPlan::HttpOnly => {
+                    info!(
+                        "Electrum TCP is disabled; use --rpc-socket-file or POST /electrum after NIP-98"
+                    );
+                    let _ = shutdown_channel.receiver().recv();
+                }
+            }
         });
         chan
     }
@@ -1286,11 +1404,13 @@ impl Drop for RPC {
 }
 
 enum ConnectionListener {
+    #[allow(dead_code)]
     Tcp(TcpListener),
     Unix(UnixListener, &'static Path),
 }
 
 impl ConnectionListener {
+    #[allow(dead_code)]
     fn new_tcp(addr: &SocketAddr) -> Self {
         let socket = create_socket(addr);
         socket.listen(511).expect("setting backlog failed");

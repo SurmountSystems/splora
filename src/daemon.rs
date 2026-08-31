@@ -63,6 +63,32 @@ fn parse_error_code(err: &Value) -> Option<i64> {
     err.as_object()?.get("code")?.as_i64()
 }
 
+/// Map bitcoind HTTP statuses for client-proxied RPCs. 200 and 500 (JSON-RPC
+/// error body) stay contents. 503 is occupancy. 504 is a missing daemon.
+fn classify_daemon_http_status(
+    status: &str,
+    contents: String,
+    headers: &HashMap<String, String>,
+) -> Result<String> {
+    if status == "HTTP/1.1 200 OK" {
+        Ok(contents)
+    } else if status == "HTTP/1.1 500 Internal Server Error" {
+        warn!("HTTP status: {}", status);
+        Ok(contents)
+    } else if status.starts_with("HTTP/1.1 503") {
+        bail!(ErrorKind::DaemonBusy(contents))
+    } else if status.starts_with("HTTP/1.1 504") {
+        bail!(ErrorKind::DaemonUnavailable(contents))
+    } else {
+        bail!(
+            "request failed {:?}: {:?} = {:?}",
+            status,
+            headers,
+            contents
+        )
+    }
+}
+
 fn parse_jsonrpc_reply(mut reply: Value, method: &str, expected_id: u64) -> Result<Value> {
     if let Some(reply_obj) = reply.as_object_mut() {
         if let Some(err) = reply_obj.get("error") {
@@ -165,6 +191,31 @@ pub struct TxResult {
     vsize: Option<u32>,
     fees: Option<MempoolFeesSubmitPackage>,
     error: Option<String>,
+}
+
+impl SubmitPackageResult {
+    /// Compact Electrum `blockchain.transaction.broadcast_package` body.
+    /// Ported from romanz/electrs via Blockstream new-index.
+    pub fn into_electrum_response(self, verbose: bool) -> Value {
+        if verbose {
+            return json!(self);
+        }
+        let success = self.package_msg == "success";
+        let errors: Vec<Value> = self
+            .tx_results
+            .values()
+            .filter_map(|tx| {
+                tx.error
+                    .as_ref()
+                    .map(|error| json!({ "error": error, "txid": tx.txid }))
+            })
+            .collect();
+        if errors.is_empty() {
+            json!({ "success": success })
+        } else {
+            json!({ "success": success, "errors": errors })
+        }
+    }
 }
 
 pub trait CookieGetter: Send + Sync {
@@ -276,19 +327,7 @@ impl Connection {
             )));
         }
 
-        Ok(if status == "HTTP/1.1 200 OK" {
-            contents
-        } else if status == "HTTP/1.1 500 Internal Server Error" {
-            warn!("HTTP status: {}", status);
-            contents // the contents should have a JSONRPC error field
-        } else {
-            bail!(
-                "request failed {:?}: {:?} = {:?}",
-                status,
-                headers,
-                contents
-            );
-        })
+        classify_daemon_http_status(&status, contents, &headers)
     }
 }
 
@@ -520,6 +559,28 @@ impl Daemon {
         Ok(values.remove(0))
     }
 
+    /// One-shot RPC for REST/Electrum client paths. Do not retry Connection
+    /// forever: the caller gets DaemonUnavailable (HTTP 504 on REST) or
+    /// DaemonBusy (HTTP 503 on REST). Electrum still serializes these as
+    /// JSON-RPC errors, not HTTP statuses.
+    fn request_proxied(&self, method: &str, params: Value) -> Result<Value> {
+        match self.handle_request_batch(method, &[params], 0.0) {
+            Ok(mut values) => {
+                assert_eq!(values.len(), 1);
+                Ok(values.remove(0))
+            }
+            Err(err) => {
+                if let ErrorKind::Connection(msg) = err.kind() {
+                    let msg = format!("{} failed: {}", method, msg);
+                    warn!("client daemon RPC failed: {}", err);
+                    Err(ErrorKind::DaemonUnavailable(msg).into())
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
     fn requests(&self, method: &str, params_list: &[Value]) -> Result<Vec<Value>> {
         self.retry_request_batch(method, params_list, 0.0)
     }
@@ -631,12 +692,26 @@ impl Daemon {
         serde_json::from_value(res).chain_err(|| "invalid getrawmempool reply")
     }
 
+    #[cfg(not(feature = "liquid"))]
+    pub fn getblocktemplate(&self, rules: &[&str]) -> Result<Value> {
+        self.request_proxied("getblocktemplate", json!([{ "rules": rules }]))
+    }
+
+    #[cfg(feature = "liquid")]
+    pub fn getnewblockhex(&self) -> Result<String> {
+        let value = self.request_proxied("getnewblockhex", json!([]))?;
+        value
+            .as_str()
+            .map(str::to_owned)
+            .chain_err(|| "non-string getnewblockhex response")
+    }
+
     pub fn broadcast(&self, tx: &Transaction) -> Result<Txid> {
         self.broadcast_raw(&hex::encode(serialize(tx)))
     }
 
     pub fn broadcast_raw(&self, txhex: &str) -> Result<Txid> {
-        let txid = self.request("sendrawtransaction", json!([txhex]))?;
+        let txid = self.request_proxied("sendrawtransaction", json!([txhex]))?;
         txid.as_str()
             .chain_err(|| "non-string txid")?
             .parse::<Txid>()
@@ -652,7 +727,7 @@ impl Daemon {
             Some(rate) => json!([txhex, format!("{:.8}", rate)]),
             None => json!([txhex]),
         };
-        let result = self.request("testmempoolaccept", params)?;
+        let result = self.request_proxied("testmempoolaccept", params)?;
         serde_json::from_value::<Vec<MempoolAcceptResult>>(result)
             .chain_err(|| "invalid testmempoolaccept reply")
     }
@@ -671,7 +746,7 @@ impl Daemon {
             (None, Some(burn)) => json!([txhex, null, format!("{:.8}", burn)]),
             (None, None) => json!([txhex]),
         };
-        let result = self.request("submitpackage", params)?;
+        let result = self.request_proxied("submitpackage", params)?;
         serde_json::from_value::<SubmitPackageResult>(result)
             .chain_err(|| "invalid submitpackage reply")
     }
@@ -775,5 +850,44 @@ impl Daemon {
 
         // from BTC/kB to sat/b
         Ok(relayfee * 100_000f64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_daemon_http_status;
+    use crate::errors::{Error, ErrorKind};
+    use std::collections::HashMap;
+
+    #[test]
+    fn bitcoind_http_503_is_daemon_busy() {
+        let err = classify_daemon_http_status(
+            "HTTP/1.1 503 Service Unavailable",
+            "Work queue depth exceeded".to_string(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        match err {
+            Error(ErrorKind::DaemonBusy(msg), _) => {
+                assert_eq!(msg, "Work queue depth exceeded");
+            }
+            other => panic!("expected DaemonBusy, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn bitcoind_http_504_is_daemon_unavailable() {
+        let err = classify_daemon_http_status(
+            "HTTP/1.1 504 Gateway Timeout",
+            "upstream timeout".to_string(),
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        match err {
+            Error(ErrorKind::DaemonUnavailable(msg), _) => {
+                assert_eq!(msg, "upstream timeout");
+            }
+            other => panic!("expected DaemonUnavailable, got {:?}", other),
+        }
     }
 }

@@ -10,6 +10,8 @@ use crate::daemon::{Daemon, MempoolAcceptResult, SubmitPackageResult};
 use crate::errors::*;
 use crate::new_index::{ChainQuery, Mempool, ScriptStats, SpendingInput, Utxo};
 use crate::util::{is_spendable, BlockId, Bytes, TransactionStatus};
+#[cfg(not(feature = "liquid"))]
+use serde_json::Value;
 
 #[cfg(feature = "liquid")]
 use crate::{
@@ -102,6 +104,16 @@ impl Query {
         maxburnamount: Option<f64>,
     ) -> Result<SubmitPackageResult> {
         self.daemon.submit_package(txhex, maxfeerate, maxburnamount)
+    }
+
+    #[cfg(not(feature = "liquid"))]
+    pub fn getblocktemplate(&self) -> Result<Value> {
+        self.daemon.getblocktemplate(&["segwit"])
+    }
+
+    #[cfg(feature = "liquid")]
+    pub fn getnewblockhex(&self) -> Result<String> {
+        self.daemon.getnewblockhex()
     }
 
     pub fn utxo(&self, scripthash: &[u8]) -> Result<Vec<Utxo>> {

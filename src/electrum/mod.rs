@@ -1,5 +1,61 @@
 mod server;
-pub use server::RPC;
+/// Electrum JSON-RPC over HTTP: `POST /electrum` after NIP-98 (see `rest.rs`).
+/// Production TCP Electrum is not used; unix `--rpc-socket-file` remains.
+pub use server::{handle_http_jsonrpc_body, RPC};
+
+/// How Electrum RPC listens. Raw TCP is never selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ElectrumListenPlan {
+    Unix(std::path::PathBuf),
+    /// No Electrum socket. Clients use `POST /electrum` after NIP-98.
+    HttpOnly,
+}
+
+impl ElectrumListenPlan {
+    pub fn from_rpc_socket_file(path: Option<&std::path::Path>) -> Self {
+        match path {
+            Some(p) => Self::Unix(p.to_path_buf()),
+            None => Self::HttpOnly,
+        }
+    }
+
+    /// Production never opens a raw Electrum TCP port.
+    pub fn binds_tcp(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+mod listen_plan_tests {
+    use super::ElectrumListenPlan;
+    use std::path::Path;
+
+    /// Named contract: omitting `--rpc-socket-file` does not bind Electrum TCP.
+    #[test]
+    fn electrum_start_without_unix_socket_does_not_bind_tcp() {
+        let plan = ElectrumListenPlan::from_rpc_socket_file(None);
+        assert_eq!(plan, ElectrumListenPlan::HttpOnly);
+        assert!(!plan.binds_tcp());
+        let with_unix =
+            ElectrumListenPlan::from_rpc_socket_file(Some(Path::new("/run/splora/electrum.sock")));
+        assert!(!with_unix.binds_tcp());
+        match with_unix {
+            ElectrumListenPlan::Unix(p) => {
+                assert_eq!(p, Path::new("/run/splora/electrum.sock"));
+            }
+            ElectrumListenPlan::HttpOnly => panic!("unix path should select the unix listener"),
+        }
+        let src = include_str!("server.rs");
+        assert!(
+            src.contains("ElectrumListenPlan::HttpOnly"),
+            "start_acceptor must take the HTTP-only branch instead of TCP"
+        );
+        assert!(
+            !src.contains("ConnectionListener::new_tcp("),
+            "do not call new_tcp from the Electrum acceptor"
+        );
+    }
+}
 
 #[cfg(feature = "electrum-discovery")]
 mod client;

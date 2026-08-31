@@ -18,13 +18,16 @@ extern crate serde_json;
 #[macro_use]
 extern crate lazy_static;
 
+pub mod auth;
 pub mod chain;
 pub mod config;
 pub mod daemon;
 pub mod electrum;
 pub mod errors;
 pub mod metrics;
+pub mod mwck;
 pub mod new_index;
+pub mod queue;
 pub mod rest;
 pub mod signal;
 pub mod util;

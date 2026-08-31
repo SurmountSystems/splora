@@ -1,17 +1,24 @@
+# Example unit. Prefer the NixOS module at nix/module.nix (services.splora).
+# One process per network. Electrum is a Unix socket, not raw TCP.
+# Do not pass npubs on ExecStart. Import CLI writes the allowlist.
+
 [Unit]
-Description=Electrum Rust Server
+Description=splora indexer
+After=network.target
 
 [Service]
 Type=simple
-ExecStart=/path/to/electrs/target/release/electrs -vvvv --db-dir /path/to/electrs/db/
+User=splora
+Group=splora
+ExecStart=/usr/bin/splora -vvv --timestamp --network mainnet --daemon-dir /var/lib/bitcoind --db-dir /var/lib/splora/mainnet/db --http-addr 127.0.0.1:3000 --rpc-socket-file /run/splora/mainnet/electrum.sock --allow-npubs-file /var/lib/splora/allow-npubs --db-block-cache-mb 4096 --db-parallelism 32
 Restart=on-failure
 RestartSec=60
-Environment="RUST_BACKTRACE=1"
-
-# Hardening measures
-PrivateTmp=true
-ProtectSystem=full
+Environment=RUST_BACKTRACE=1
+RuntimeDirectory=splora/mainnet
+StateDirectory=splora/mainnet
 NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
 MemoryDenyWriteExecute=true
 
 [Install]

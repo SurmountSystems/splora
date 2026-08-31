@@ -1,5 +1,6 @@
 use rocksdb;
 
+use std::convert::TryInto;
 use std::path::Path;
 
 use crate::config::Config;
@@ -148,7 +149,12 @@ pub enum DBFlush {
 impl DB {
     pub fn open(path: &Path, config: &Config) -> DB {
         let db = DB {
-            db: open_raw_db(path, OpenMode::ReadWrite),
+            db: open_raw_db_with(
+                path,
+                OpenMode::ReadWrite,
+                config.db_parallelism,
+                config.db_block_cache_mb,
+            ),
         };
         db.verify_compatibility(config);
         db
@@ -301,6 +307,15 @@ pub fn open_raw_db<T: rocksdb::ThreadMode>(
     path: &Path,
     read_mode: OpenMode,
 ) -> rocksdb::DBWithThreadMode<T> {
+    open_raw_db_with(path, read_mode, 2, 24)
+}
+
+fn open_raw_db_with<T: rocksdb::ThreadMode>(
+    path: &Path,
+    read_mode: OpenMode,
+    db_parallelism: usize,
+    db_block_cache_mb: usize,
+) -> rocksdb::DBWithThreadMode<T> {
     debug!("opening DB at {:?}", path);
     let mut db_opts = rocksdb::Options::default();
     db_opts.create_if_missing(true);
@@ -313,10 +328,15 @@ pub fn open_raw_db<T: rocksdb::ThreadMode>(
 
     // db_opts.set_advise_random_on_open(???);
     db_opts.set_compaction_readahead_size(1 << 20);
-    db_opts.increase_parallelism(2);
 
-    // let mut block_opts = rocksdb::BlockBasedOptions::default();
-    // block_opts.set_block_size(???);
+    let parallelism: i32 = db_parallelism.try_into().unwrap_or(i32::MAX);
+    db_opts.increase_parallelism(parallelism);
+
+    let cache_bytes = db_block_cache_mb.saturating_mul(1024 * 1024);
+    let cache = rocksdb::Cache::new_lru_cache(cache_bytes);
+    let mut block_opts = rocksdb::BlockBasedOptions::default();
+    block_opts.set_block_cache(&cache);
+    db_opts.set_block_based_table_factory(&block_opts);
 
     match read_mode {
         OpenMode::ReadOnly => {

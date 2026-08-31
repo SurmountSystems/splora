@@ -162,6 +162,7 @@ impl Network {
         return vec![
             "mainnet".to_string(),
             "testnet".to_string(),
+            "testnet4".to_string(),
             "regtest".to_string(),
             "signet".to_string(),
         ];
@@ -283,6 +284,28 @@ impl From<BNetwork> for Network {
             BNetwork::Testnet4 => Network::Testnet4,
             BNetwork::Regtest => Network::Regtest,
             BNetwork::Signet => Network::Signet,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Network;
+
+    #[test]
+    fn names_includes_testnet4() {
+        #[cfg(not(feature = "liquid"))]
+        {
+            assert!(
+                Network::names().iter().any(|n| n == "testnet4"),
+                "Network::names() must list testnet4 for --network help"
+            );
+            assert!(!Network::names().iter().any(|n| n == "mutinynet"));
+        }
+        #[cfg(feature = "liquid")]
+        {
+            assert!(!Network::names().iter().any(|n| n == "testnet4"));
+            assert!(!Network::names().iter().any(|n| n == "mutinynet"));
         }
     }
 }
