@@ -63,7 +63,7 @@ REST and WebSocket listen on `--http-addr` (CLI default `127.0.0.1`, ports 3000/
 
 `POST /electrum` is one JSON-RPC 2.0 body per request (object or batch array) with the same method names as socket Electrum. It is not a wrapped TCP framer. Socket Electrum is newline JSON-RPC on `--rpc-socket-file`. Omitting `--rpc-socket-file` does not bind Electrum TCP.
 
-HTTP/2 and HTTP/3 are not served on the splora unix socket. They belong on the Surmount HTTPS edge around that JSON-RPC.
+HTTP/2 and HTTP/3 are not served on the splora unix socket. They terminate on the Surmount Axum HTTPS edge in another tree. See [FORK.md](FORK.md) section 5. Splora sockets are local cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket.
 
 ## NixOS
 
@@ -102,11 +102,11 @@ Optional `services.splora.popularScripts.enable` starts a systemd timer that run
 
 ### Surmount edge (no nginx)
 
-There is no nginx in this tree. Do not enable an nginx vhost for splora. Public TLS, HTTP/2, HTTP/3, and cipher suites live on the first-party Axum edge in surmount-server. splora on the unix socket is local cleartext.
+There is no nginx in this tree. Do not enable an nginx vhost for splora. Public TLS, HTTP/2, HTTP/3, and cipher suites live on the first-party Axum edge in surmount-server (`surmount.sploraProxy`, `surmount.managementUi.http3Enable`). splora on the unix socket is local cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket. Fork law for that split is [FORK.md](FORK.md) section 5.
+
+That other tree already maps Hosts to `/run/splora/<instance>.http.sock` (`SURMOUNT_SPLORA_*`, instance names `mainnet`, `testnet3`, `testnet4`, `mutinynet`, `liquid`) and refuses Electrum newline sockets on the HTTP proxy. This repo documents the socket contract. It does not implement the edge.
 
 Point that edge at the socket paths above. Forward `Host` and `X-Forwarded-Proto` (usually `https`). splora still verifies NIP-98. The `u` tag is the public absolute URL. A terminator that omits `X-Forwarded-Proto` will 401 because this binary otherwise reconstructs `http://`. Do not verify NIP-98 twice at the proxy unless that sibling tree later opts in. WebSocket `/api/v1/ws` needs the same edge websocket proxy to the indexer HTTP socket.
-
-This repo documents that contract. It does not implement the edge.
 
 ## Build (without Nix)
 

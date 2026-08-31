@@ -1,7 +1,7 @@
 use elements::hex::ToHex;
-use elements::{confidential::Asset, PeginData, PegoutData, TxIn, TxOut};
+use elements::{PeginData, PegoutData, TxIn, TxOut, confidential::Asset};
 
-use crate::chain::{bitcoin_genesis_hash, BNetwork, Network};
+use crate::chain::{BNetwork, Network, bitcoin_genesis_hash};
 use crate::util::FullHash;
 
 pub fn get_pegin_data(txout: &TxIn, network: Network) -> Option<PeginData<'_>> {

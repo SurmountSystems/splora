@@ -118,9 +118,9 @@ where
 
 pub(super) mod sigops {
     use crate::chain::{
+        Transaction, TxOut, Witness,
         opcodes::all::{OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY, OP_CHECKSIG, OP_CHECKSIGVERIFY},
         script::{self, Instruction},
-        Transaction, TxOut, Witness,
     };
     #[cfg(not(feature = "liquid"))]
     use bitcoin::opcodes::Opcode;

@@ -2,26 +2,26 @@ use std::str::FromStr;
 
 #[cfg(not(feature = "liquid"))] // use regular Bitcoin data structures
 pub use bitcoin::{
+    Block, BlockHash, OutPoint, ScriptBuf as Script, Transaction, TxIn, TxOut, Txid, Witness,
     address,
     block::Header as BlockHeader,
     blockdata::{opcodes, script},
     consensus::deserialize,
-    hashes, Block, BlockHash, OutPoint, ScriptBuf as Script, Transaction, TxIn, TxOut, Txid,
-    Witness,
+    hashes,
 };
 
 #[cfg(feature = "liquid")]
 pub use {
     crate::elements::asset,
     elements::{
-        address, bitcoin::bech32::Hrp, confidential, encode::deserialize, hashes, opcodes, script,
         Address, AssetId, Block, BlockHash, BlockHeader, OutPoint, Script, Transaction, TxIn,
-        TxInWitness as Witness, TxOut, Txid,
+        TxInWitness as Witness, TxOut, Txid, address, bitcoin::bech32::Hrp, confidential,
+        encode::deserialize, hashes, opcodes, script,
     },
 };
 
-use bitcoin::blockdata::constants::genesis_block;
 pub use bitcoin::Network as BNetwork;
+use bitcoin::blockdata::constants::genesis_block;
 
 // Extension trait for getting txid in a cross-compatible way
 pub trait TxidCompat {

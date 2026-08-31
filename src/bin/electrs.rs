@@ -17,8 +17,8 @@ use electrs::{
     electrum::RPC as ElectrumRPC,
     errors::*,
     metrics::Metrics,
-    mwck::MwckHub,
-    new_index::{precache, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
+    mwck::{MwckHub, prefer_full_removed},
+    new_index::{ChainQuery, FetchFrom, Indexer, Mempool, Query, Store, precache},
     rest,
     signal::Waiter,
 };
@@ -174,16 +174,7 @@ fn run_server(config: Arc<Config>) -> Result<()> {
             indexer.update(&daemon)?;
             tip = current_tip;
             let new_height = chain.best_height();
-            for height in prev_height.saturating_add(1)..=new_height {
-                if let Some(hash) = chain.hash_by_height(height) {
-                    if let Some(txs) = chain.get_block_txs(&hash) {
-                        let blockid = chain.blockid_by_hash(&hash);
-                        let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
-                        let json_txs = rest::transactions_as_json(pairs, &query, &config);
-                        hub.notify_block(&json_txs);
-                    }
-                }
-            }
+            hub.notify_new_tip(prev_height, new_height);
         };
 
         // Update mempool
@@ -205,19 +196,23 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                     })
                 })
                 .collect();
-            let removed: Vec<serde_json::Value> = prev_txids
+            let removed_stubs: Vec<serde_json::Value> = prev_txids
                 .difference(&now_txids)
-                .map(|txid| {
-                    query
-                        .lookup_txn(txid)
-                        .and_then(|tx| {
-                            rest::transactions_as_json(vec![(tx, None)], &query, &config)
-                                .into_iter()
-                                .next()
-                        })
-                        .unwrap_or_else(|| json!({ "txid": txid.to_string() }))
-                })
+                .map(|txid| json!({ "txid": txid.to_string() }))
                 .collect();
+            let mut available = std::collections::BTreeMap::new();
+            for txid in prev_txids.difference(&now_txids) {
+                if let Some(tx) = query.lookup_txn(txid) {
+                    if let Some(full) =
+                        rest::transactions_as_json(vec![(tx, None)], &query, &config)
+                            .into_iter()
+                            .next()
+                    {
+                        available.insert(txid.to_string(), full);
+                    }
+                }
+            }
+            let removed = prefer_full_removed(&removed_stubs, &available);
             if !added.is_empty() || !removed.is_empty() {
                 hub.notify_mempool(&added, &removed);
             }

@@ -9,17 +9,17 @@ pub mod fees;
 pub use self::block::{BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, HeaderEntry, HeaderList};
 pub use self::fees::get_tx_fee;
 pub use self::script::{
-    get_innerscripts, IsProvablyUnspendable, ScriptToAddr, ScriptToAsm, SegwitDetection,
+    IsProvablyUnspendable, ScriptToAddr, ScriptToAsm, SegwitDetection, get_innerscripts,
 };
 pub use self::transaction::{
-    extract_tx_prevouts, has_prevout, is_coinbase, is_spendable, serialize_outpoint,
-    sigops::transaction_sigop_count, TransactionStatus, TxInput,
+    TransactionStatus, TxInput, extract_tx_prevouts, has_prevout, is_coinbase, is_spendable,
+    serialize_outpoint, sigops::transaction_sigop_count,
 };
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, ThreadId};
 
 use crate::chain::BlockHeader;
@@ -164,11 +164,7 @@ pub trait BoolThen {
 
 impl BoolThen for bool {
     fn and_then<T>(self, f: impl FnOnce() -> Option<T>) -> Option<T> {
-        if self {
-            f()
-        } else {
-            None
-        }
+        if self { f() } else { None }
     }
 }
 

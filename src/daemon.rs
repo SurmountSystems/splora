@@ -11,7 +11,7 @@ use bitcoin::hashes::Hash;
 use glob;
 use hex;
 use itertools::Itertools;
-use serde_json::{from_str, from_value, Value};
+use serde_json::{Value, from_str, from_value};
 
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::{deserialize, serialize};

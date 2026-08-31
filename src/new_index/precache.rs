@@ -1,6 +1,6 @@
 use crate::errors::*;
 use crate::new_index::ChainQuery;
-use crate::util::{full_hash, FullHash};
+use crate::util::{FullHash, full_hash};
 
 use rayon::prelude::*;
 
@@ -8,7 +8,7 @@ use hex;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Instant;
 
 pub fn precache(chain: Arc<ChainQuery>, scripthashes: Vec<FullHash>, threads: usize) {

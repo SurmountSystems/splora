@@ -1,8 +1,8 @@
+#[cfg(not(feature = "liquid"))]
+use bitcoin::VarInt;
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
 #[cfg(not(feature = "liquid"))]
 use bitcoin::merkle_tree::MerkleBlock;
-#[cfg(not(feature = "liquid"))]
-use bitcoin::VarInt;
 use itertools::Itertools;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 use bitcoin::consensus::encode::{deserialize, serialize};
 #[cfg(feature = "liquid")]
 use elements::{
-    encode::{deserialize, serialize, VarInt},
     AssetId,
+    encode::{VarInt, deserialize, serialize},
 };
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -28,12 +28,12 @@ use crate::daemon::Daemon;
 use crate::errors::*;
 use crate::metrics::{Gauge, HistogramOpts, HistogramTimer, HistogramVec, MetricOpts, Metrics};
 use crate::util::{
-    bincode_util, full_hash, has_prevout, is_spendable, BlockHeaderMeta, BlockId, BlockMeta,
-    BlockStatus, Bytes, HeaderEntry, HeaderList, ScriptToAddr,
+    BlockHeaderMeta, BlockId, BlockMeta, BlockStatus, Bytes, HeaderEntry, HeaderList, ScriptToAddr,
+    bincode_util, full_hash, has_prevout, is_spendable,
 };
 
-use crate::new_index::db::{DBFlush, DBRow, ReverseScanIterator, ScanIterator, DB};
-use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
+use crate::new_index::db::{DB, DBFlush, DBRow, ReverseScanIterator, ScanIterator};
+use crate::new_index::fetch::{BlockEntry, FetchFrom, start_fetcher};
 
 #[cfg(feature = "liquid")]
 use crate::elements::{asset, peg};
@@ -820,7 +820,8 @@ impl ChainQuery {
         last_seen_txid: Option<&'a Txid>,
         start_height: Option<u32>,
         limit: usize,
-    ) -> impl rayon::iter::ParallelIterator<Item = Result<(Transaction, BlockId, u16)>> + 'a {
+    ) -> impl rayon::iter::ParallelIterator<Item = Result<(Transaction, BlockId, u16)>> + use<'a>
+    {
         let _timer_scan = self.start_timer("history");
 
         self.lookup_txns(
@@ -1991,11 +1992,11 @@ impl TxHistoryInfo {
     // for spending rows, returns the spent previous output.
     pub fn get_funded_outpoint(&self) -> OutPoint {
         match self {
-            TxHistoryInfo::Funding(ref info) => OutPoint {
+            TxHistoryInfo::Funding(info) => OutPoint {
                 txid: deserialize(&info.txid).unwrap(),
                 vout: info.vout,
             },
-            TxHistoryInfo::Spending(ref info) => OutPoint {
+            TxHistoryInfo::Spending(info) => OutPoint {
                 txid: deserialize(&info.prev_txid).unwrap(),
                 vout: info.prev_vout,
             },

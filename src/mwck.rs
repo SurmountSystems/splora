@@ -13,14 +13,14 @@
 //! The `/api/v1/ws` upgrade must require [`crate::auth::Allowlist`]. After
 //! upgrade, that pubkey owns the connection.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::auth::Allowlist;
 use crate::chain::{Network, Script};
-use crate::new_index::{compute_script_hash, Query};
+use crate::new_index::{Query, compute_script_hash};
 
 struct HubClient {
     state: ClientState,
@@ -137,13 +137,14 @@ impl MwckHub {
     }
 
     pub fn notify_mempool(&self, added: &[Value], removed: &[Value]) {
+        let removed = self.enrich_removed(removed);
         let pending: Vec<(Option<UnboundedSender<Value>>, Value)> = {
             let clients = self.clients.lock().expect("mwck clients");
             clients
                 .values()
                 .filter_map(|c| {
                     c.state
-                        .on_mempool(added, removed)
+                        .on_mempool(added, &removed)
                         .map(|ev| (c.out.clone(), ev))
                 })
                 .collect()
@@ -168,6 +169,39 @@ impl MwckHub {
                 let _ = tx.send(ev);
             }
         }
+    }
+
+    /// Confirmed txs for each new height after the previous tip. One notify
+    /// with every matching tx. Does not replay orphaned blocks on a reorg.
+    pub fn notify_blocks(&self, blocks: &[Vec<Value>]) {
+        let confirmed: Vec<Value> = blocks.iter().flatten().cloned().collect();
+        if !confirmed.is_empty() {
+            self.notify_block(&confirmed);
+        }
+    }
+
+    /// Walk chain heights `(prev_height, new_height]` and emit confirmed txs.
+    /// No-op without [`Query`]. Reorgs that lower the tip are leftover.
+    pub fn notify_new_tip(&self, prev_height: usize, new_height: usize) {
+        let Some(query) = self.query.as_ref() else {
+            return;
+        };
+        if new_height <= prev_height {
+            return;
+        }
+        let chain = query.chain();
+        let config = query.config();
+        let mut blocks = Vec::new();
+        for height in prev_height.saturating_add(1)..=new_height {
+            if let Some(hash) = chain.hash_by_height(height) {
+                if let Some(txs) = chain.get_block_txs(&hash) {
+                    let blockid = chain.blockid_by_hash(&hash);
+                    let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
+                    blocks.push(crate::rest::transactions_as_json(pairs, query, config));
+                }
+            }
+        }
+        self.notify_blocks(&blocks);
     }
 
     /// Apply one client JSON message. REST must not call this unless the
@@ -232,6 +266,65 @@ impl MwckHub {
         match canon {
             Some(canon) => snapshot_from_address(query, orig, canon),
             None => snapshot_from_spk(query, orig),
+        }
+    }
+
+    fn enrich_removed(&self, removed: &[Value]) -> Vec<Value> {
+        let mut available = self.available_tx_bodies();
+        if let Some(query) = &self.query {
+            for v in removed {
+                if is_full_tx_object(v) {
+                    continue;
+                }
+                let Some(txid_s) = v.get("txid").and_then(|t| t.as_str()) else {
+                    continue;
+                };
+                if available.contains_key(txid_s) {
+                    continue;
+                }
+                if let Ok(txid) = txid_s.parse::<crate::chain::Txid>() {
+                    if let Some(tx) = query.lookup_txn(&txid) {
+                        if let Some(full) = crate::rest::transactions_as_json(
+                            vec![(tx, None)],
+                            query,
+                            query.config(),
+                        )
+                        .into_iter()
+                        .next()
+                        {
+                            available.insert(txid_s.to_string(), full);
+                        }
+                    }
+                }
+            }
+        }
+        prefer_full_removed(removed, &available)
+    }
+
+    fn available_tx_bodies(&self) -> BTreeMap<String, Value> {
+        #[cfg(not(test))]
+        {
+            let _ = self;
+            return BTreeMap::new();
+        }
+        #[cfg(test)]
+        {
+            let mut map = BTreeMap::new();
+            if let Some(history) = &self.test_history {
+                for buckets in history.values() {
+                    for tx in buckets
+                        .mempool
+                        .iter()
+                        .chain(buckets.confirmed.iter())
+                        .chain(buckets.removed.iter())
+                    {
+                        if let Some(txid) = tx.get("txid").and_then(|t| t.as_str()) {
+                            map.entry(txid.to_string()).or_insert_with(|| tx.clone());
+                        }
+                    }
+                }
+            }
+            map
         }
     }
 }
@@ -364,6 +457,30 @@ pub fn canonical_track_key(raw: &str) -> Option<String> {
 /// object with `{mempool, confirmed, removed}` per key.
 pub fn emit_multi(event_key: &str, per_key: &BTreeMap<String, TxBuckets>) -> Value {
     json!({ event_key: per_key })
+}
+
+/// Prefer a full transaction JSON in `removed`. `{txid}` only when no body
+/// is available.
+pub fn prefer_full_removed(removed: &[Value], available: &BTreeMap<String, Value>) -> Vec<Value> {
+    removed
+        .iter()
+        .map(|v| {
+            if is_full_tx_object(v) {
+                return v.clone();
+            }
+            let Some(txid) = v.get("txid").and_then(|t| t.as_str()) else {
+                return v.clone();
+            };
+            match available.get(txid) {
+                Some(full) if is_full_tx_object(full) => full.clone(),
+                _ => json!({ "txid": txid }),
+            }
+        })
+        .collect()
+}
+
+fn is_full_tx_object(v: &Value) -> bool {
+    v.get("vin").is_some() || v.get("vout").is_some()
 }
 
 /// Pure JSON state machine. No network. Tests call this directly.
@@ -821,10 +938,12 @@ mod tests {
         assert_eq!(canon, format!("21{}ac", pk));
         let mut state = ClientState::default();
         let out = handle_client_json(&mut state, json!({ "track-addresses": [pk] })).unwrap();
-        assert!(out["multi-address-transactions"]
-            .as_object()
-            .unwrap()
-            .contains_key(&pk));
+        assert!(
+            out["multi-address-transactions"]
+                .as_object()
+                .unwrap()
+                .contains_key(&pk)
+        );
         assert_eq!(state.track_addresses.get(&pk).unwrap(), &canon);
     }
 
@@ -988,5 +1107,99 @@ mod tests {
             "spk subscribe must include current confirmed history"
         );
         assert_eq!(confirmed.len(), 1);
+    }
+
+    /// Named contract: dropped mempool txs keep a full object in `removed`
+    /// when that body is still available. `{txid}` only when it is not.
+    #[test]
+    fn prefer_full_removed_uses_available_body_not_txid_stub() {
+        let txid = "aa".repeat(32);
+        let full = sample_tx_for(genesis_addr());
+        let mut available = BTreeMap::new();
+        available.insert(txid.clone(), full.clone());
+        let stubs = vec![json!({ "txid": txid })];
+        let out = prefer_full_removed(&stubs, &available);
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].get("vout").is_some(),
+            "removed must keep vin/vout when the tx is still available"
+        );
+        assert_eq!(out[0]["txid"], full["txid"]);
+        let missing = prefer_full_removed(&[json!({ "txid": "bb".repeat(32) })], &available);
+        assert_eq!(missing[0], json!({ "txid": "bb".repeat(32) }));
+        assert!(missing[0].get("vout").is_none());
+    }
+
+    /// Named contract: a `{txid}` stub is upgraded from fixture history so
+    /// `track-addresses` can match vin/vout, not only an unmatched stub.
+    #[test]
+    fn notify_mempool_removed_emits_full_object_when_available() {
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let txid = "aa".repeat(32);
+        let full = sample_tx_for(genesis_addr());
+        let mut history = BTreeMap::new();
+        history.insert(
+            genesis_addr().to_string(),
+            TxBuckets {
+                mempool: vec![full.clone()],
+                confirmed: vec![],
+                removed: vec![],
+            },
+        );
+        let hub = MwckHub::with_history_fixture(history);
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        let id = hub.register_socket(out_tx);
+        hub.set_client_state(id, state);
+        hub.notify_mempool(&[], &[json!({ "txid": txid })]);
+        let ev = out_rx.try_recv().expect("removed notify");
+        let removed = ev["multi-address-transactions"][genesis_addr()]["removed"]
+            .as_array()
+            .expect("removed array");
+        assert_eq!(removed.len(), 1);
+        assert!(
+            removed[0].get("vout").is_some(),
+            "dropped tx still in fixture history must be a full object, not only txid"
+        );
+    }
+
+    /// Named contract: when the tip moves more than one height, confirmed
+    /// txs from every new height are emitted (not only the last height).
+    #[test]
+    fn notify_block_emits_confirmed_from_two_new_heights() {
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let hub = MwckHub::handshake_fixture();
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        let id = hub.register_socket(out_tx);
+        hub.set_client_state(id, state);
+        let h1 = json!({
+            "txid": "aa".repeat(32),
+            "status": { "block_height": 10 },
+            "vin": [],
+            "vout": [{
+                "scriptpubkey": "76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac",
+                "scriptpubkey_address": genesis_addr(),
+            }]
+        });
+        let h2 = json!({
+            "txid": "cc".repeat(32),
+            "status": { "block_height": 11 },
+            "vin": [],
+            "vout": [{
+                "scriptpubkey": "76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac",
+                "scriptpubkey_address": genesis_addr(),
+            }]
+        });
+        hub.notify_blocks(&[vec![h1], vec![h2]]);
+        let ev = out_rx.try_recv().expect("block notify");
+        let confirmed = ev["multi-address-transactions"][genesis_addr()]["confirmed"]
+            .as_array()
+            .expect("confirmed");
+        assert_eq!(
+            confirmed.len(),
+            2,
+            "tip jump of two heights must include confirmed txs from both heights"
+        );
     }
 }

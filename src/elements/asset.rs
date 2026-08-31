@@ -1,20 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-use bitcoin::hashes::{sha256, Hash};
+use bitcoin::hashes::{Hash, sha256};
 use elements::confidential::{Asset, Value};
 use elements::encode::{deserialize, serialize};
 use elements::secp256k1_zkp::ZERO_TWEAK;
-use elements::{issuance::ContractHash, AssetId, AssetIssuance, OutPoint, Transaction, TxIn};
+use elements::{AssetId, AssetIssuance, OutPoint, Transaction, TxIn, issuance::ContractHash};
 
 use crate::chain::{BNetwork, BlockHash, Network, Txid};
-use crate::elements::peg::{get_pegin_data, get_pegout_data, PeginInfo, PegoutInfo};
+use crate::elements::peg::{PeginInfo, PegoutInfo, get_pegin_data, get_pegout_data};
 use crate::elements::registry::{AssetMeta, AssetRegistry};
 use crate::errors::*;
 use crate::new_index::schema::{Operation, TxHistoryInfo, TxHistoryKey, TxHistoryRow};
-use crate::new_index::{db::DBFlush, ChainQuery, DBRow, Mempool, Query};
+use crate::new_index::{ChainQuery, DBRow, Mempool, Query, db::DBFlush};
 use crate::util::{
-    bincode_util, full_hash, Bytes, FullHash, IsProvablyUnspendable, TransactionStatus, TxInput,
+    Bytes, FullHash, IsProvablyUnspendable, TransactionStatus, TxInput, bincode_util, full_hash,
 };
 
 lazy_static! {

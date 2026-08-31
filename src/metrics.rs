@@ -70,9 +70,11 @@ impl Metrics {
             .unwrap_or_else(|_| panic!("failed to start monitoring HTTP server at {}", self.addr));
         start_process_exporter(self);
         let reg = self.reg.clone();
-        spawn_thread("metrics", move || loop {
-            if let Err(e) = handle_request(&reg, server.recv()) {
-                error!("http error: {}", e);
+        spawn_thread("metrics", move || {
+            loop {
+                if let Err(e) = handle_request(&reg, server.recv()) {
+                    error!("http error: {}", e);
+                }
             }
         });
     }
@@ -145,15 +147,17 @@ fn start_process_exporter(metrics: &Metrics) {
         &["type"],
     );
     let fds = metrics.gauge(MetricOpts::new("process_fs_fds", "# of file descriptors"));
-    spawn_thread("exporter", move || loop {
-        match parse_stats() {
-            Ok(stats) => {
-                cpu.with_label_values(&["utime"]).set(stats.utime);
-                rss.set(stats.rss as i64);
-                fds.set(stats.fds as i64);
+    spawn_thread("exporter", move || {
+        loop {
+            match parse_stats() {
+                Ok(stats) => {
+                    cpu.with_label_values(&["utime"]).set(stats.utime);
+                    rss.set(stats.rss as i64);
+                    fds.set(stats.fds as i64);
+                }
+                Err(e) => warn!("failed to export stats: {}", e),
             }
-            Err(e) => warn!("failed to export stats: {}", e),
+            thread::sleep(Duration::from_secs(5));
         }
-        thread::sleep(Duration::from_secs(5));
     });
 }

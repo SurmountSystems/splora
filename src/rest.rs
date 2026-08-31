@@ -4,15 +4,15 @@ use crate::chain::address;
 use crate::chain::{
     BlockHash, Network, OutPoint, Script, Transaction, TxIn, TxOut, Txid, TxidCompat,
 };
-use crate::config::{Config, BITCOIND_SUBVER, VERSION_STRING};
+use crate::config::{BITCOIND_SUBVER, Config, VERSION_STRING};
 use crate::errors;
 use crate::metrics::Metrics;
 use crate::mwck::{ClientState, MwckHub};
-use crate::new_index::{compute_script_hash, Query, SpendingInput, Utxo};
+use crate::new_index::{Query, SpendingInput, Utxo, compute_script_hash};
 use crate::util::{
-    create_socket, electrum_merkle, extract_tx_prevouts, full_hash, get_innerscripts, get_tx_fee,
-    has_prevout, is_coinbase, transaction_sigop_count, BlockHeaderMeta, BlockId, FullHash,
-    IsProvablyUnspendable, ScriptToAddr, ScriptToAsm, SegwitDetection, TransactionStatus,
+    BlockHeaderMeta, BlockId, FullHash, IsProvablyUnspendable, ScriptToAddr, ScriptToAsm,
+    SegwitDetection, TransactionStatus, create_socket, electrum_merkle, extract_tx_prevouts,
+    full_hash, get_innerscripts, get_tx_fee, has_prevout, is_coinbase, transaction_sigop_count,
 };
 
 #[cfg(not(feature = "liquid"))]
@@ -25,31 +25,32 @@ use bitcoin::blockdata::opcodes;
 use bitcoin::hashes::Hash;
 use futures_util::{SinkExt, StreamExt};
 use hex::{self, FromHexError};
+use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use hyper::{
     header::{self, HeaderValue},
     service::{make_service_fn, service_fn},
     upgrade::Upgraded,
 };
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use prometheus::{HistogramOpts, HistogramVec};
 use rayon::iter::ParallelIterator;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::WebSocketStream;
 
 use hyperlocal::UnixServerExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cmp, fs};
 #[cfg(feature = "liquid")]
 use {
-    crate::elements::{peg::PegoutValue, AssetMeta, AssetSorting, IssuanceValue},
+    crate::elements::{AssetMeta, AssetSorting, IssuanceValue, peg::PegoutValue},
     elements::{
+        AssetId,
         confidential::{Asset, Nonce, Value},
-        encode, AssetId,
+        encode,
     },
 };
 
@@ -86,8 +87,8 @@ const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BODY_SIZE: usize = 1_000_000;
 const NIP98_WINDOW_SECS: u64 = 60;
 const WS_ALLOWLIST_POLL: Duration = Duration::from_secs(2);
-// Header-read timeout (~10s) is a Blockstream new-index valve. hyper 0.14.18 in this
-// lockfile has no Server::http1_header_read_timeout (that landed in 0.14.20).
+// Header-read timeout (~10s) is a Blockstream new-index valve. hyper 0.14.32 in this
+// lockfile has Server::http1_header_read_timeout (landed in 0.14.20). Not wired.
 
 // internal api prefix
 const INTERNAL_PREFIX: &str = "internal";
@@ -2673,7 +2674,7 @@ impl From<address::AddressError> for HttpError {
 
 #[cfg(test)]
 mod tests {
-    use super::{confirmed_after_txid, mining_rest_disabled_error, TxidLocation};
+    use super::{TxidLocation, confirmed_after_txid, mining_rest_disabled_error};
     use crate::chain::Txid;
     use crate::rest::HttpError;
     use hyper::StatusCode;
@@ -2755,7 +2756,7 @@ mod tests {
     /// not an exception. Empty allowlist is 401 except public-health tip routes.
     #[test]
     fn http_ws_gate_uses_live_allowlist() {
-        use super::{http_ws_auth_gate, HttpAuthOutcome};
+        use super::{HttpAuthOutcome, http_ws_auth_gate};
         use crate::auth::Allowlist;
         use nostr::nips::nip98::HttpMethod;
 
@@ -2840,7 +2841,7 @@ mod tests {
 
     #[test]
     fn http_ws_gate_public_health_allows_tip_without_auth() {
-        use super::{http_ws_auth_gate, HttpAuthOutcome};
+        use super::{HttpAuthOutcome, http_ws_auth_gate};
         use crate::auth::Allowlist;
 
         let dir = tempfile::tempdir().unwrap();
@@ -2906,7 +2907,7 @@ mod tests {
     /// hyper SWITCHING_PROTOCOLS handshake.
     #[test]
     fn mwck_upgrade_requires_live_allowlist() {
-        use super::{http_ws_auth_gate, mwck_upgrade_http_status, HttpAuthOutcome};
+        use super::{HttpAuthOutcome, http_ws_auth_gate, mwck_upgrade_http_status};
         use crate::auth::Allowlist;
         use nostr::nips::nip98::HttpMethod;
 
@@ -2987,7 +2988,7 @@ mod tests {
     /// not a full indexer.
     #[tokio::test]
     async fn live_hyper_ws_101_handshake_allowlist() {
-        use super::{handle_mwck_upgrade, Server};
+        use super::{Server, handle_mwck_upgrade};
         use crate::auth::Allowlist;
         use crate::mwck::MwckHub;
         use futures_util::{SinkExt, StreamExt};
@@ -2998,9 +2999,9 @@ mod tests {
         use std::time::Duration;
         use tokio::net::TcpStream;
         use tokio_tungstenite::client_async;
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::Error as WsError;
         use tokio_tungstenite::tungstenite::Message;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
         let keys = Keys::generate();
         let dir = tempfile::tempdir().unwrap();

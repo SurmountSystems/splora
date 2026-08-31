@@ -3,7 +3,7 @@
 //!
 //! NIP-98: https://github.com/nostr-protocol/nips/blob/master/98.md (accessed: 2026-08-28)
 
-use notify::{event::ModifyKind, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher, event::ModifyKind};
 use sha2::{Digest, Sha256};
 use signal_hook::consts::SIGHUP;
 use std::collections::HashSet;
@@ -160,11 +160,13 @@ impl Allowlist {
         signal_hook::flag::register(SIGHUP, Arc::clone(&flag))
             .map_err(|e| AuthError::Io(e.to_string()))?;
         let allow_hup = Arc::clone(&allow);
-        let hup = thread::spawn(move || loop {
-            if flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                let _ = allow_hup.reload();
+        let hup = thread::spawn(move || {
+            loop {
+                if flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    let _ = allow_hup.reload();
+                }
+                thread::sleep(Duration::from_millis(200));
             }
-            thread::sleep(Duration::from_millis(200));
         });
 
         // Keep the ModifyKind import used so clippy does not complain later if we tighten kinds.
@@ -210,6 +212,17 @@ fn pubkey_to_bytes(pk: &nostr::PublicKey) -> Result<[u8; 32], AuthError> {
     Ok(*pk.as_bytes())
 }
 
+/// NIP-98 events are small metadata. Match nostr 0.44.8
+/// ([RUSTSEC-2026-0229](https://rustsec.org/advisories/RUSTSEC-2026-0229), accessed: 2026-08-31).
+const MAX_NIP98_AUTH_EVENT_BYTES: usize = 64 * 1024;
+const MAX_NIP98_AUTH_ENCODED_BYTES: usize = (MAX_NIP98_AUTH_EVENT_BYTES / 3
+    + if MAX_NIP98_AUTH_EVENT_BYTES % 3 == 0 {
+        0
+    } else {
+        1
+    })
+    * 4;
+
 /// Verify `Authorization: Nostr <base64 event>` per NIP-98, then the allowlist.
 pub fn verify_nip98(
     header: Option<&str>,
@@ -250,7 +263,15 @@ fn verify_nip98_impl(
     if encoded.is_empty() {
         return Err(AuthError::MissingHeader);
     }
+    // Bound attacker-controlled input before Base64 allocates its decoded buffer.
+    if encoded.len() > MAX_NIP98_AUTH_ENCODED_BYTES {
+        return Err(AuthError::BadEncoding);
+    }
     let raw = base64::decode(encoded).map_err(|_| AuthError::BadEncoding)?;
+    // Keep the JSON parser bounded even for non-canonical Base64.
+    if raw.len() > MAX_NIP98_AUTH_EVENT_BYTES {
+        return Err(AuthError::BadEncoding);
+    }
     let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|_| AuthError::BadJson)?;
     let event: nostr::Event = serde_json::from_slice(&raw).map_err(|_| AuthError::BadJson)?;
     if event.verify().is_err() {
@@ -322,7 +343,7 @@ fn verify_nip98_impl(
 mod tests {
     use super::*;
     use nostr::event::EventBuilder;
-    use nostr::hashes::{sha256, Hash};
+    use nostr::hashes::{Hash, sha256};
     use nostr::nips::nip98::{HttpData, HttpMethod};
     use nostr::prelude::*;
     use sha2::{Digest, Sha256};
@@ -541,5 +562,49 @@ mod tests {
         let header = sign_header(&keys, HttpMethod::POST, url, now, Some(b"hello"));
         let err = verify_nip98(Some(&header), "POST", url, b"other", now, 60, &allow).unwrap_err();
         assert_eq!(err, AuthError::PayloadMismatch);
+    }
+
+    #[test]
+    fn oversized_nip98_authorization_is_rejected_before_json_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[]);
+        let allow = Allowlist::load(&path).unwrap();
+        // One Base64 quantum past the crate encoded cap (nostr 0.44.8, RUSTSEC-2026-0229).
+        // Length stays a multiple of 4 so decode would succeed; JSON parse would be BadJson.
+        let encoded = "A".repeat(MAX_NIP98_AUTH_ENCODED_BYTES + 4);
+        let header = format!("Nostr {}", encoded);
+        let err = verify_nip98(
+            Some(&header),
+            "GET",
+            "https://splora.example/tx",
+            b"",
+            now(),
+            60,
+            &allow,
+        )
+        .unwrap_err();
+        assert_eq!(err, AuthError::BadEncoding);
+    }
+
+    #[test]
+    fn oversized_decoded_nip98_authorization_is_rejected_before_json_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[]);
+        let allow = Allowlist::load(&path).unwrap();
+        let decoded = vec![b' '; MAX_NIP98_AUTH_EVENT_BYTES + 1];
+        let encoded = base64::encode(&decoded);
+        assert!(encoded.len() <= MAX_NIP98_AUTH_ENCODED_BYTES);
+        let header = format!("Nostr {}", encoded);
+        let err = verify_nip98(
+            Some(&header),
+            "GET",
+            "https://splora.example/tx",
+            b"",
+            now(),
+            60,
+            &allow,
+        )
+        .unwrap_err();
+        assert_eq!(err, AuthError::BadEncoding);
     }
 }

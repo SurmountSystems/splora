@@ -1,7 +1,7 @@
 mod server;
 /// Electrum JSON-RPC over HTTP: `POST /electrum` after NIP-98 (see `rest.rs`).
 /// Production TCP Electrum is not used; unix `--rpc-socket-file` remains.
-pub use server::{handle_http_jsonrpc_body, RPC};
+pub use server::{RPC, handle_http_jsonrpc_body};
 
 /// How Electrum RPC listens. Raw TCP is never selected.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +68,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::chain::BlockHash;
 use crate::errors::ResultExt;

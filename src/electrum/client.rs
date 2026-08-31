@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use bitcoin::hashes::sha256d;
 use bitcoin::hashes::Hash;
-pub use electrum_client::client::Client;
+use bitcoin::hashes::sha256d;
 pub use electrum_client::ServerFeaturesRes;
+pub use electrum_client::client::Client;
 
 use crate::chain::BlockHash;
 use crate::electrum::ServerFeatures;

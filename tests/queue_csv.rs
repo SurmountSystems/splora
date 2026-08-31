@@ -3,7 +3,7 @@
 //! can run while other crate modules still have in-flight test compile errors.
 
 use electrs::queue::{
-    approve, load_queue, queue_cli_app, reject, QueueCaps, QueueError, QueueStore,
+    QueueCaps, QueueError, QueueStore, approve, load_queue, queue_cli_app, reject,
 };
 use nostr::prelude::*;
 use std::fs;

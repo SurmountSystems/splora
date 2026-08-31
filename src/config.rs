@@ -803,9 +803,11 @@ mod tests {
             !clap_help_declares_long_flag(&help, "--allow-npubs"),
             "do not add a --allow-npubs list flag"
         );
-        assert!(super::Config::indexer_clap_app()
-            .get_matches_from_safe(vec!["splora", "queue"])
-            .is_err());
+        assert!(
+            super::Config::indexer_clap_app()
+                .get_matches_from_safe(vec!["splora", "queue"])
+                .is_err()
+        );
     }
 
     /// NixOS binds the allowlist parent directory (rename/inotify) and the
@@ -858,6 +860,50 @@ mod tests {
         assert!(src.contains("lib.hasInfix \"--socket-file\" queueStart"));
         assert!(src.contains("lib.hasInfix \"/run/splora/queue.sock\" queueStart"));
         assert!(src.contains("!(lib.hasInfix \"--bind\" queueStart)"));
+    }
+
+    /// Named contract: rustc 1.98, edition 2024, and the flake still links
+    /// one nixpkgs RocksDB (bindgen against those headers). CLI cache stays 24.
+    #[test]
+    fn packaging_pins_rust_198_edition_2024_and_system_rocksdb() {
+        let toolchain = include_str!("../rust-toolchain");
+        let cargo = include_str!("../Cargo.toml");
+        let flake = include_str!("../flake.nix");
+        assert!(
+            toolchain.trim() == "1.98.0",
+            "rust-toolchain must pin 1.98.0, got {:?}",
+            toolchain
+        );
+        assert!(
+            cargo.contains("edition = \"2024\""),
+            "Cargo.toml must set edition 2024"
+        );
+        assert!(
+            cargo.contains("rust-version = \"1.98\""),
+            "Cargo.toml must set rust-version 1.98"
+        );
+        assert!(
+            flake.contains("rust-bin.stable.\"1.98.0\""),
+            "flake.nix must use rust-overlay stable 1.98.0"
+        );
+        assert!(
+            flake.contains("useSystemRocksdb = true"),
+            "do not leave useSystemRocksdb as a lie; keep system RocksDB"
+        );
+        assert!(
+            flake.contains("readelf -d \"$bin\"") && flake.contains("NEEDED.*librocksdb"),
+            "rocksdbMoldLink must inspect ELF NEEDED librocksdb"
+        );
+        assert!(
+            flake.contains("readelf -p .comment") && flake.contains("grep -qi mold"),
+            "rocksdbMoldLink must inspect mold in .comment on both packages"
+        );
+        assert!(flake.contains("check_bin ${built.splora}/bin/splora"));
+        assert!(flake.contains("check_bin ${built.splora-liquid}/bin/splora"));
+        let parsed = super::Config::indexer_clap_app()
+            .get_matches_from_safe(vec!["splora"])
+            .expect("indexer clap parses with no argv");
+        assert_eq!(parsed.value_of("db_block_cache_mb"), Some("24"));
     }
 
     /// Named contract: CLI cache default stays 24. The module default is

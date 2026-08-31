@@ -2,7 +2,7 @@
 //! Unauthenticated approval-queue HTTP service (npub + email).
 //! This file is the queue. It is not the allowlist.
 
-use crate::auth::{parse_pubkey_line, Allowlist};
+use crate::auth::{Allowlist, parse_pubkey_line};
 use clap::{App, Arg, ArgMatches, SubCommand};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -861,10 +861,12 @@ mod tests {
         remove_npub(&allow, &npub).unwrap();
         let text = fs::read_to_string(&allow).unwrap();
         assert!(!text.contains(&npub));
-        assert!(crate::auth::Allowlist::load(&allow)
-            .unwrap()
-            .snapshot()
-            .is_empty());
+        assert!(
+            crate::auth::Allowlist::load(&allow)
+                .unwrap()
+                .snapshot()
+                .is_empty()
+        );
     }
 
     /// Named contract: `splora-queue --bind --queue-file` is the queue HTTP
@@ -885,12 +887,16 @@ mod tests {
             m.value_of("queue-file").unwrap(),
             "/var/lib/splora/queue/import-queue"
         );
-        assert!(queue_cli_app()
-            .get_matches_from_safe(vec!["splora-queue", "--network", "mainnet"])
-            .is_err());
-        assert!(crate::config::Config::indexer_clap_app()
-            .get_matches_from_safe(vec!["splora", "queue", "--bind", "127.0.0.1:18493"])
-            .is_err());
+        assert!(
+            queue_cli_app()
+                .get_matches_from_safe(vec!["splora-queue", "--network", "mainnet"])
+                .is_err()
+        );
+        assert!(
+            crate::config::Config::indexer_clap_app()
+                .get_matches_from_safe(vec!["splora", "queue", "--bind", "127.0.0.1:18493"])
+                .is_err()
+        );
     }
 
     #[test]
@@ -945,9 +951,11 @@ mod tests {
         assert!(help.contains("approve"));
         assert!(help.contains("reject"));
         assert!(help.contains("remove"));
-        assert!(import_cli_app()
-            .get_matches_from_safe(vec!["splora-import", "approve", "npub1abc"])
-            .is_err());
+        assert!(
+            import_cli_app()
+                .get_matches_from_safe(vec!["splora-import", "approve", "npub1abc"])
+                .is_err()
+        );
         let m = import_cli_app()
             .get_matches_from_safe(vec![
                 "splora-import",

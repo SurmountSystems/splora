@@ -17,7 +17,7 @@ use bitcoin::hashes::sha256d::Hash as Sha256dHash;
 use error_chain::ChainedError;
 use hex;
 use ppp::PartialResult;
-use serde_json::{from_str, Value};
+use serde_json::{Value, from_str};
 use sha2::{Digest, Sha256};
 
 #[cfg(not(feature = "liquid"))]
@@ -27,14 +27,14 @@ use elements::encode::serialize;
 
 use crate::chain::Txid;
 use crate::config::{Config, VERSION_STRING};
-use crate::electrum::{get_electrum_height, ElectrumListenPlan, ProtocolVersion, ServerFeatures};
+use crate::electrum::{ElectrumListenPlan, ProtocolVersion, ServerFeatures, get_electrum_height};
 use crate::errors::*;
 use crate::metrics::{Gauge, HistogramOpts, HistogramVec, MetricOpts, Metrics};
 use crate::new_index::{Query, Utxo};
 use crate::util::electrum_merkle::{get_header_merkle_proof, get_id_from_pos, get_tx_merkle_proof};
 use crate::util::{
-    create_socket, full_hash, spawn_thread, BlockId, BoolThen, Channel, FullHash, HeaderEntry,
-    SyncChannel,
+    BlockId, BoolThen, Channel, FullHash, HeaderEntry, SyncChannel, create_socket, full_hash,
+    spawn_thread,
 };
 
 const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 4);
@@ -397,18 +397,20 @@ impl Connection {
         let script_hash = hash_from_value(params.first()).chain_err(|| "bad script_hash")?;
         let history_txids = get_history(&self.query, &script_hash[..], self.txs_limit)?;
 
-        Ok(json!(history_txids
-            .into_iter()
-            .map(|(txid, blockid)| {
-                let is_mempool = blockid.is_none();
-                let fee = is_mempool.and_then(|| self.query.get_mempool_tx_fee(&txid));
-                let has_unconfirmed_parents = is_mempool
-                    .and_then(|| Some(self.query.has_unconfirmed_parents(&txid)))
-                    .unwrap_or(false);
-                let height = get_electrum_height(blockid, has_unconfirmed_parents);
-                GetHistoryResult { txid, height, fee }
-            })
-            .collect::<Vec<_>>()))
+        Ok(json!(
+            history_txids
+                .into_iter()
+                .map(|(txid, blockid)| {
+                    let is_mempool = blockid.is_none();
+                    let fee = is_mempool.and_then(|| self.query.get_mempool_tx_fee(&txid));
+                    let has_unconfirmed_parents = is_mempool
+                        .and_then(|| Some(self.query.has_unconfirmed_parents(&txid)))
+                        .unwrap_or(false);
+                    let height = get_electrum_height(blockid, has_unconfirmed_parents);
+                    GetHistoryResult { txid, height, fee }
+                })
+                .collect::<Vec<_>>()
+        ))
     }
 
     fn blockchain_scripthash_listunspent(&self, params: &[Value]) -> Result<Value> {

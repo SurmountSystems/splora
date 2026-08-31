@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter::FromIterator;
 use std::slice;
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime as DateTime;
+use time::format_description::well_known::Rfc3339;
 
 const MTP_SPAN: usize = 11;
 

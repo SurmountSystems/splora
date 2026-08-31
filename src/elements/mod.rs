@@ -1,14 +1,14 @@
 use bitcoin::hashes::Hash;
 use elements::hex::ToHex;
 use elements::secp256k1_zkp::ZERO_TWEAK;
-use elements::{confidential::Value, encode::serialize, issuance::ContractHash, AssetId, TxIn};
+use elements::{AssetId, TxIn, confidential::Value, encode::serialize, issuance::ContractHash};
 
 pub mod asset;
 pub mod peg;
 mod registry;
 
 use asset::get_issuance_entropy;
-pub use asset::{lookup_asset, LiquidAsset};
+pub use asset::{LiquidAsset, lookup_asset};
 pub use registry::{AssetMeta, AssetRegistry, AssetSorting};
 
 #[derive(Serialize, Deserialize, Clone)]

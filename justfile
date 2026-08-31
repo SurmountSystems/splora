@@ -4,7 +4,7 @@
 check-local:
     cargo fmt --all --check
     cargo clippy --all -- -D warnings
-    cargo deny
+    cargo deny check --config cargo-deny.toml
     cargo audit
 
 check-remote:

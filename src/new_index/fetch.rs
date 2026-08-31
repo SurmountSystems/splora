@@ -1,9 +1,9 @@
 use rayon::prelude::*;
 
 #[cfg(not(feature = "liquid"))]
-use bitcoin::consensus::encode::{deserialize, Decodable};
+use bitcoin::consensus::encode::{Decodable, deserialize};
 #[cfg(feature = "liquid")]
-use elements::encode::{deserialize, Decodable};
+use elements::encode::{Decodable, deserialize};
 
 use std::collections::HashMap;
 use std::fs;
@@ -14,7 +14,7 @@ use std::thread;
 use crate::chain::{Block, BlockHash, BlockSizeCompat};
 use crate::daemon::Daemon;
 use crate::errors::*;
-use crate::util::{spawn_thread, HeaderEntry, SyncChannel};
+use crate::util::{HeaderEntry, SyncChannel, spawn_thread};
 
 #[derive(Clone, Copy, Debug)]
 pub enum FetchFrom {

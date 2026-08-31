@@ -9,14 +9,14 @@ use crate::config::Config;
 use crate::daemon::{Daemon, MempoolAcceptResult, SubmitPackageResult};
 use crate::errors::*;
 use crate::new_index::{ChainQuery, Mempool, ScriptStats, SpendingInput, Utxo};
-use crate::util::{is_spendable, BlockId, Bytes, TransactionStatus};
+use crate::util::{BlockId, Bytes, TransactionStatus, is_spendable};
 #[cfg(not(feature = "liquid"))]
 use serde_json::Value;
 
 #[cfg(feature = "liquid")]
 use crate::{
-    chain::{asset::AssetRegistryLock, AssetId},
-    elements::{lookup_asset, AssetMeta, AssetRegistry, AssetSorting, LiquidAsset},
+    chain::{AssetId, asset::AssetRegistryLock},
+    elements::{AssetMeta, AssetRegistry, AssetSorting, LiquidAsset, lookup_asset},
 };
 
 const FEE_ESTIMATES_TTL: u64 = 60; // seconds

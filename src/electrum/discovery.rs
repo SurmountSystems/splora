@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{hash_map::Entry, BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, hash_map::Entry};
 use std::convert::TryInto;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -376,12 +376,14 @@ impl DiscoveryManager {
     }
 
     pub fn spawn_jobs_thread(manager: Arc<DiscoveryManager>) {
-        spawn_thread("discovery-jobs", move || loop {
-            if let Err(e) = manager.run_health_check() {
-                debug!("health check failed: {:?}", e);
+        spawn_thread("discovery-jobs", move || {
+            loop {
+                if let Err(e) = manager.run_health_check() {
+                    debug!("health check failed: {:?}", e);
+                }
+                // XXX use a dynamic JOB_INTERVAL, adjusted according to the queue size and HEALTH_CHECK_FREQ?
+                thread::sleep(JOB_INTERVAL);
             }
-            // XXX use a dynamic JOB_INTERVAL, adjusted according to the queue size and HEALTH_CHECK_FREQ?
-            thread::sleep(JOB_INTERVAL);
         });
     }
 }
@@ -522,8 +524,8 @@ fn is_remote_addr(addr: &ServerAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chain::genesis_hash;
     use crate::chain::Network;
+    use crate::chain::genesis_hash;
     use std::time;
 
     use crate::config::VERSION_STRING;

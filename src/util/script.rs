@@ -1,7 +1,7 @@
 #[cfg(feature = "liquid")]
 use elements::address as elements_address;
 
-use crate::chain::{script, Network, Script, TxIn, TxOut};
+use crate::chain::{Network, Script, TxIn, TxOut, script};
 use script::Instruction::PushBytes;
 
 pub struct InnerScripts {

@@ -43,13 +43,15 @@
         pkgs:
         let
           inherit (pkgs) lib;
-          rustToolchain = pkgs.rust-bin.stable."1.87.0".default;
+          rustToolchain = pkgs.rust-bin.stable."1.98.0".default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-          # Prefer one nixpkgs rocksdb for both binaries. Named check
-          # `rocksdbMoldLink` (ELF NEEDED librocksdb + mold .comment) is the
-          # proof path. If that check fails, set this to false (bundled
-          # rocksdb 0.24.0). See doc/supply-chain.md.
+          # Prefer one nixpkgs rocksdb for both binaries. Bindgen uses
+          # ROCKSDB_INCLUDE_DIR (nixpkgs headers, currently 10.10.1), not the
+          # crate's bundled librocksdb-sys 0.17.3+10.4.2 tree. Named check
+          # `rocksdbMoldLink` (ELF NEEDED librocksdb + mold .comment on both
+          # packages) is the proof path. If that check fails, set this to
+          # false (bundled rocksdb 0.24.0). See doc/supply-chain.md.
           useSystemRocksdb = true;
 
           src = craneLib.cleanCargoSource ./.;
@@ -75,6 +77,7 @@
                 lz4
                 zstd
                 bzip2
+                liburing
               ];
             LIBCLANG_PATH = "${lib.getLib pkgs.llvmPackages.libclang}/lib";
             GIT_HASH = self.shortRev or self.dirtyShortRev or "unknown";
@@ -250,8 +253,9 @@
             pkgs.runCommand "splora-nixos-queue-listen-xor-socket" { } "echo ok > $out";
           # Named proof that crane linked nixpkgs rocksdb and mold. Operators
           # run this via `just check-remote` (`nix flake check`). Agents do
-          # not run that recipe. If it fails (liburing, header skew), set
-          # useSystemRocksdb = false and keep bundled rocksdb 0.24.0.
+          # not run that recipe. Laptop cargo without ROCKSDB_LIB_DIR still
+          # embeds bundled 10.4.2 and is not this proof. If it fails (liburing,
+          # header skew), set useSystemRocksdb = false and keep bundled 0.24.0.
           rocksdbMoldLink =
             if built.useSystemRocksdb then
               pkgs.runCommand "splora-nixpkgs-rocksdb-mold" {
@@ -266,7 +270,9 @@
                 check_bin ${built.splora}/bin/splora
                 check_bin ${built.splora-liquid}/bin/splora
                 mkdir "$out"
-                echo ok > "$out/ok"
+                echo "nixpkgs rocksdb ${pkgs.rocksdb.version}" > "$out/ok"
+                echo "bindgen ROCKSDB_INCLUDE_DIR ${pkgs.rocksdb}/include" >> "$out/ok"
+                echo "SONAME librocksdb.so.10 (10.10.1); crate vendor is 10.4.2 unused" >> "$out/ok"
               ''
             else
               pkgs.runCommand "splora-bundled-rocksdb" { } ''

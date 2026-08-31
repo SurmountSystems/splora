@@ -4,7 +4,7 @@ use itertools::Itertools;
 #[cfg(not(feature = "liquid"))]
 use bitcoin::consensus::encode::serialize;
 #[cfg(feature = "liquid")]
-use elements::{encode::serialize, AssetId};
+use elements::{AssetId, encode::serialize};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::iter::FromIterator;
@@ -12,17 +12,17 @@ use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::chain::{deserialize, Network, OutPoint, Transaction, TxOut, Txid, TxidCompat};
+use crate::chain::{Network, OutPoint, Transaction, TxOut, Txid, TxidCompat, deserialize};
 use crate::config::Config;
 use crate::daemon::Daemon;
 use crate::errors::*;
 use crate::metrics::{GaugeVec, HistogramOpts, HistogramVec, MetricOpts, Metrics};
 use crate::new_index::{
-    compute_script_hash, schema::FullHash, ChainQuery, FundingInfo, ScriptStats, SpendingInfo,
-    SpendingInput, TxHistoryInfo, Utxo,
+    ChainQuery, FundingInfo, ScriptStats, SpendingInfo, SpendingInput, TxHistoryInfo, Utxo,
+    compute_script_hash, schema::FullHash,
 };
-use crate::util::fees::{make_fee_histogram, TxFeeInfo};
-use crate::util::{extract_tx_prevouts, full_hash, has_prevout, is_spendable, Bytes};
+use crate::util::fees::{TxFeeInfo, make_fee_histogram};
+use crate::util::{Bytes, extract_tx_prevouts, full_hash, has_prevout, is_spendable};
 
 #[cfg(feature = "liquid")]
 use crate::elements::asset;

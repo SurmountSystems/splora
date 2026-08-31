@@ -4,7 +4,7 @@ use std::convert::TryInto;
 use std::path::Path;
 
 use crate::config::Config;
-use crate::util::{bincode_util, Bytes};
+use crate::util::{Bytes, bincode_util};
 
 /// Each version will break any running instance with a DB that has a differing version.
 /// It will also break if light mode is enabled or disabled.
