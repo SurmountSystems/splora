@@ -10,13 +10,13 @@ fn main() {
     if Path::new(".git").exists() {
         // If we change the branch, rerun
         println!("cargo:rerun-if-changed=.git/HEAD");
-        if let Ok(r) = std::fs::read_to_string(".git/HEAD") {
-            if let Some(stripped) = r.strip_prefix("ref: ") {
-                // If the HEAD is detached it will be a commit hash
-                // so the HEAD changed directive above will pick it up,
-                // otherwise it will point to a ref in the refs directory
-                println!("cargo:rerun-if-changed=.git/{}", stripped);
-            }
+        if let Ok(r) = std::fs::read_to_string(".git/HEAD")
+            && let Some(stripped) = r.strip_prefix("ref: ")
+        {
+            // If the HEAD is detached it will be a commit hash
+            // so the HEAD changed directive above will pick it up,
+            // otherwise it will point to a ref in the refs directory
+            println!("cargo:rerun-if-changed=.git/{}", stripped);
         }
     }
 

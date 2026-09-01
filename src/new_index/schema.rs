@@ -940,13 +940,13 @@ impl ChainQuery {
         )?;
 
         // save updated utxo set to cache
-        if let Some(lastblock) = lastblock {
-            if had_cache || processed_items > MIN_HISTORY_ITEMS_TO_CACHE {
-                self.store.cache_db.write(
-                    vec![UtxoCacheRow::new(scripthash, &newutxos, &lastblock).into_row()],
-                    flush,
-                );
-            }
+        if let Some(lastblock) = lastblock
+            && (had_cache || processed_items > MIN_HISTORY_ITEMS_TO_CACHE)
+        {
+            self.store.cache_db.write(
+                vec![UtxoCacheRow::new(scripthash, &newutxos, &lastblock).into_row()],
+                flush,
+            );
         }
 
         // format as Utxo objects
@@ -1048,13 +1048,13 @@ impl ChainQuery {
         );
 
         // save updated stats to cache
-        if let Some(lastblock) = lastblock {
-            if newstats.funded_txo_count + newstats.spent_txo_count > MIN_HISTORY_ITEMS_TO_CACHE {
-                self.store.cache_db.write(
-                    vec![StatsCacheRow::new(scripthash, &newstats, &lastblock).into_row()],
-                    flush,
-                );
-            }
+        if let Some(lastblock) = lastblock
+            && newstats.funded_txo_count + newstats.spent_txo_count > MIN_HISTORY_ITEMS_TO_CACHE
+        {
+            self.store.cache_db.write(
+                vec![StatsCacheRow::new(scripthash, &newstats, &lastblock).into_row()],
+                flush,
+            );
         }
 
         newstats
@@ -1563,10 +1563,10 @@ fn index_transaction(
             script_callback(history.key.hash);
             rows.push(history.into_row());
 
-            if iconfig.address_search {
-                if let Some(row) = addr_search_row(&txo.script_pubkey, iconfig.network) {
-                    rows.push(row);
-                }
+            if iconfig.address_search
+                && let Some(row) = addr_search_row(&txo.script_pubkey, iconfig.network)
+            {
+                rows.push(row);
             }
         }
     }

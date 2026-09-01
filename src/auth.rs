@@ -3,6 +3,7 @@
 //!
 //! NIP-98: https://github.com/nostr-protocol/nips/blob/master/98.md (accessed: 2026-08-28)
 
+use base64::Engine as _;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher, event::ModifyKind};
 use sha2::{Digest, Sha256};
 use signal_hook::consts::SIGHUP;
@@ -128,30 +129,27 @@ impl Allowlist {
         let allow_fs = Arc::clone(&allow);
         thread::spawn(move || {
             while let Ok(ev) = rx.recv() {
-                match ev {
-                    Ok(event) => {
-                        let hits = match event.kind {
-                            EventKind::Modify(_)
+                if let Ok(event) = ev {
+                    let hits = matches!(
+                        event.kind,
+                        EventKind::Modify(_)
                             | EventKind::Create(_)
                             | EventKind::Remove(_)
-                            | EventKind::Any => true,
-                            _ => false,
-                        };
-                        if !hits {
-                            continue;
-                        }
-                        let relevant = match &file_name {
-                            None => true,
-                            Some(name) => event
-                                .paths
-                                .iter()
-                                .any(|p| p.file_name() == Some(name.as_os_str()) || p == &path),
-                        };
-                        if relevant {
-                            let _ = allow_fs.reload();
-                        }
+                            | EventKind::Any
+                    );
+                    if !hits {
+                        continue;
                     }
-                    Err(_) => {}
+                    let relevant = match &file_name {
+                        None => true,
+                        Some(name) => event
+                            .paths
+                            .iter()
+                            .any(|p| p.file_name() == Some(name.as_os_str()) || p == &path),
+                    };
+                    if relevant {
+                        let _ = allow_fs.reload();
+                    }
                 }
             }
         });
@@ -204,19 +202,19 @@ fn parse_allowlist_file(path: &Path) -> Result<HashSet<[u8; 32]>, AuthError> {
 }
 
 pub fn parse_pubkey_line(line: &str) -> Result<[u8; 32], AuthError> {
-    let pk = nostr::PublicKey::parse(line).map_err(|e| AuthError::Io(e.to_string()))?;
+    let pk = nostr::key::PublicKey::parse(line).map_err(|e| AuthError::Io(e.to_string()))?;
     pubkey_to_bytes(&pk)
 }
 
-fn pubkey_to_bytes(pk: &nostr::PublicKey) -> Result<[u8; 32], AuthError> {
+fn pubkey_to_bytes(pk: &nostr::key::PublicKey) -> Result<[u8; 32], AuthError> {
     Ok(*pk.as_bytes())
 }
 
-/// NIP-98 events are small metadata. Match nostr 0.44.8
+/// NIP-98 events are small metadata. Match nostr 0.45.3
 /// ([RUSTSEC-2026-0229](https://rustsec.org/advisories/RUSTSEC-2026-0229), accessed: 2026-08-31).
 const MAX_NIP98_AUTH_EVENT_BYTES: usize = 64 * 1024;
 const MAX_NIP98_AUTH_ENCODED_BYTES: usize = (MAX_NIP98_AUTH_EVENT_BYTES / 3
-    + if MAX_NIP98_AUTH_EVENT_BYTES % 3 == 0 {
+    + if MAX_NIP98_AUTH_EVENT_BYTES.is_multiple_of(3) {
         0
     } else {
         1
@@ -267,13 +265,16 @@ fn verify_nip98_impl(
     if encoded.len() > MAX_NIP98_AUTH_ENCODED_BYTES {
         return Err(AuthError::BadEncoding);
     }
-    let raw = base64::decode(encoded).map_err(|_| AuthError::BadEncoding)?;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| AuthError::BadEncoding)?;
     // Keep the JSON parser bounded even for non-canonical Base64.
     if raw.len() > MAX_NIP98_AUTH_EVENT_BYTES {
         return Err(AuthError::BadEncoding);
     }
     let value: serde_json::Value = serde_json::from_slice(&raw).map_err(|_| AuthError::BadJson)?;
-    let event: nostr::Event = serde_json::from_slice(&raw).map_err(|_| AuthError::BadJson)?;
+    let event: nostr::event::Event =
+        serde_json::from_slice(&raw).map_err(|_| AuthError::BadJson)?;
     if event.verify().is_err() {
         return Err(AuthError::BadSignature);
     }
@@ -288,11 +289,7 @@ fn verify_nip98_impl(
         .get("created_at")
         .and_then(|c| c.as_u64())
         .ok_or(AuthError::Expired)?;
-    let delta = if now_unix >= created_at {
-        now_unix - created_at
-    } else {
-        created_at - now_unix
-    };
+    let delta = now_unix.abs_diff(created_at);
     if delta > window_secs {
         return Err(AuthError::Expired);
     }
@@ -343,7 +340,7 @@ fn verify_nip98_impl(
 mod tests {
     use super::*;
     use nostr::event::EventBuilder;
-    use nostr::hashes::{Hash, sha256};
+    use nostr::nips::nip94::Sha256Hash;
     use nostr::nips::nip98::{HttpData, HttpMethod};
     use nostr::prelude::*;
     use sha2::{Digest, Sha256};
@@ -383,19 +380,23 @@ mod tests {
         created_at: u64,
         body: Option<&[u8]>,
     ) -> String {
-        let parsed = nostr::Url::parse(url).expect("url");
+        let parsed = Url::parse(url).expect("url");
         let mut data = HttpData::new(parsed, method);
         if let Some(b) = body {
             let digest = Sha256::digest(b);
-            let hash = sha256::Hash::from_slice(&digest).expect("sha256");
+            let hash = Sha256Hash::from_byte_array(digest.into());
             data = data.payload(hash);
         }
-        let event = EventBuilder::http_auth(data)
+        let event = data
+            .into_event_builder()
             .custom_created_at(Timestamp::from(created_at))
-            .sign_with_keys(keys)
+            .finalize(keys)
             .expect("sign");
         let json = serde_json::to_vec(&event).expect("json");
-        format!("Nostr {}", base64::encode(&json))
+        format!(
+            "Nostr {}",
+            base64::engine::general_purpose::STANDARD.encode(&json)
+        )
     }
 
     fn sign_kind(keys: &Keys, kind: u16, method: &str, url: &str, created_at: u64) -> String {
@@ -403,10 +404,13 @@ mod tests {
             .tag(Tag::parse(["u", url]).unwrap())
             .tag(Tag::parse(["method", method]).unwrap())
             .custom_created_at(Timestamp::from(created_at))
-            .sign_with_keys(keys)
+            .finalize(keys)
             .expect("sign");
         let json = serde_json::to_vec(&event).expect("json");
-        format!("Nostr {}", base64::encode(&json))
+        format!(
+            "Nostr {}",
+            base64::engine::general_purpose::STANDARD.encode(&json)
+        )
     }
 
     #[test]
@@ -592,7 +596,7 @@ mod tests {
         let path = write_allowlist(&dir, &[]);
         let allow = Allowlist::load(&path).unwrap();
         let decoded = vec![b' '; MAX_NIP98_AUTH_EVENT_BYTES + 1];
-        let encoded = base64::encode(&decoded);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&decoded);
         assert!(encoded.len() <= MAX_NIP98_AUTH_ENCODED_BYTES);
         let header = format!("Nostr {}", encoded);
         let err = verify_nip98(

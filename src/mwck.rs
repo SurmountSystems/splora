@@ -193,12 +193,12 @@ impl MwckHub {
         let config = query.config();
         let mut blocks = Vec::new();
         for height in prev_height.saturating_add(1)..=new_height {
-            if let Some(hash) = chain.hash_by_height(height) {
-                if let Some(txs) = chain.get_block_txs(&hash) {
-                    let blockid = chain.blockid_by_hash(&hash);
-                    let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
-                    blocks.push(crate::rest::transactions_as_json(pairs, query, config));
-                }
+            if let Some(hash) = chain.hash_by_height(height)
+                && let Some(txs) = chain.get_block_txs(&hash)
+            {
+                let blockid = chain.blockid_by_hash(&hash);
+                let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
+                blocks.push(crate::rest::transactions_as_json(pairs, query, config));
             }
         }
         self.notify_blocks(&blocks);
@@ -282,19 +282,14 @@ impl MwckHub {
                 if available.contains_key(txid_s) {
                     continue;
                 }
-                if let Ok(txid) = txid_s.parse::<crate::chain::Txid>() {
-                    if let Some(tx) = query.lookup_txn(&txid) {
-                        if let Some(full) = crate::rest::transactions_as_json(
-                            vec![(tx, None)],
-                            query,
-                            query.config(),
-                        )
-                        .into_iter()
-                        .next()
-                        {
-                            available.insert(txid_s.to_string(), full);
-                        }
-                    }
+                if let Ok(txid) = txid_s.parse::<crate::chain::Txid>()
+                    && let Some(tx) = query.lookup_txn(&txid)
+                    && let Some(full) =
+                        crate::rest::transactions_as_json(vec![(tx, None)], query, query.config())
+                            .into_iter()
+                            .next()
+                {
+                    available.insert(txid_s.to_string(), full);
                 }
             }
         }
@@ -305,7 +300,7 @@ impl MwckHub {
         #[cfg(not(test))]
         {
             let _ = self;
-            return BTreeMap::new();
+            BTreeMap::new()
         }
         #[cfg(test)]
         {
@@ -494,27 +489,27 @@ pub fn handle_client_json(state: &mut ClientState, msg: Value) -> Option<Value> 
         apply_track_address(state, v);
     }
 
-    if let Some(v) = msg.get("track-addresses") {
-        if let Some(map) = apply_track_addresses(state, v) {
-            let mut buckets = BTreeMap::new();
-            for orig in map.keys() {
-                buckets.insert(orig.clone(), TxBuckets::default());
-            }
-            if let Value::Object(obj) = emit_multi("multi-address-transactions", &buckets) {
-                out.extend(obj);
-            }
+    if let Some(v) = msg.get("track-addresses")
+        && let Some(map) = apply_track_addresses(state, v)
+    {
+        let mut buckets = BTreeMap::new();
+        for orig in map.keys() {
+            buckets.insert(orig.clone(), TxBuckets::default());
+        }
+        if let Value::Object(obj) = emit_multi("multi-address-transactions", &buckets) {
+            out.extend(obj);
         }
     }
 
-    if let Some(v) = msg.get("track-scriptpubkeys") {
-        if let Some(spks) = apply_track_scriptpubkeys(state, v) {
-            let mut buckets = BTreeMap::new();
-            for spk in &spks {
-                buckets.insert(spk.clone(), TxBuckets::default());
-            }
-            if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &buckets) {
-                out.extend(obj);
-            }
+    if let Some(v) = msg.get("track-scriptpubkeys")
+        && let Some(spks) = apply_track_scriptpubkeys(state, v)
+    {
+        let mut buckets = BTreeMap::new();
+        for spk in &spks {
+            buckets.insert(spk.clone(), TxBuckets::default());
+        }
+        if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &buckets) {
+            out.extend(obj);
         }
     }
 
@@ -555,51 +550,54 @@ impl ClientState {
         if !self.track_addresses.is_empty() {
             let mut per_key = BTreeMap::new();
             for (orig, canon) in &self.track_addresses {
-                let mut b = TxBuckets::default();
-                b.mempool = added
-                    .iter()
-                    .filter(|tx| tx_matches(tx, canon))
-                    .cloned()
-                    .collect();
-                b.removed = removed
-                    .iter()
-                    .filter(|tx| tx_matches(tx, canon))
-                    .cloned()
-                    .collect();
+                let b = TxBuckets {
+                    mempool: added
+                        .iter()
+                        .filter(|tx| tx_matches(tx, canon))
+                        .cloned()
+                        .collect(),
+                    removed: removed
+                        .iter()
+                        .filter(|tx| tx_matches(tx, canon))
+                        .cloned()
+                        .collect(),
+                    ..Default::default()
+                };
                 if !b.mempool.is_empty() || !b.removed.is_empty() {
                     per_key.insert(orig.clone(), b);
                 }
             }
-            if !per_key.is_empty() {
-                if let Value::Object(obj) = emit_multi("multi-address-transactions", &per_key) {
-                    out.extend(obj);
-                }
+            if !per_key.is_empty()
+                && let Value::Object(obj) = emit_multi("multi-address-transactions", &per_key)
+            {
+                out.extend(obj);
             }
         }
 
         if !self.track_scriptpubkeys.is_empty() {
             let mut per_key = BTreeMap::new();
             for spk in &self.track_scriptpubkeys {
-                let mut b = TxBuckets::default();
-                b.mempool = added
-                    .iter()
-                    .filter(|tx| tx_matches(tx, spk))
-                    .cloned()
-                    .collect();
-                b.removed = removed
-                    .iter()
-                    .filter(|tx| tx_matches(tx, spk))
-                    .cloned()
-                    .collect();
+                let b = TxBuckets {
+                    mempool: added
+                        .iter()
+                        .filter(|tx| tx_matches(tx, spk))
+                        .cloned()
+                        .collect(),
+                    removed: removed
+                        .iter()
+                        .filter(|tx| tx_matches(tx, spk))
+                        .cloned()
+                        .collect(),
+                    ..Default::default()
+                };
                 if !b.mempool.is_empty() || !b.removed.is_empty() {
                     per_key.insert(spk.clone(), b);
                 }
             }
-            if !per_key.is_empty() {
-                if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &per_key)
-                {
-                    out.extend(obj);
-                }
+            if !per_key.is_empty()
+                && let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &per_key)
+            {
+                out.extend(obj);
             }
         }
 
@@ -628,41 +626,44 @@ impl ClientState {
         if !self.track_addresses.is_empty() {
             let mut per_key = BTreeMap::new();
             for (orig, canon) in &self.track_addresses {
-                let mut b = TxBuckets::default();
-                b.confirmed = confirmed
-                    .iter()
-                    .filter(|tx| tx_matches(tx, canon))
-                    .cloned()
-                    .collect();
+                let b = TxBuckets {
+                    confirmed: confirmed
+                        .iter()
+                        .filter(|tx| tx_matches(tx, canon))
+                        .cloned()
+                        .collect(),
+                    ..Default::default()
+                };
                 if !b.confirmed.is_empty() {
                     per_key.insert(orig.clone(), b);
                 }
             }
-            if !per_key.is_empty() {
-                if let Value::Object(obj) = emit_multi("multi-address-transactions", &per_key) {
-                    out.extend(obj);
-                }
+            if !per_key.is_empty()
+                && let Value::Object(obj) = emit_multi("multi-address-transactions", &per_key)
+            {
+                out.extend(obj);
             }
         }
 
         if !self.track_scriptpubkeys.is_empty() {
             let mut per_key = BTreeMap::new();
             for spk in &self.track_scriptpubkeys {
-                let mut b = TxBuckets::default();
-                b.confirmed = confirmed
-                    .iter()
-                    .filter(|tx| tx_matches(tx, spk))
-                    .cloned()
-                    .collect();
+                let b = TxBuckets {
+                    confirmed: confirmed
+                        .iter()
+                        .filter(|tx| tx_matches(tx, spk))
+                        .cloned()
+                        .collect(),
+                    ..Default::default()
+                };
                 if !b.confirmed.is_empty() {
                     per_key.insert(spk.clone(), b);
                 }
             }
-            if !per_key.is_empty() {
-                if let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &per_key)
-                {
-                    out.extend(obj);
-                }
+            if !per_key.is_empty()
+                && let Value::Object(obj) = emit_multi("multi-scriptpubkey-transactions", &per_key)
+            {
+                out.extend(obj);
             }
         }
 
@@ -709,10 +710,10 @@ fn apply_track_addresses(state: &mut ClientState, v: &Value) -> Option<BTreeMap<
     }
     let mut map = BTreeMap::new();
     for item in arr {
-        if let Some(s) = item.as_str() {
-            if let Some(canon) = canonical_track_key(s) {
-                map.insert(s.to_string(), canon);
-            }
+        if let Some(s) = item.as_str()
+            && let Some(canon) = canonical_track_key(s)
+        {
+            map.insert(s.to_string(), canon);
         }
     }
     if map.is_empty() {
@@ -739,12 +740,12 @@ fn apply_track_scriptpubkeys(state: &mut ClientState, v: &Value) -> Option<Vec<S
     let mut spks = Vec::new();
     let mut seen = HashSet::new();
     for item in arr {
-        if let Some(s) = item.as_str() {
-            if is_hex(s) {
-                let lower = s.to_ascii_lowercase();
-                if seen.insert(lower.clone()) {
-                    spks.push(lower);
-                }
+        if let Some(s) = item.as_str()
+            && is_hex(s)
+        {
+            let lower = s.to_ascii_lowercase();
+            if seen.insert(lower.clone()) {
+                spks.push(lower);
             }
         }
     }
@@ -812,11 +813,11 @@ fn is_base58_addr(s: &str) -> bool {
 }
 
 fn is_bech32_hrp_lower(b: u8) -> bool {
-    (b'a'..=b'z').contains(&b)
+    b.is_ascii_lowercase()
 }
 
 fn is_bech32_hrp_upper(b: u8) -> bool {
-    (b'A'..=b'Z').contains(&b)
+    b.is_ascii_uppercase()
 }
 
 fn is_bech32_data_lower(b: u8) -> bool {
@@ -1011,8 +1012,8 @@ mod tests {
     }
 
     fn listed_allow() -> (tempfile::TempDir, Arc<Allowlist>, [u8; 32]) {
-        use nostr::ToBech32;
-        let keys = nostr::Keys::generate();
+        use nostr::nips::nip19::ToBech32;
+        let keys = nostr::key::Keys::generate();
         let pk = *keys.public_key().as_bytes();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("allowlist");

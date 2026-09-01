@@ -1,8 +1,12 @@
-//! This module creates two sets of serialize and deserialize for bincode.
-//! They explicitly spell out the bincode settings so that switching to
-//! new versions in the future is less error prone.
+//! On-disk Mempool schema codec.
 //!
-//! This is a list of all the row types and their settings for bincode.
+//! Layout matches historical bincode 1.3.3: fixed-width integers, u64 length
+//! prefixes, u32 enum tags, unlimited size, trailing bytes allowed.
+//! [wincode](https://crates.io/crates/wincode) / [serde-wincode](https://crates.io/crates/serde-wincode)
+//! (accessed: 2026-08-31) replace unmaintained bincode
+//! ([RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141),
+//! accessed: 2026-08-31). Do not rewrite `new_index` keys.
+//!
 //! +--------------+--------+------------+----------------+------------+
 //! |              | Endian | Int Length | Allow Trailing | Byte Limit |
 //! +--------------+--------+------------+----------------+------------+
@@ -10,59 +14,56 @@
 //! | All others   | little | fixed      | allow          | unlimited  |
 //! +--------------+--------+------------+----------------+------------+
 
-// We only want people to use bincode_util
-use bincode::Options;
-use bincode_do_not_use_directly as bincode;
+use serde_wincode::SerdeCompat;
+use wincode::config::{Configuration, Deserialize, Serialize};
 
-pub fn serialize_big<T>(value: &T) -> Result<Vec<u8>, bincode::Error>
-where
-    T: ?Sized + serde::Serialize,
-{
-    big_endian().serialize(value)
-}
+pub type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-pub fn deserialize_big<'a, T>(bytes: &'a [u8]) -> Result<T, bincode::Error>
-where
-    T: serde::Deserialize<'a>,
-{
-    big_endian().deserialize(bytes)
-}
-
-pub fn serialize_little<T>(value: &T) -> Result<Vec<u8>, bincode::Error>
-where
-    T: ?Sized + serde::Serialize,
-{
-    little_endian().serialize(value)
-}
-
-pub fn deserialize_little<'a, T>(bytes: &'a [u8]) -> Result<T, bincode::Error>
-where
-    T: serde::Deserialize<'a>,
-{
-    little_endian().deserialize(bytes)
-}
-
-/// This is the default settings for Options,
-/// but all explicitly spelled out, except for endianness.
-/// The following functions will add endianness.
-#[inline]
-fn options() -> impl Options {
-    bincode::options()
+fn little_cfg() -> impl wincode::config::Config + Copy {
+    Configuration::default()
+        .disable_preallocation_size_limit()
+        .with_little_endian()
         .with_fixint_encoding()
-        .with_no_limit()
-        .allow_trailing_bytes()
 }
 
-/// Adding the endian flag for big endian
-#[inline]
-fn big_endian() -> impl Options {
-    options().with_big_endian()
+fn big_cfg() -> impl wincode::config::Config + Copy {
+    Configuration::default()
+        .disable_preallocation_size_limit()
+        .with_big_endian()
+        .with_fixint_encoding()
 }
 
-/// Adding the endian flag for little endian
-#[inline]
-fn little_endian() -> impl Options {
-    options().with_little_endian()
+pub fn serialize_big<T>(value: &T) -> Result<Vec<u8>, Error>
+where
+    T: ?Sized + serde::Serialize,
+{
+    // SerdeCompat requires Sized; `&T` is always Sized and serde-delegates.
+    <SerdeCompat<&T> as Serialize<_>>::serialize(&value, big_cfg())
+        .map_err(|e| e.to_string().into())
+}
+
+pub fn deserialize_big<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
+where
+    T: serde::Deserialize<'a>,
+{
+    <SerdeCompat<T> as Deserialize<'_, _>>::deserialize(bytes, big_cfg())
+        .map_err(|e| e.to_string().into())
+}
+
+pub fn serialize_little<T>(value: &T) -> Result<Vec<u8>, Error>
+where
+    T: ?Sized + serde::Serialize,
+{
+    <SerdeCompat<&T> as Serialize<_>>::serialize(&value, little_cfg())
+        .map_err(|e| e.to_string().into())
+}
+
+pub fn deserialize_little<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
+where
+    T: serde::Deserialize<'a>,
+{
+    <SerdeCompat<T> as Deserialize<'_, _>>::deserialize(bytes, little_cfg())
+        .map_err(|e| e.to_string().into())
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 //! This file is the queue. It is not the allowlist.
 
 use crate::auth::{Allowlist, parse_pubkey_line};
-use clap::{App, Arg, ArgMatches, SubCommand};
+use clap::{Arg, ArgMatches, Command};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -12,8 +12,12 @@ use std::net::{IpAddr, SocketAddr};
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
+
+/// Same HTTP/1 header-read timeout as indexer REST (`Server::http1_header_read_timeout`).
+/// TCP queue still uses tiny_http and does not have this valve.
+const HTTP1_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct QueueCaps {
@@ -365,81 +369,86 @@ fn json_status(code: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 /// Clap app for `splora-queue`. `--bind` (TCP) or `--socket-file` (unix), plus `--queue-file`.
-pub fn queue_cli_app() -> App<'static, 'static> {
-    App::new("splora-queue")
+pub fn queue_cli_app() -> Command {
+    Command::new("splora-queue")
         .about("Unauthenticated import-queue HTTP POST. This is not the indexer.")
+        .color(clap::ColorChoice::Never)
         .arg(
-            Arg::with_name("bind")
+            Arg::new("bind")
                 .long("bind")
-                .takes_value(true)
-                .required_unless("socket-file")
+                .num_args(1)
+                .required_unless_present("socket-file")
                 .conflicts_with("socket-file")
                 .help("TCP listen address. Do not combine with --socket-file."),
         )
         .arg(
-            Arg::with_name("socket-file")
+            Arg::new("socket-file")
                 .long("socket-file")
-                .takes_value(true)
-                .required_unless("bind")
+                .num_args(1)
+                .required_unless_present("bind")
                 .conflicts_with("bind")
                 .help("Unix socket path to listen on. Do not combine with --bind."),
         )
         .arg(
-            Arg::with_name("queue-file")
+            Arg::new("queue-file")
                 .long("queue-file")
-                .takes_value(true)
+                .num_args(1)
                 .required(true)
                 .help("Queue CSV path (npub,email per pending line). Sibling .tmp writes go in this directory."),
         )
 }
 
 /// Clap app for `splora-import approve|reject|remove` with `--queue` / `--allowlist`.
-pub fn import_cli_app() -> App<'static, 'static> {
-    App::new("splora-import")
+pub fn import_cli_app() -> Command {
+    Command::new("splora-import")
         .about("Approve, reject, or remove npubs. Writes the read-only allowlist and queue files. Does not kill splora.")
+        .color(clap::ColorChoice::Never)
         .subcommand(
-            SubCommand::with_name("approve")
+            Command::new("approve")
                 .about("Delete the queue line, upsert npub into the allowlist, and fsync.")
                 .arg(
-                    Arg::with_name("queue")
+                    Arg::new("queue")
                         .long("queue")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name("allowlist")
+                    Arg::new("allowlist")
                         .long("allowlist")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
-                .arg(Arg::with_name("npub").required(true).index(1)),
+                .arg(Arg::new("npub").required(true).index(1)),
         )
         .subcommand(
-            SubCommand::with_name("reject")
+            Command::new("reject")
                 .about("Delete the queue line. Does not write the allowlist.")
                 .arg(
-                    Arg::with_name("queue")
+                    Arg::new("queue")
                         .long("queue")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
-                .arg(Arg::with_name("npub").required(true).index(1)),
+                .arg(Arg::new("npub").required(true).index(1)),
         )
         .subcommand(
-            SubCommand::with_name("remove")
+            Command::new("remove")
                 .about("Delete npub from the allowlist.")
                 .arg(
-                    Arg::with_name("allowlist")
+                    Arg::new("allowlist")
                         .long("allowlist")
-                        .takes_value(true)
+                        .num_args(1)
                         .required(true),
                 )
-                .arg(Arg::with_name("npub").required(true).index(1)),
+                .arg(Arg::new("npub").required(true).index(1)),
         )
 }
 
 fn listen_from_matches(m: &ArgMatches) -> Result<QueueListen, QueueError> {
-    match (m.value_of("bind"), m.value_of("socket-file")) {
+    match (
+        m.get_one::<String>("bind").map(String::as_str),
+        m.get_one::<String>("socket-file").map(String::as_str),
+    ) {
         (Some(_), Some(_)) => Err(QueueError::Io(
             "use --bind or --socket-file, not both".to_string(),
         )),
@@ -462,7 +471,7 @@ enum QueueListen {
 /// Parse argv and run the queue HTTP server. Called only from `splora-queue`.
 pub fn run_from_args() -> Result<(), QueueError> {
     let m = queue_cli_app().get_matches();
-    let path = PathBuf::from(m.value_of("queue-file").unwrap());
+    let path = PathBuf::from(m.get_one::<String>("queue-file").unwrap());
     match listen_from_matches(&m)? {
         QueueListen::Tcp(bind) => run(bind, path, QueueCaps::default()),
         QueueListen::Unix(socket) => run_unix(socket, path, QueueCaps::default()),
@@ -519,10 +528,10 @@ pub fn run_unix(
     caps: QueueCaps,
 ) -> Result<(), QueueError> {
     let store = Arc::new(QueueStore::open(queue_path, caps)?);
-    if let Ok(meta) = fs::metadata(&socket_path) {
-        if meta.file_type().is_socket() {
-            fs::remove_file(&socket_path).ok();
-        }
+    if let Ok(meta) = fs::metadata(&socket_path)
+        && meta.file_type().is_socket()
+    {
+        fs::remove_file(&socket_path).ok();
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -546,6 +555,7 @@ async fn serve_unix(socket_path: PathBuf, store: Arc<QueueStore>) -> Result<(), 
     });
     hyper::Server::bind_unix(&socket_path)
         .map_err(|e| QueueError::Io(e.to_string()))?
+        .http1_header_read_timeout(HTTP1_HEADER_READ_TIMEOUT)
         .serve(make)
         .await
         .map_err(|e| QueueError::Io(e.to_string()))
@@ -874,7 +884,7 @@ mod tests {
     #[test]
     fn queue_http_entrypoint_binds_without_indexer_flags() {
         let m = queue_cli_app()
-            .get_matches_from_safe(vec![
+            .try_get_matches_from(vec![
                 "splora-queue",
                 "--bind",
                 "127.0.0.1:18493",
@@ -882,19 +892,19 @@ mod tests {
                 "/var/lib/splora/queue/import-queue",
             ])
             .expect("queue argv is bind plus queue-file only");
-        assert_eq!(m.value_of("bind").unwrap(), "127.0.0.1:18493");
+        assert_eq!(m.get_one::<String>("bind").unwrap(), "127.0.0.1:18493");
         assert_eq!(
-            m.value_of("queue-file").unwrap(),
+            m.get_one::<String>("queue-file").unwrap(),
             "/var/lib/splora/queue/import-queue"
         );
         assert!(
             queue_cli_app()
-                .get_matches_from_safe(vec!["splora-queue", "--network", "mainnet"])
+                .try_get_matches_from(vec!["splora-queue", "--network", "mainnet"])
                 .is_err()
         );
         assert!(
             crate::config::Config::indexer_clap_app()
-                .get_matches_from_safe(vec!["splora", "queue", "--bind", "127.0.0.1:18493"])
+                .try_get_matches_from(vec!["splora", "queue", "--bind", "127.0.0.1:18493"])
                 .is_err()
         );
     }
@@ -902,7 +912,7 @@ mod tests {
     #[test]
     fn queue_cli_accepts_socket_file_without_bind() {
         let m = queue_cli_app()
-            .get_matches_from_safe(vec![
+            .try_get_matches_from(vec![
                 "splora-queue",
                 "--socket-file",
                 "/run/splora/queue.sock",
@@ -910,10 +920,13 @@ mod tests {
                 "/var/lib/splora/queue/import-queue",
             ])
             .expect("unix socket listen does not require --bind");
-        assert_eq!(m.value_of("socket-file").unwrap(), "/run/splora/queue.sock");
-        assert!(m.value_of("bind").is_none());
         assert_eq!(
-            m.value_of("queue-file").unwrap(),
+            m.get_one::<String>("socket-file").unwrap(),
+            "/run/splora/queue.sock"
+        );
+        assert!(m.get_one::<String>("bind").is_none());
+        assert_eq!(
+            m.get_one::<String>("queue-file").unwrap(),
             "/var/lib/splora/queue/import-queue"
         );
     }
@@ -921,7 +934,7 @@ mod tests {
     #[test]
     fn queue_cli_refuses_bind_and_socket_file_together() {
         let err = queue_cli_app()
-            .get_matches_from_safe(vec![
+            .try_get_matches_from(vec![
                 "splora-queue",
                 "--bind",
                 "127.0.0.1:18493",
@@ -943,7 +956,7 @@ mod tests {
     /// requires `--queue` / `--allowlist` on the subcommands that write those files.
     #[test]
     fn import_cli_help_names_approve_reject_remove() {
-        let app = import_cli_app();
+        let mut app = import_cli_app();
         let mut buf = Vec::new();
         app.write_help(&mut buf).unwrap();
         let help = String::from_utf8(buf).unwrap();
@@ -953,11 +966,11 @@ mod tests {
         assert!(help.contains("remove"));
         assert!(
             import_cli_app()
-                .get_matches_from_safe(vec!["splora-import", "approve", "npub1abc"])
+                .try_get_matches_from(vec!["splora-import", "approve", "npub1abc"])
                 .is_err()
         );
         let m = import_cli_app()
-            .get_matches_from_safe(vec![
+            .try_get_matches_from(vec![
                 "splora-import",
                 "approve",
                 "--queue",
@@ -968,8 +981,8 @@ mod tests {
             ])
             .expect("approve with --queue and --allowlist");
         let a = m.subcommand_matches("approve").unwrap();
-        assert_eq!(a.value_of("queue").unwrap(), "/q");
-        assert_eq!(a.value_of("allowlist").unwrap(), "/a");
+        assert_eq!(a.get_one::<String>("queue").unwrap(), "/q");
+        assert_eq!(a.get_one::<String>("allowlist").unwrap(), "/a");
     }
 
     /// Unix HTTP can POST concurrently. Both npubs must persist.
@@ -1061,6 +1074,11 @@ mod tests {
             .body(hyper::Body::empty())
             .unwrap();
         assert_eq!(unix_client_ip(&bare), None);
+    }
+
+    #[test]
+    fn unix_http1_header_read_timeout_is_ten_seconds() {
+        assert_eq!(HTTP1_HEADER_READ_TIMEOUT, Duration::from_secs(10));
     }
 
     fn wait_for_unix_socket(path: &Path) {

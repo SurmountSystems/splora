@@ -6,7 +6,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64;
+use base64::Engine as _;
 use bitcoin::hashes::Hash;
 use glob;
 use hex;
@@ -91,15 +91,14 @@ fn classify_daemon_http_status(
 
 fn parse_jsonrpc_reply(mut reply: Value, method: &str, expected_id: u64) -> Result<Value> {
     if let Some(reply_obj) = reply.as_object_mut() {
-        if let Some(err) = reply_obj.get("error") {
-            if !err.is_null() {
-                if let Some(code) = parse_error_code(err) {
-                    match code {
-                        // RPC_IN_WARMUP -> retry by later reconnection
-                        -28 => bail!(ErrorKind::Connection(err.to_string())),
-                        _ => bail!("{} RPC error: {}", method, err),
-                    }
-                }
+        if let Some(err) = reply_obj.get("error")
+            && !err.is_null()
+            && let Some(code) = parse_error_code(err)
+        {
+            match code {
+                // RPC_IN_WARMUP -> retry by later reconnection
+                -28 => bail!(ErrorKind::Connection(err.to_string())),
+                _ => bail!("{} RPC error: {}", method, err),
             }
         }
         let id = reply_obj
@@ -271,7 +270,7 @@ impl Connection {
         let cookie = &self.cookie_getter.get()?;
         let msg = format!(
             "POST / HTTP/1.1\nAuthorization: Basic {}\nContent-Length: {}\n\n{}",
-            base64::encode(cookie),
+            base64::engine::general_purpose::STANDARD.encode(cookie),
             request.len(),
             request,
         );
@@ -513,10 +512,7 @@ impl Daemon {
                             failed_requests += 1;
                             warn!(
                                 "batch request {} {}/{} failed: {}",
-                                method,
-                                n,
-                                total_requests,
-                                e.to_string()
+                                method, n, total_requests, e
                             );
                             // abort and return the last error once a threshold number of requests have failed
                             if failed_requests > threshold {

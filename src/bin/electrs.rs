@@ -202,14 +202,13 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                 .collect();
             let mut available = std::collections::BTreeMap::new();
             for txid in prev_txids.difference(&now_txids) {
-                if let Some(tx) = query.lookup_txn(txid) {
-                    if let Some(full) =
+                if let Some(tx) = query.lookup_txn(txid)
+                    && let Some(full) =
                         rest::transactions_as_json(vec![(tx, None)], &query, &config)
                             .into_iter()
                             .next()
-                    {
-                        available.insert(txid.to_string(), full);
-                    }
+                {
+                    available.insert(txid.to_string(), full);
                 }
             }
             let removed = prefer_full_removed(&removed_stubs, &available);

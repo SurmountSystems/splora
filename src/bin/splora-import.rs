@@ -25,19 +25,19 @@ fn main() {
 fn dispatch(matches: &ArgMatches) -> Result<(), electrs::queue::QueueError> {
     if let Some(m) = matches.subcommand_matches("approve") {
         approve(
-            Path::new(m.value_of("queue").unwrap()),
-            Path::new(m.value_of("allowlist").unwrap()),
-            m.value_of("npub").unwrap(),
+            Path::new(m.get_one::<String>("queue").unwrap()),
+            Path::new(m.get_one::<String>("allowlist").unwrap()),
+            m.get_one::<String>("npub").unwrap(),
         )
     } else if let Some(m) = matches.subcommand_matches("reject") {
         reject(
-            Path::new(m.value_of("queue").unwrap()),
-            m.value_of("npub").unwrap(),
+            Path::new(m.get_one::<String>("queue").unwrap()),
+            m.get_one::<String>("npub").unwrap(),
         )
     } else if let Some(m) = matches.subcommand_matches("remove") {
         remove_npub(
-            Path::new(m.value_of("allowlist").unwrap()),
-            m.value_of("npub").unwrap(),
+            Path::new(m.get_one::<String>("allowlist").unwrap()),
+            m.get_one::<String>("npub").unwrap(),
         )
     } else {
         eprintln!("usage: splora-import <approve|reject|remove> ...");

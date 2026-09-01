@@ -229,18 +229,17 @@ pub(super) mod sigops {
         }
         let mut n = 0;
         for (input, prevout) in tx.input.iter().zip(previous_outputs.iter()) {
-            if prevout.script_pubkey.is_p2sh() {
-                if let Some(Ok(script::Instruction::PushBytes(redeem))) =
+            if prevout.script_pubkey.is_p2sh()
+                && let Some(Ok(script::Instruction::PushBytes(redeem))) =
                     input.script_sig.instructions().last()
+            {
+                #[cfg(not(feature = "liquid"))]
+                let script = script::Script::from_bytes(redeem.as_bytes());
+                #[cfg(feature = "liquid")]
+                let script = script::Script::from(redeem.to_vec());
+                #[allow(clippy::needless_borrow)]
                 {
-                    #[cfg(not(feature = "liquid"))]
-                    let script = script::Script::from_bytes(redeem.as_bytes());
-                    #[cfg(feature = "liquid")]
-                    let script = script::Script::from(redeem.to_vec());
-                    #[allow(clippy::needless_borrow)]
-                    {
-                        n += count_sigops(&script, true);
-                    }
+                    n += count_sigops(&script, true);
                 }
             }
         }

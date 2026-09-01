@@ -207,10 +207,10 @@ impl Query {
         if self.config.network_type.is_regtest() {
             return self.get_relayfee().ok();
         }
-        if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap() {
-            if cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL) {
-                return cache.get(&conf_target).copied();
-            }
+        if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap()
+            && cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL)
+        {
+            return cache.get(&conf_target).copied();
         }
 
         self.update_fee_estimates();
@@ -223,10 +223,10 @@ impl Query {
     }
 
     pub fn estimate_fee_map(&self) -> HashMap<u16, f64> {
-        if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap() {
-            if cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL) {
-                return cache.clone();
-            }
+        if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap()
+            && cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL)
+        {
+            return cache.clone();
         }
 
         self.update_fee_estimates();

@@ -1,4 +1,3 @@
-use bounded_vec_deque::BoundedVecDeque;
 use itertools::Itertools;
 
 #[cfg(not(feature = "liquid"))]
@@ -6,7 +5,7 @@ use bitcoin::consensus::encode::serialize;
 #[cfg(feature = "liquid")]
 use elements::{AssetId, encode::serialize};
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::iter::FromIterator;
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::{Arc, RwLock};
@@ -34,7 +33,7 @@ pub struct Mempool {
     feeinfo: HashMap<Txid, TxFeeInfo>,
     history: HashMap<FullHash, Vec<TxHistoryInfo>>, // ScriptHash -> {history_entries}
     edges: HashMap<OutPoint, (Txid, u32)>,          // OutPoint -> (spending_txid, spending_vin)
-    recent: BoundedVecDeque<TxOverview>,            // The N most recent txs to enter the mempool
+    recent: VecDeque<TxOverview>,                   // The N most recent txs to enter the mempool
     backlog_stats: (BacklogStats, Instant),
 
     // monitoring
@@ -67,7 +66,7 @@ impl Mempool {
             feeinfo: HashMap::new(),
             history: HashMap::new(),
             edges: HashMap::new(),
-            recent: BoundedVecDeque::new(config.mempool_recent_txs_size),
+            recent: VecDeque::with_capacity(config.mempool_recent_txs_size),
             backlog_stats: (
                 BacklogStats::default(),
                 Instant::now() - Duration::from_secs(config.mempool_backlog_stats_ttl),
@@ -450,15 +449,13 @@ impl Mempool {
     }
 
     pub fn add_by_txid(&mut self, daemon: &Daemon, txid: &Txid) -> Result<()> {
-        if !self.txstore.contains_key(txid) {
-            if let Ok(tx) = daemon.getmempooltx(txid) {
-                if self.add(vec![tx]) == 0 {
-                    return Err(format!(
-                        "Unable to add {txid} to mempool likely due to missing parents."
-                    )
-                    .into());
-                }
-            }
+        if !self.txstore.contains_key(txid)
+            && let Ok(tx) = daemon.getmempooltx(txid)
+            && self.add(vec![tx]) == 0
+        {
+            return Err(
+                format!("Unable to add {txid} to mempool likely due to missing parents.").into(),
+            );
         }
         Ok(())
     }
@@ -520,17 +517,21 @@ impl Mempool {
             // Get feeinfo for caching and recent tx overview
             let feeinfo = TxFeeInfo::new(tx, &prevouts, self.config.network_type);
 
-            // recent is an BoundedVecDeque that automatically evicts the oldest elements
-            self.recent.push_front(TxOverview {
-                txid,
-                fee: feeinfo.fee,
-                vsize: feeinfo.vsize,
-                #[cfg(not(feature = "liquid"))]
-                value: prevouts
-                    .values()
-                    .map(|prevout| prevout.value.to_sat())
-                    .sum(),
-            });
+            // recent is a capped VecDeque: newest at the front, oldest dropped from the back.
+            push_front_capped(
+                &mut self.recent,
+                self.config.mempool_recent_txs_size,
+                TxOverview {
+                    txid,
+                    fee: feeinfo.fee,
+                    vsize: feeinfo.vsize,
+                    #[cfg(not(feature = "liquid"))]
+                    value: prevouts
+                        .values()
+                        .map(|prevout| prevout.value.to_sat())
+                        .sum(),
+                },
+            );
 
             self.feeinfo.insert(txid, feeinfo);
 
@@ -737,5 +738,38 @@ impl BacklogStats {
             total_fee,
             fee_histogram: make_fee_histogram(feeinfo.values().collect()),
         }
+    }
+}
+
+/// Newest at the front. When `cap` is exceeded, drop the oldest (back). Cap 0 stores nothing.
+fn push_front_capped<T>(q: &mut VecDeque<T>, cap: usize, item: T) {
+    if cap == 0 {
+        return;
+    }
+    q.push_front(item);
+    while q.len() > cap {
+        q.pop_back();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_front_capped;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn recent_queue_evicts_oldest_when_over_cap() {
+        let mut q = VecDeque::new();
+        push_front_capped(&mut q, 2, 1);
+        push_front_capped(&mut q, 2, 2);
+        push_front_capped(&mut q, 2, 3);
+        assert_eq!(q.iter().copied().collect::<Vec<_>>(), vec![3, 2]);
+    }
+
+    #[test]
+    fn recent_queue_cap_zero_stores_nothing() {
+        let mut q = VecDeque::new();
+        push_front_capped(&mut q, 0, 1);
+        assert!(q.is_empty());
     }
 }

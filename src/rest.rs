@@ -87,8 +87,17 @@ const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BODY_SIZE: usize = 1_000_000;
 const NIP98_WINDOW_SECS: u64 = 60;
 const WS_ALLOWLIST_POLL: Duration = Duration::from_secs(2);
-// Header-read timeout (~10s) is a Blockstream new-index valve. hyper 0.14.32 in this
-// lockfile has Server::http1_header_read_timeout (landed in 0.14.20). Not wired.
+/// HTTP/1 header-read timeout (Blockstream new-index ~10s). hyper 0.14.20+
+/// `Server::http1_header_read_timeout`. Closes a client that never finishes the
+/// request line and headers. Body collection still uses `REQUEST_BODY_TIMEOUT`.
+const HTTP1_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn with_http1_header_read_timeout<I>(
+    builder: hyper::server::Builder<I>,
+    timeout: Duration,
+) -> hyper::server::Builder<I> {
+    builder.http1_header_read_timeout(timeout)
+}
 
 // internal api prefix
 const INTERNAL_PREFIX: &str = "internal";
@@ -743,28 +752,33 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Request fields for [`http_ws_auth_gate`] besides allowlist policy.
+pub struct HttpWsAuthRequest<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+    pub authorization: Option<&'a str>,
+    pub absolute_url: &'a str,
+    pub body: &'a [u8],
+    pub now_unix: u64,
+}
+
 /// HTTP and `/api/v1/ws` NIP-98 gate. `--public-health` skips auth only for
 /// GET `/blocks/tip/hash` and GET `/blocks/tip/height`. An empty allowlist is
 /// 401 for everything else. Localhost is not an exception.
 pub fn http_ws_auth_gate(
-    method: &str,
-    path: &str,
-    authorization: Option<&str>,
-    absolute_url: &str,
-    body: &[u8],
-    now_unix: u64,
+    req: &HttpWsAuthRequest<'_>,
     public_health: bool,
     allow: &Allowlist,
 ) -> Result<HttpAuthOutcome, AuthError> {
-    if public_health && method.eq_ignore_ascii_case("GET") && is_public_health_path(path) {
+    if public_health && req.method.eq_ignore_ascii_case("GET") && is_public_health_path(req.path) {
         return Ok(HttpAuthOutcome::PublicHealth);
     }
     let pk = crate::auth::verify_nip98(
-        authorization,
-        method,
-        absolute_url,
-        body,
-        now_unix,
+        req.authorization,
+        req.method,
+        req.absolute_url,
+        req.body,
+        req.now_unix,
         NIP98_WINDOW_SECS,
         allow,
     )?;
@@ -847,12 +861,14 @@ async fn handle_mwck_upgrade(
     let method = req.method().as_str().to_string();
     let path = req.uri().path().to_string();
     let gate = http_ws_auth_gate(
-        &method,
-        &path,
-        authorization.as_deref(),
-        &absolute,
-        b"",
-        now_unix(),
+        &HttpWsAuthRequest {
+            method: &method,
+            path: &path,
+            authorization: authorization.as_deref(),
+            absolute_url: &absolute,
+            body: b"",
+            now_unix: now_unix(),
+        },
         public_health,
         &allow,
     );
@@ -959,10 +975,10 @@ async fn run_mwck_socket(
                         };
                         let reply = hub.handle_socket(&allow, &pubkey, &mut state, msg).await;
                         hub.set_client_state(id, state.clone());
-                        if let Some(out) = reply {
-                            if sink.send(WsMessage::Text(out.to_string())).await.is_err() {
-                                break;
-                            }
+                        if let Some(out) = reply
+                            && sink.send(WsMessage::Text(out.to_string())).await.is_err()
+                        {
+                            break;
                         }
                     }
                     Some(Ok(WsMessage::Ping(p))) => {
@@ -1048,12 +1064,14 @@ async fn run_server(
                     };
 
                     if let Err(e) = http_ws_auth_gate(
-                        method.as_str(),
-                        uri.path(),
-                        authorization.as_deref(),
-                        &absolute,
-                        &body,
-                        now_unix(),
+                        &HttpWsAuthRequest {
+                            method: method.as_str(),
+                            path: uri.path(),
+                            authorization: authorization.as_deref(),
+                            absolute_url: &absolute,
+                            body: &body,
+                            now_unix: now_unix(),
+                        },
                         config.public_health,
                         &allow,
                     ) {
@@ -1089,13 +1107,15 @@ async fn run_server(
             let socket = create_socket(addr);
             socket.listen(511).expect("setting backlog failed");
 
-            Server::from_tcp(socket.into())
-                .expect("Server::from_tcp failed")
-                .serve(make_service_fn(move |_| make_service_fn_inn()))
-                .with_graceful_shutdown(async {
-                    rx.await.ok();
-                })
-                .await
+            with_http1_header_read_timeout(
+                Server::from_tcp(socket.into()).expect("Server::from_tcp failed"),
+                HTTP1_HEADER_READ_TIMEOUT,
+            )
+            .serve(make_service_fn(move |_| make_service_fn_inn()))
+            .with_graceful_shutdown(async {
+                rx.await.ok();
+            })
+            .await
         }
         Some(path) => {
             if let Ok(meta) = fs::metadata(path) {
@@ -1107,13 +1127,15 @@ async fn run_server(
 
             info!("REST server running on unix socket {}", path.display());
 
-            Server::bind_unix(path)
-                .expect("Server::bind_unix failed")
-                .serve(make_service_fn(move |_| make_service_fn_inn()))
-                .with_graceful_shutdown(async {
-                    rx.await.ok();
-                })
-                .await
+            with_http1_header_read_timeout(
+                Server::bind_unix(path).expect("Server::bind_unix failed"),
+                HTTP1_HEADER_READ_TIMEOUT,
+            )
+            .serve(make_service_fn(move |_| make_service_fn_inn()))
+            .with_graceful_shutdown(async {
+                rx.await.ok();
+            })
+            .await
         }
     };
 
@@ -1302,7 +1324,7 @@ fn handle_request(
             let start_index = start_index.map_or(0u32, |el| el.parse().unwrap_or(0)) as usize;
             if start_index >= txids.len() {
                 bail!(HttpError::not_found("start index out of range".to_string()));
-            } else if start_index % config.rest_default_chain_txs_per_page != 0 {
+            } else if !start_index.is_multiple_of(config.rest_default_chain_txs_per_page) {
                 bail!(HttpError::from(format!(
                     "start index must be a multipication of {}",
                     config.rest_default_chain_txs_per_page
@@ -2092,13 +2114,13 @@ fn handle_request(
                     let hash_part = parts.next();
                     let index_part = parts.next();
 
-                    if let (Some(hash), Some(index)) = (hash_part, index_part) {
-                        if let (Ok(txid), Ok(vout)) = (hash.parse::<Txid>(), index.parse::<u32>()) {
-                            let outpoint = OutPoint { txid, vout };
-                            return query
-                                .lookup_spend(&outpoint)
-                                .map_or_else(SpendingValue::default, SpendingValue::from);
-                        }
+                    if let (Some(hash), Some(index)) = (hash_part, index_part)
+                        && let (Ok(txid), Ok(vout)) = (hash.parse::<Txid>(), index.parse::<u32>())
+                    {
+                        let outpoint = OutPoint { txid, vout };
+                        return query
+                            .lookup_spend(&outpoint)
+                            .map_or_else(SpendingValue::default, SpendingValue::from);
                     }
                     SpendingValue::default()
                 })
@@ -2734,22 +2756,26 @@ mod tests {
     }
 
     fn sign_header(
-        keys: &nostr::Keys,
+        keys: &nostr::key::Keys,
         method: nostr::nips::nip98::HttpMethod,
         url: &str,
         created_at: u64,
     ) -> String {
-        use nostr::event::EventBuilder;
+        use base64::Engine as _;
         use nostr::nips::nip98::HttpData;
         use nostr::prelude::*;
-        let parsed = nostr::Url::parse(url).expect("url");
+        let parsed = Url::parse(url).expect("url");
         let data = HttpData::new(parsed, method);
-        let event = EventBuilder::http_auth(data)
+        let event = data
+            .into_event_builder()
             .custom_created_at(Timestamp::from(created_at))
-            .sign_with_keys(keys)
+            .finalize(keys)
             .expect("sign");
         let json = serde_json::to_vec(&event).expect("json");
-        format!("Nostr {}", base64::encode(&json))
+        format!(
+            "Nostr {}",
+            base64::engine::general_purpose::STANDARD.encode(&json)
+        )
     }
 
     /// Named contract: HTTP and WS gate use the live allowlist. Localhost is
@@ -2768,12 +2794,14 @@ mod tests {
         let t = now();
         let header = sign_header(&keys, HttpMethod::GET, url, t);
         let out = http_ws_auth_gate(
-            "GET",
-            "/api/v1/ws",
-            Some(&header),
-            url,
-            b"",
-            t,
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/api/v1/ws",
+                authorization: Some(&header),
+                absolute_url: url,
+                body: b"",
+                now_unix: t,
+            },
             false,
             &allow,
         )
@@ -2787,12 +2815,14 @@ mod tests {
         allow.reload().unwrap();
         let header2 = sign_header(&keys, HttpMethod::GET, url, now());
         let err = http_ws_auth_gate(
-            "GET",
-            "/api/v1/ws",
-            Some(&header2),
-            url,
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/api/v1/ws",
+                authorization: Some(&header2),
+                absolute_url: url,
+                body: b"",
+                now_unix: now(),
+            },
             false,
             &allow,
         )
@@ -2813,12 +2843,14 @@ mod tests {
         let url = "http://127.0.0.1/blocks/tip/hash";
         let header = sign_header(&keys, HttpMethod::GET, url, now());
         let err = http_ws_auth_gate(
-            "GET",
-            "/blocks/tip/hash",
-            Some(&header),
-            url,
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/blocks/tip/hash",
+                authorization: Some(&header),
+                absolute_url: url,
+                body: b"",
+                now_unix: now(),
+            },
             false,
             &allow,
         )
@@ -2826,12 +2858,14 @@ mod tests {
         assert_eq!(err, crate::auth::AuthError::NotAllowlisted);
 
         let err = http_ws_auth_gate(
-            "GET",
-            "/tx/abc",
-            None,
-            "http://127.0.0.1/tx/abc",
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/tx/abc",
+                authorization: None,
+                absolute_url: "http://127.0.0.1/tx/abc",
+                body: b"",
+                now_unix: now(),
+            },
             false,
             &allow,
         )
@@ -2848,36 +2882,42 @@ mod tests {
         let path = write_allowlist(&dir, &[]);
         let allow = Allowlist::load(&path).unwrap();
         let out = http_ws_auth_gate(
-            "GET",
-            "/blocks/tip/hash",
-            None,
-            "http://example/blocks/tip/hash",
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/blocks/tip/hash",
+                authorization: None,
+                absolute_url: "http://example/blocks/tip/hash",
+                body: b"",
+                now_unix: now(),
+            },
             true,
             &allow,
         )
         .unwrap();
         assert_eq!(out, HttpAuthOutcome::PublicHealth);
         let out = http_ws_auth_gate(
-            "GET",
-            "/blocks/tip/height",
-            None,
-            "http://example/blocks/tip/height",
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/blocks/tip/height",
+                authorization: None,
+                absolute_url: "http://example/blocks/tip/height",
+                body: b"",
+                now_unix: now(),
+            },
             true,
             &allow,
         )
         .unwrap();
         assert_eq!(out, HttpAuthOutcome::PublicHealth);
         let err = http_ws_auth_gate(
-            "GET",
-            "/block-template",
-            None,
-            "http://example/block-template",
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/block-template",
+                authorization: None,
+                absolute_url: "http://example/block-template",
+                body: b"",
+                now_unix: now(),
+            },
             true,
             &allow,
         )
@@ -2919,12 +2959,14 @@ mod tests {
         let t = now();
         let header = sign_header(&keys, HttpMethod::GET, url, t);
         let gate = http_ws_auth_gate(
-            "GET",
-            "/api/v1/ws",
-            Some(&header),
-            url,
-            b"",
-            t,
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/api/v1/ws",
+                authorization: Some(&header),
+                absolute_url: url,
+                body: b"",
+                now_unix: t,
+            },
             false,
             &allow_empty,
         );
@@ -2937,12 +2979,14 @@ mod tests {
         let allow = Allowlist::load(&path).unwrap();
         let header = sign_header(&keys, HttpMethod::GET, url, t);
         let gate = http_ws_auth_gate(
-            "GET",
-            "/api/v1/ws",
-            Some(&header),
-            url,
-            b"",
-            t,
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/api/v1/ws",
+                authorization: Some(&header),
+                absolute_url: url,
+                body: b"",
+                now_unix: t,
+            },
             false,
             &allow,
         );
@@ -2967,12 +3011,14 @@ mod tests {
         allow.reload().unwrap();
         let header2 = sign_header(&keys, HttpMethod::GET, url, now());
         let gate2 = http_ws_auth_gate(
-            "GET",
-            "/api/v1/ws",
-            Some(&header2),
-            url,
-            b"",
-            now(),
+            &super::HttpWsAuthRequest {
+                method: "GET",
+                path: "/api/v1/ws",
+                authorization: Some(&header2),
+                absolute_url: url,
+                body: b"",
+                now_unix: now(),
+            },
             false,
             &allow,
         );
@@ -3099,6 +3145,82 @@ mod tests {
         .expect("socket must close after allowlist reload drop");
         assert!(closed);
 
+        server.abort();
+    }
+
+    /// Named contract: production REST uses hyper 0.14.20+
+    /// `Server::http1_header_read_timeout` for 10 seconds. This module does
+    /// not compile if that method is missing.
+    #[test]
+    fn http1_header_read_timeout_is_ten_seconds() {
+        assert_eq!(
+            super::HTTP1_HEADER_READ_TIMEOUT,
+            std::time::Duration::from_secs(10)
+        );
+        let _apply: fn(
+            hyper::server::Builder<hyper::server::conn::AddrIncoming>,
+            std::time::Duration,
+        ) -> hyper::server::Builder<hyper::server::conn::AddrIncoming> =
+            super::with_http1_header_read_timeout;
+        let _ = _apply;
+    }
+
+    /// Named contract: a live hyper 0.14 server with a short
+    /// `http1_header_read_timeout` closes a client that never finishes the
+    /// HTTP/1 request line. Same API REST and queue unix listeners call.
+    /// This fixture is not a full indexer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn http1_header_read_timeout_closes_incomplete_request_line() {
+        use super::{Server, with_http1_header_read_timeout};
+        use hyper::service::{make_service_fn, service_fn};
+        use hyper::{Body, Request, Response};
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let make_svc = make_service_fn(|_| async {
+            Ok::<_, hyper::Error>(service_fn(|_req: Request<Body>| async {
+                Ok::<_, hyper::Error>(Response::new(Body::from("ok")))
+            }))
+        });
+        let short = Duration::from_millis(400);
+        let server = tokio::spawn(async move {
+            with_http1_header_read_timeout(Server::from_tcp(listener).expect("from_tcp"), short)
+                .serve(make_svc)
+                .await
+                .ok();
+        });
+        for _ in 0..50 {
+            if std::net::TcpStream::connect(addr).is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream.write_all(b"GET / ").expect("partial request line");
+        stream.flush().ok();
+        let mut buf = [0u8; 16];
+        match stream.read(&mut buf) {
+            Ok(0) => {}
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::BrokenPipe
+                    || e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+            Ok(n) => panic!("server must close on incomplete headers, wrote {} bytes", n),
+            Err(e)
+                if e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::WouldBlock =>
+            {
+                panic!("header-read timeout did not close the connection: {}", e)
+            }
+            Err(e) => panic!("unexpected read error: {}", e),
+        }
         server.abort();
     }
 

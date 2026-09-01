@@ -51,7 +51,7 @@ fn main() {
 
     let increment = 256 / thread_count;
     let bytes: Vec<u8> = (0u8..=255u8)
-        .filter(|n| *n % increment as u8 == 0)
+        .filter(|n| n.is_multiple_of(increment as u8))
         .collect();
 
     let now = Instant::now();
@@ -136,7 +136,7 @@ fn run_iterator(
             break;
         }
 
-        if iter_index % 10_000_000 == 0 {
+        if iter_index.is_multiple_of(10_000_000) {
             let duration = now.elapsed().as_secs();
             eprintln!(
                 "Thread ({thread_id:?}) Processing row #{iter_index}... {duration} seconds elapsed"

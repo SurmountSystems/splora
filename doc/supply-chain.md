@@ -29,9 +29,12 @@ workspace.
 
 [`cargo-deny.toml`](../cargo-deny.toml) is the license and source policy.
 
-- Unknown registries are denied. Allowed registries are the Menhera 7-day
-  sparse index and the crates.io index URL that lockfiles still record after
-  the rewrite.
+- Unknown registries are denied. The allow list is the crates.io index URL
+  that lockfiles still record after the rewrite
+  (`registry+https://github.com/rust-lang/crates.io-index`). Fetch still uses
+  the Menhera 7-day sparse index via [`.cargo/config.toml`](../.cargo/config.toml).
+  Do not list the Menhera sparse URL as an extra `allow-registry`; cargo-deny
+  would report it as unused.
 - Unknown git sources are denied. `allow-git` is empty. The old
   `[patch.crates-io.electrum-client]` git rev was only for optional
   `electrum-discovery`. Default and liquid production packages do not enable
@@ -42,46 +45,95 @@ workspace.
   the binary. GPL-2.0 and GPL-3.0 are omitted for the same reason. Inherited
   electrs stays MIT. Novel Surmount files use the Unlicense (`UNLICENSE`).
 
-`just check-local` runs `cargo deny check --config cargo-deny.toml` and
-`cargo audit` on the laptop. They are not flake checks. cargo-deny 0.19 looks
-for `deny.toml` by default, so the recipe passes `--config cargo-deny.toml`.
+`just check-local` runs `cargo deny --offline --locked check --config
+cargo-deny.toml` and then `cargo audit` on the laptop. They are not flake checks.
+cargo-deny 0.19 looks for `deny.toml` by default, so the recipe passes
+`--config cargo-deny.toml`.
+
+`--offline` keeps licenses, bans, and sources checks, and it uses the cached
+RustSec advisory database plus the local registry index. It does not contact
+crates.io (or time out on yanked HTTP). Yanked crates stay `yanked = "deny"`
+when the local index already knows they are yanked. `cargo audit` still runs
+next and is the live advisory and yanked pass. Do not fetch crates.io directly
+to skip the Menhera wait.
+
+Duplicate crate versions that this tree cannot unify are listed in
+[`cargo-deny.toml`](../cargo-deny.toml) `[bans.skip]` with a one-line reason
+each: bitcoin 0.32 versus nostr 0.45 (bech32, bitcoin_hashes,
+hex-conservative, secp256k1); tungstenite 0.21 rand 0.8 versus nostr rand
+0.10 (and getrandom / rand_core); hyper 0.14 `http` 0.2 versus tungstenite
+`http` 1; bindgen/cc `shlex` 1 versus 2; hyper `socket2` 0.5 versus tokio
+`socket2` 0.6; syn 2 versus syn 3; thiserror 1 versus 2. `multiple-versions`
+stays warn so a new unskipped pair still shows. Do not bump `rocksdb` off
+0.24. Do not raise CLI `--db-block-cache-mb` off 24.
 
 ## Pins after the 2026-08-31 lock refresh
 
 Blanket `cargo update` used the Menhera 7-day index. `idna` stayed **1.0.3**
 and `idna_adapter` stayed **1.1.0**. `rocksdb` stayed **0.24.0** /
-`librocksdb-sys` **0.17.3+10.4.2**. hyper stayed on **0.14.32** (not hyper 1).
-The CLI `--db-block-cache-mb` default is still 24.
+`librocksdb-sys` **0.17.3+10.4.2**. The CLI `--db-block-cache-mb` default is
+still 24.
+
+hyper stayed on **0.14.32** (Cargo.toml floor **0.14.20**, not hyper 1).
+Indexer REST (TCP and unix) and queue unix HTTP call
+`Server::http1_header_read_timeout` with a **10 second** HTTP/1 header-read
+timeout (`HTTP1_HEADER_READ_TIMEOUT`). That method landed in hyper 0.14.20.
+Queue TCP still uses tiny_http and does not set it. This crate does not
+enable hyper `http2` and does not terminate HTTP/3 on unix sockets.
+
+0.14.32 is past the patched versions for these hyper rustsec rows (none are
+open on this lock):
+
+- [RUSTSEC-2022-0022](https://rustsec.org/advisories/RUSTSEC-2022-0022)
+  (unsound `mem::uninitialized` in the HTTP/1 parser; patched `>=0.14.12`,
+  accessed: 2026-08-31)
+- [RUSTSEC-2021-0079](https://rustsec.org/advisories/RUSTSEC-2021-0079)
+  (Transfer-Encoding chunk size overflow; patched `>=0.14.10`, accessed:
+  2026-08-31)
+- [RUSTSEC-2021-0078](https://rustsec.org/advisories/RUSTSEC-2021-0078)
+  (lenient Content-Length; patched `>=0.14.10`, accessed: 2026-08-31)
+- [RUSTSEC-2021-0020](https://rustsec.org/advisories/RUSTSEC-2021-0020)
+  (multiple Transfer-Encoding; patched `>=0.14.3`, accessed: 2026-08-31)
 
 Direct crate bumps that closed rustsec rows:
 
-- `nostr` **0.44.8** (Menhera `pubtime` 2026-08-05). Patches
+- `nostr` **0.45.3** (caret from 0.45.1). Drops wasm32 `instant`
+  ([RUSTSEC-2024-0384](https://rustsec.org/advisories/RUSTSEC-2024-0384),
+  accessed: 2026-08-31). Still carries the NIP-98 / NIP-44 patches from
   [RUSTSEC-2026-0216](https://rustsec.org/advisories/RUSTSEC-2026-0216)
   through [RUSTSEC-2026-0230](https://rustsec.org/advisories/RUSTSEC-2026-0230)
-  (accessed: 2026-08-31). 0.45.0 on the index is yanked; 0.45.1 is a larger
-  API move (bech32 0.12, secp256k1 0.30).
+  (accessed: 2026-08-31). 0.45.0 is yanked. 0.45.4 published 2026-08-30 is
+  still inside the 7-day cooldown, so this lock does not pick it. Features
+  are `std`, `os-rng`, and `nip98`.
 - `prometheus` **0.14.0** with **default features off**. Default `protobuf`
   pulled protobuf 2.28.0
   ([RUSTSEC-2024-0437](https://rustsec.org/advisories/RUSTSEC-2024-0437),
   accessed: 2026-08-31). This crate only uses `TextEncoder`. 0.14.0 is on
   Menhera (published 2025-03-27). Do not re-enable the `protobuf` feature.
+- `serde-wincode` **0.1.2** with `wincode` **0.6.1** replaced bincode 1.3.3
+  ([RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141),
+  accessed: 2026-08-31). `src/util/bincode_util.rs` still emits the historical
+  little/big-endian fixint layout. Do not rewrite `new_index` keys.
+- clap **4.6.6** and stderrlog **0.6.0** dropped unmaintained `ansi_term` and
+  `atty` ([RUSTSEC-2021-0139](https://rustsec.org/advisories/RUSTSEC-2021-0139),
+  [RUSTSEC-2024-0375](https://rustsec.org/advisories/RUSTSEC-2024-0375),
+  [RUSTSEC-2021-0145](https://rustsec.org/advisories/RUSTSEC-2021-0145),
+  accessed: 2026-08-31). Do not re-add clap 2.
 
 `bitcoin` floated to **0.32.102**. That pulls `hex_lit` under SPDX **MITNFA**
 (MIT plus no-false-attribs). That identifier is on the cargo-deny allow list.
 
-## Remaining rustsec rows (not patched in this wave)
+## Remaining rustsec rows
 
-`cargo audit` exits 0 with these **warnings**. `cargo deny` ignores the
-unmaintained rows that would fail the Linux graph. Do not treat a warning as
-a patched crate.
+`cargo audit -n` on this lock reports **0 vulnerabilities and 0 warnings**.
+`cargo deny --offline --locked check --config cargo-deny.toml` exits 0 with
+an empty advisory ignore list. Duplicate crate versions that cannot be
+unified are skipped with reasons in `cargo-deny.toml`. They are not rustsec.
 
-| ID | Crate | Why it remains |
-|----|-------|----------------|
-| [RUSTSEC-2021-0139](https://rustsec.org/advisories/RUSTSEC-2021-0139) | `ansi_term` 0.12.1 via clap 2.34.0 | Unmaintained. clap 4 is a CLI rewrite. (accessed: 2026-08-31) |
-| [RUSTSEC-2024-0375](https://rustsec.org/advisories/RUSTSEC-2024-0375) | `atty` 0.2.14 via clap 2 and stderrlog 0.5.4 | Unmaintained. Replacement is `std::io::IsTerminal` after those callers move. (accessed: 2026-08-31) |
-| [RUSTSEC-2021-0145](https://rustsec.org/advisories/RUSTSEC-2021-0145) | `atty` 0.2.14 unsound on Windows | This crate's deny graph is Linux. cargo-audit still warns from the lockfile. (accessed: 2026-08-31) |
-| [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) | `bincode` 1.3.3 | Unmaintained. On-disk indexer schema. Do not swap codecs in a lock-only wave. (accessed: 2026-08-31) |
-| [RUSTSEC-2024-0384](https://rustsec.org/advisories/RUSTSEC-2024-0384) | `instant` 0.1.13 via nostr 0.44.8 | Unmaintained wasm32 Instant polyfill. Linux cargo-deny graph does not include it; cargo-audit scans the lockfile. (accessed: 2026-08-31) |
+js-sys / wasm-bindgen remain in the lockfile as wasm target deps of
+`iana-time-zone` (chrono via stderrlog timestamps). They are not
+[RUSTSEC-2024-0384](https://rustsec.org/advisories/RUSTSEC-2024-0384)
+(accessed: 2026-08-31). `instant` is gone.
 
 error-chain 0.12.4 was not in the 2026-08-31 audit output. Do not rewrite the
 error stack unless a later audit fails closed on it.
@@ -93,8 +145,8 @@ error stack unless a later audit fails closed on it.
 2. Add it to `Cargo.toml`.
 3. Run `cargo update -p <crate>` (or `cargo update` when the resolver must
    retie several packages). That refreshes `Cargo.lock`.
-4. Run `cargo deny check --config cargo-deny.toml` and `cargo audit`
-   locally (`just check-local`).
+4. Run `cargo deny --offline --locked check --config cargo-deny.toml` and
+   `cargo audit` locally (`just check-local`).
 5. If deny reports a license or git source, fix the crate choice or document
    an explicit exception. Do not fetch crates.io directly to skip the Menhera
    wait.
@@ -159,6 +211,7 @@ links. The operator recipe that runs the proof is `just check-remote`
 
 - Laptop (`just check-local`): `cargo fmt --all --check`, then
   `cargo clippy --all -- -D warnings`, then
-  `cargo deny check --config cargo-deny.toml`, then `cargo audit`.
+  `cargo deny --offline --locked check --config cargo-deny.toml`, then
+  `cargo audit`.
 - Remote (`just check-remote`): `nix flake check`. That is nextest and the
   crane package builds. It is not deny or audit.

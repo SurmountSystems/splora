@@ -39,13 +39,13 @@ pub fn precache(chain: Arc<ChainQuery>, scripthashes: Vec<FullHash>, threads: us
                     let post_increment_counter = pre_increment + 1;
 
                     // Then, log
-                    if post_increment_counter % 500 == 0 {
+                    if post_increment_counter.is_multiple_of(500) {
                         let now_millis = now.elapsed().as_millis();
                         info!("{post_increment_counter}/{total} Processed in {now_millis} ms running pre-cache for scripthash");
                     }
 
                     // Every 10k counts, flush the DB to disk
-                    if post_increment_counter % 10000 == 0 {
+                    if post_increment_counter.is_multiple_of(10000) {
                         info!("Flushing cache_db... {post_increment_counter}");
                         chain.store().cache_db().flush();
                         info!("Done Flushing cache_db!!! {post_increment_counter}");

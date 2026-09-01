@@ -1,28 +1,8 @@
-/*
+//! Fixture bytes are the historical bincode 1.3.3 little-endian fixint
+//! layout with trailing padding allowed. The codec must round-trip them
+//! without rewriting `new_index` keys.
 
-The tests below show us the following defaults for each method of using bincode.
-
-1. Using bincode::[de]serialize() directly: "function"
-2. Using bincode::config().[de]serialize(): "Config" (deprecated)
-3. Using bincode::options().[de]serialize(): "Options" (currently recommended for v1.3.3)
-
-```
-+----------+--------+------------+----------------+------------+
-|          | Endian | Int Length | Allow Trailing | Byte Limit |
-+----------+--------+------------+----------------+------------+
-| function | little | fixed      | allow          | unlimited  |
-| Config   | little | fixed      | allow          | unlimited  |
-| Options  | little | variable * | reject *       | unlimited  |
-+----------+--------+------------+----------------+------------+
-```
-
-Thus we only need to change the int length from variable to fixed,
-and allow trailing to allow in order to match the previous behavior.
-(note: TxHistory was using Big Endian by explicitly setting it to big.)
-
-*/
-
-use bincode_do_not_use_directly as bincode;
+use super::{deserialize_little, serialize_little};
 
 #[test]
 fn bincode_settings() {
@@ -35,40 +15,8 @@ fn bincode_settings() {
     ];
     large[0..56].copy_from_slice(&decoded);
 
-    // Using functions: Little endian, Fixint, Allow trailing, Unlimited
-    assert_eq!(bincode::serialize(&value).unwrap(), &decoded);
-    assert_eq!(bincode::deserialize::<TestStruct>(&large).unwrap(), value);
-
-    // Using Config (deprecated)
-    // Little endian, fixint, Allow trailing, Unlimited
-    #[allow(deprecated)]
-    {
-        assert_eq!(bincode::config().serialize(&value).unwrap(), &decoded);
-        assert_eq!(
-            bincode::config().deserialize::<TestStruct>(&large).unwrap(),
-            value
-        );
-    }
-
-    // Using Options
-    // Little endian, VARINT (different), Reject trailing (different), unlimited
-    use bincode::Options;
-    assert_eq!(
-        bincode::options()
-            .with_fixint_encoding()
-            .allow_trailing_bytes()
-            .serialize(&value)
-            .unwrap(),
-        &decoded
-    );
-    assert_eq!(
-        bincode::options()
-            .with_fixint_encoding()
-            .allow_trailing_bytes()
-            .deserialize::<TestStruct>(&large)
-            .unwrap(),
-        value
-    );
+    assert_eq!(serialize_little(&value).unwrap(), &decoded);
+    assert_eq!(deserialize_little::<TestStruct>(&large).unwrap(), value);
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

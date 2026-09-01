@@ -155,7 +155,7 @@ fn reject_deletes_queue_line_only() {
 #[test]
 fn queue_cli_accepts_socket_file_without_bind() {
     let m = queue_cli_app()
-        .get_matches_from_safe(vec![
+        .try_get_matches_from(vec![
             "splora-queue",
             "--socket-file",
             "/run/splora/queue.sock",
@@ -163,10 +163,13 @@ fn queue_cli_accepts_socket_file_without_bind() {
             "/var/lib/splora/queue/import-queue",
         ])
         .expect("unix socket listen does not require --bind");
-    assert_eq!(m.value_of("socket-file").unwrap(), "/run/splora/queue.sock");
-    assert!(m.value_of("bind").is_none());
     assert_eq!(
-        m.value_of("queue-file").unwrap(),
+        m.get_one::<String>("socket-file").unwrap(),
+        "/run/splora/queue.sock"
+    );
+    assert!(m.get_one::<String>("bind").is_none());
+    assert_eq!(
+        m.get_one::<String>("queue-file").unwrap(),
         "/var/lib/splora/queue/import-queue"
     );
 }
@@ -174,7 +177,7 @@ fn queue_cli_accepts_socket_file_without_bind() {
 #[test]
 fn queue_cli_refuses_bind_and_socket_file_together() {
     let err = queue_cli_app()
-        .get_matches_from_safe(vec![
+        .try_get_matches_from(vec![
             "splora-queue",
             "--bind",
             "127.0.0.1:18493",

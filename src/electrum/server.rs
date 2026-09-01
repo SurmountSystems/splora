@@ -980,7 +980,7 @@ impl Connection {
             error!(
                 "[{}] connection handling failed: {}",
                 self.client_string(),
-                e.display_chain().to_string()
+                e.display_chain()
             );
         }
         self.stats.clients.dec();

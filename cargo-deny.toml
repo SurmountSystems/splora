@@ -1,5 +1,5 @@
 # Supply-chain policy for splora.
-# Laptop: `just check-local` runs `cargo deny`. This is not a flake check.
+# Laptop: `just check-local` runs `cargo deny --offline --locked check`. This is not a flake check.
 
 [graph]
 targets = [
@@ -13,15 +13,14 @@ no-default-features = false
 
 [advisories]
 version = 2
+# Yanked status is read from the local index cache (`cargo deny --offline
+# --locked check` in just check-local). Live yanked rows are also
+# cargo-audit's job, which runs next in that recipe. Do not fetch crates.io
+# to skip Menhera.
 yanked = "deny"
-# Unmaintained crates that this wave does not replace (API is not small, or
-# the bytes on disk are the Mempool schema). cargo-deny 0.19 treats these as
-# errors unless ignored. Reasons stay in doc/supply-chain.md.
-ignore = [
-    { id = "RUSTSEC-2021-0139", reason = "ansi_term is clap 2 only; clap 4 is a CLI rewrite, not this wave" },
-    { id = "RUSTSEC-2024-0375", reason = "atty is clap 2 and stderrlog 0.5; std IsTerminal needs those callers rewritten" },
-    { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 is the indexer on-disk schema; do not swap codecs in a lock-only wave" },
-]
+# Unmaintained rustsec rows that used to live here (clap 2 ansi_term/atty,
+# bincode 1.3.3) left the Linux graph in the 2026-08-31 warning wave.
+ignore = []
 
 [licenses]
 version = 2
@@ -35,15 +34,9 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Zlib",
     "Unlicense",
     "CC0-1.0",
-    "BSL-1.0",
-    "OpenSSL",
-    "MPL-2.0",
-    "CDDL-1.0",
-    "NCSA",
 ]
 # AGPL and SSPL are omitted on purpose. They would infect the binary.
 # GPL-2.0 / GPL-3.0 are omitted for the same reason.
@@ -52,14 +45,32 @@ allow = [
 multiple-versions = "warn"
 wildcards = "allow"
 deny = []
+# Duplicate versions we cannot unify without leaving bitcoin 0.32, nostr 0.45,
+# hyper 0.14, or the bindgen/cc stack. Skip the older copy so deny does not
+# flood warnings. Reasons stay next to each skip.
+skip = [
+    { crate = "bech32@0.11", reason = "bitcoin 0.32 vs nostr 0.45" },
+    { crate = "bitcoin_hashes@0.14", reason = "bitcoin 0.32 vs nostr 0.45" },
+    { crate = "hex-conservative@0.2", reason = "bitcoin 0.32 vs nostr 0.45" },
+    { crate = "secp256k1@0.29", reason = "bitcoin 0.32 vs nostr 0.45" },
+    { crate = "rand@0.8", reason = "tungstenite 0.21 vs nostr 0.45 (rand 0.10)" },
+    { crate = "getrandom@0.2", reason = "rand 0.8 via tungstenite; nostr uses getrandom 0.4" },
+    { crate = "rand_core@0.6", reason = "rand 0.8 via tungstenite; nostr uses rand_core 0.10" },
+    { crate = "http@0.2", reason = "hyper 0.14 vs tungstenite http 1" },
+    { crate = "shlex@1", reason = "bindgen/cc still pull shlex 1 next to shlex 2" },
+    { crate = "socket2@0.5", reason = "hyper 0.14 stays on socket2 0.5; tokio uses 0.6" },
+    { crate = "syn@2", reason = "bindgen and thiserror 1 stay on syn 2; serde_derive uses syn 3" },
+    { crate = "thiserror@1", reason = "tungstenite 0.21 and ppp stay on thiserror 1; wincode uses 2" },
+    { crate = "thiserror-impl@1", reason = "companion of thiserror 1" },
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = [
-    # Workspace `.cargo/config.toml` rewrites crates.io to this 7-day cooldown
-    # sparse index. Lockfile entries still name the crates.io index URL.
-    "sparse+https://index.crates.menhera.org/7d/",
+    # Fetch still uses Menhera via workspace `.cargo/config.toml`.
+    # Lockfile crates record registry+https://github.com/rust-lang/crates.io-index
+    # after that rewrite.
     "https://github.com/rust-lang/crates.io-index",
 ]
 allow-git = []
