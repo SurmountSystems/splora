@@ -54,13 +54,26 @@
           # false (bundled rocksdb 0.24.0). See doc/supply-chain.md.
           useSystemRocksdb = true;
 
-          src = craneLib.cleanCargoSource ./.;
+          # Laptop `.cargo/config.toml` rewrites crates.io to Menhera.
+          # Crane must not copy it: after vendor, cargo would still query
+          # index.crates.menhera.org. Keep Cargo.lock.
+          src = lib.cleanSourceWith {
+            src = craneLib.cleanCargoSource ./.;
+            filter =
+              path: _type:
+              let
+                p = toString path;
+              in
+              !(lib.hasSuffix "/.cargo/config.toml" p)
+              && !(lib.hasSuffix "/.cargo/config" p);
+          };
 
           commonArgs = {
             inherit src;
             pname = "splora";
             version = "3.4.0-dev";
             strictDeps = true;
+            cargoExtraArgs = "--offline --locked";
             nativeBuildInputs = with pkgs; [
               clang
               cmake
@@ -88,19 +101,14 @@
             ROCKSDB_INCLUDE_DIR = "${pkgs.rocksdb}/include";
           };
 
-          cargoArtifacts = craneLib.buildDepsOnly (
-            commonArgs
-            // {
-              cargoExtraArgs = "--locked";
-            }
-          );
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
           splora = craneLib.buildPackage (
             commonArgs
             // {
               inherit cargoArtifacts;
               pname = "splora";
-              cargoExtraArgs = "--locked --bin splora --bin popular-scripts --bin splora-import --bin splora-queue";
+              cargoExtraArgs = "${commonArgs.cargoExtraArgs} --bin splora --bin popular-scripts --bin splora-import --bin splora-queue";
               doCheck = false;
             }
           );
@@ -110,7 +118,7 @@
             // {
               inherit cargoArtifacts;
               pname = "splora-liquid";
-              cargoExtraArgs = "--locked --features liquid --bin splora --bin popular-scripts --bin splora-import --bin splora-queue";
+              cargoExtraArgs = "${commonArgs.cargoExtraArgs} --features liquid --bin splora --bin popular-scripts --bin splora-import --bin splora-queue";
               doCheck = false;
               passthru.asset-registry = asset-registry;
             }
@@ -120,7 +128,6 @@
             commonArgs
             // {
               inherit cargoArtifacts;
-              cargoExtraArgs = "--locked";
               partitions = 1;
               partitionType = "count";
             }

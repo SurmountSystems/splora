@@ -11,14 +11,20 @@ stays `/var/lib/splora/allow-npubs`. Those review items are not leftover.
 ## Already in the tree (do not re-open)
 
 The crate is named `splora`. Crane builds `splora` and `splora-liquid`.
-`.cargo/config.toml` rewrites crates.io to the Menhera 7-day sparse index.
+`.cargo/config.toml` rewrites crates.io to the Menhera 7-day sparse index
+for laptop `cargo`. Crane `src` omits that file and keeps `Cargo.lock`.
+After vendor, `buildDepsOnly`, `buildPackage`, and nextest pass
+`--offline --locked`, so Nix does not query `index.crates.menhera.org`.
+That flake fix is in the tree. The operator re-runs `just check-remote`.
 `cargo-deny.toml` allows the crates.io index URL that lockfiles still
 record after that rewrite. Fetch still uses Menhera. Unknown git sources
 are denied. Duplicate crate versions this tree cannot unify are skipped
 in `[bans.skip]` with a reason each (bitcoin 0.32 versus nostr 0.45,
 tungstenite rand 0.8 versus nostr rand 0.10, hyper 0.14 versus tungstenite
 http 1, bindgen/cc shlex, hyper socket2 0.5 versus tokio 0.6, syn 2 versus
-3, thiserror 1 versus 2). They are not leftover to unify. Direct `base64`
+3, thiserror 1 versus 2). Those skips are intentional. They are not Open
+unify-work. The validated table is in [doc/supply-chain.md](doc/supply-chain.md).
+Do not bump bitcoin to 0.33-beta. Do not bump rocksdb off 0.24. Direct `base64`
 is 0.22, `itertools` is 0.13, `socket2` is 0.5, `notify` is 8.2.0 (notify
 7 reintroduced unmaintained `instant`). The mempool recent queue is a
 capped `VecDeque`, not `bounded-vec-deque` (GPL identifier).
@@ -112,6 +118,9 @@ Repo-root [FORK.md](FORK.md) names lineage, the Mempool schema lock, Blockstream
 ### Operator-owned gates
 
 The operator must run `just check-local` and then `just check-remote`.
+The crane Menhera DNS miss (`Could not resolve host:
+index.crates.menhera.org` on `splora-deps-3.4.0-dev` after vendor) is
+fixed in `flake.nix`. Agents did not run `just check-remote`.
 This deny-hygiene wave ran `cargo check --lib` (exit 0),
 `cargo check --lib --features liquid` (exit 0), named `--lib` tests
 `new_index::mempool::tests` (exit 0), `cargo fmt --all --check` (exit

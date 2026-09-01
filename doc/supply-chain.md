@@ -11,9 +11,18 @@ Cargo source rewrite, not through a laptop-only user config.
 3. Workspace [`.cargo/config.toml`](../.cargo/config.toml) rewrites `crates-io`
    to the Menhera cooldown sparse index:
    [sparse+https://index.crates.menhera.org/7d/](https://index.crates.menhera.org/7d/)
-   (accessed: 2026-08-28).
-4. Crane builds copy that same `.cargo/config.toml` into the sandbox so the
-   laptop and the remote builder use the same registry.
+   (accessed: 2026-08-28). Laptop `cargo` in this workspace uses that rewrite.
+   Do not delete that file.
+4. Crane `src` is `cleanCargoSource` without `.cargo/config.toml`.
+   `Cargo.lock` stays. After vendor, `buildDepsOnly`, `buildPackage`, and
+   nextest pass `--offline --locked`.
+
+Nix crane builds vendor crate sources from `Cargo.lock` and must not query
+[index.crates.menhera.org](https://index.crates.menhera.org/7d/)
+(accessed: 2026-08-28). The Menhera rewrite is for laptop `cargo` only. A
+prior `splora-deps` failure on nixbuilder was `Could not resolve host:
+index.crates.menhera.org` after vendor succeeded, because that workspace
+config was inside crane `src`.
 
 Nix flakes only see git-tracked files. `nix flake lock` and
 `just check-remote` in this checkout fail with "Path 'flake.nix' is not
@@ -58,14 +67,96 @@ next and is the live advisory and yanked pass. Do not fetch crates.io directly
 to skip the Menhera wait.
 
 Duplicate crate versions that this tree cannot unify are listed in
-[`cargo-deny.toml`](../cargo-deny.toml) `[bans.skip]` with a one-line reason
-each: bitcoin 0.32 versus nostr 0.45 (bech32, bitcoin_hashes,
-hex-conservative, secp256k1); tungstenite 0.21 rand 0.8 versus nostr rand
-0.10 (and getrandom / rand_core); hyper 0.14 `http` 0.2 versus tungstenite
-`http` 1; bindgen/cc `shlex` 1 versus 2; hyper `socket2` 0.5 versus tokio
-`socket2` 0.6; syn 2 versus syn 3; thiserror 1 versus 2. `multiple-versions`
-stays warn so a new unskipped pair still shows. Do not bump `rocksdb` off
-0.24. Do not raise CLI `--db-block-cache-mb` off 24.
+[`cargo-deny.toml`](../cargo-deny.toml) `[bans.skip]`. Skip means “do not
+warn about this **older** copy.” Newer copies stay. The inventory below
+matches `Cargo.lock` and crates.io metadata (accessed: 2026-08-31).
+`multiple-versions` stays warn so a new unskipped pair still shows. Do
+not bump `rocksdb` off 0.24. Do not raise CLI `--db-block-cache-mb` off
+24. Do not take bitcoin `0.33.0-beta`. There is no stable bitcoin 0.33
+on crates.io.
+
+## cargo-deny `[bans.skip]` (validated 2026-08-31)
+
+Lock versions in this section come from `Cargo.lock`. crates.io crate
+pages and dependency APIs were checked on 2026-08-31.
+
+[crates.io bitcoin](https://crates.io/crates/bitcoin) reports
+`max_stable_version` **0.32.102**, `newest_version` **0.32.11**
+(2026-07-22), and `max_version` **0.33.0-beta** (2026-02-23).
+`0.33.0-beta.0` is yanked. This lock pins bitcoin **0.32.102**.
+[crates.io nostr](https://crates.io/crates/nostr) **0.45.3** published
+2026-08-19. This lock pins nostr **0.45.3**. nostr **0.45.4** published
+2026-08-30 is still inside the Menhera 7-day cooldown.
+
+Published bitcoin **0.33.0-beta** does not drop the bech32 split with
+nostr. Its crates.io dependencies (accessed: 2026-08-31) are `bech32`
+`^0.11.0`, `bitcoin_hashes` `^0.20.0`, `hex-conservative` both `^0.3.0`
+and `^1.0.0`, and `secp256k1` `^0.32.0-beta.2`. nostr 0.45.3 on this
+lock uses bech32 **0.12.0**, bitcoin_hashes **1.2.0**, and secp256k1
+**0.30.0**. Taking the beta would still leave bech32 0.11 versus 0.12
+and would not land nostr’s secp 0.30 line.
+
+### Cluster A: bitcoin 0.32.102 versus nostr 0.45.3
+
+| Skip | Older (who, lock) | Newer (who, lock) | Honest unify |
+|------|-------------------|-------------------|--------------|
+| `bech32@0.11` | **0.11.1** via bitcoin 0.32.102 and elements 0.26.2 | **0.12.0** via nostr 0.45.3 | nostr on bech32 0.11, or a **future** bitcoin that takes 0.12. Not bitcoin 0.33-beta. |
+| `bitcoin_hashes@0.14` | **0.14.101** via bitcoin 0.32.102, bip39 2.2.2, secp256k1 0.29.1, and secp256k1 0.30.0 | **1.2.0** via nostr 0.45.3 | A bitcoin (and secp256k1 0.30) that depend on hashes 1.x. Published 0.33-beta wants hashes **0.20**, not 1.2. Still no stable 0.33. |
+| `hex-conservative@0.2` | **0.2.2** via bitcoin 0.32.102 and hashes 0.14.101 | **1.2.0** via hashes 1.2.0 | Follows hashes. |
+| `secp256k1@0.29` | **0.29.1** via bitcoin 0.32.102 and secp256k1-zkp 0.11.0 | **0.30.0** via nostr 0.45.3 | A bitcoin major using secp ≥0.30. 0.33-beta wants secp **0.32-beta**, still not 0.30. |
+
+[bech32](https://crates.io/crates/bech32),
+[bitcoin_hashes](https://crates.io/crates/bitcoin_hashes),
+[hex-conservative](https://crates.io/crates/hex-conservative),
+[secp256k1](https://crates.io/crates/secp256k1) (accessed: 2026-08-31).
+
+### Cluster B: hyper 0.14.32 versus tokio-tungstenite 0.21
+
+[crates.io hyper](https://crates.io/crates/hyper) current default is
+**1.11.1** (2026-08-28). This lock stays on hyper **0.14.32** (last 0.14,
+2024-12-16) so REST keeps `Server::http1_header_read_timeout`.
+tokio-tungstenite is **0.21.0** and tungstenite is **0.21.0**.
+
+| Skip | Older (who, lock) | Newer (who, lock) | Honest unify |
+|------|-------------------|-------------------|--------------|
+| `http@0.2` | **0.2.12** via hyper 0.14.32 and http-body 0.4.6 | **1.5.0** via tungstenite 0.21.0 | hyper **1.11.x** (after Menhera 7-day) plus tokio-tungstenite **0.30**. REST rewrite. Not a skip deletion. hyper 1.11.1 is 3 days old as of 2026-08-31. |
+| `rand@0.8` | **0.8.7** via tungstenite 0.21.0, secp256k1 0.29.1, secp256k1 0.30.0, and secp256k1-zkp 0.11.0 | **0.10.2** via nostr 0.45.3 | One rand line across tungstenite, secp, and nostr, or the hyper-1 stack. |
+| `getrandom@0.2` | **0.2.17** via rand_core 0.6.4 and redox_users 0.4.6 | **0.4.3** via rand 0.10.2, tempfile 3.27.0, and jobserver 0.1.35 | Follows rand. |
+| `rand_core@0.6` | **0.6.4** via rand 0.8.7 and rand_chacha 0.3.1 | **0.10.1** via rand 0.10.2 | Follows rand. |
+| `socket2@0.5` | **0.5.10** via hyper 0.14.32 and this crate’s direct `socket2` 0.5 | **0.6.5** via tokio 1.53.1 | hyper 1. Direct socket2 stays 0.5 until that stack moves. |
+| `thiserror@1` and `thiserror-impl@1` | **1.0.69** via tungstenite 0.21.0, ppp 2.3.0, and redox_users 0.4.6 | **2.0.20** via wincode 0.6.1, serde-wincode 0.1.2, and prometheus 0.14.0 | those crates on thiserror 2. |
+
+[http](https://crates.io/crates/http),
+[rand](https://crates.io/crates/rand),
+[getrandom](https://crates.io/crates/getrandom),
+[rand_core](https://crates.io/crates/rand_core),
+[socket2](https://crates.io/crates/socket2),
+[thiserror](https://crates.io/crates/thiserror) (accessed: 2026-08-31).
+
+### Cluster C: librocksdb-sys bindgen / cc
+
+This lock has bindgen **0.72.1**, cc **1.4.4**, rocksdb **0.24.0**,
+librocksdb-sys **0.17.3+10.4.2**. Unify here is a bindgen or proc-macro
+bump. It is **not** a rocksdb 0.25 bump.
+
+| Skip | Older (who, lock) | Newer (who, lock) | Honest unify |
+|------|-------------------|-------------------|--------------|
+| `shlex@1` | **1.3.0** via bindgen 0.72.1 | **2.0.1** via cc 1.4.4 | bindgen `shlex = "2"`. Build-only. |
+| `syn@2` | **2.0.119** via bindgen 0.72.1 and thiserror-impl 1.0.69 (also pin-project-internal, wasm-bindgen-macro-support, windows-implement, windows-interface, zerocopy-derive) | **3.0.4** via serde_derive 1.0.229, thiserror-impl 2.0.20, tokio-macros 2.7.2, and futures-macro 0.3.34 | those proc macros on syn 3. [syn](https://crates.io/crates/syn) **3.0.4** published 2026-08-24. |
+
+[shlex](https://crates.io/crates/shlex),
+[syn](https://crates.io/crates/syn),
+[serde_derive](https://crates.io/crates/serde_derive) (accessed:
+2026-08-31).
+
+**serde_derive syn requirement (confirmed):** this lock’s
+`serde_derive` **1.0.229** depends on `syn 3.0.4`. The published
+[serde_derive 1.0.229 Cargo.toml](https://docs.rs/crate/serde_derive/1.0.229/source/Cargo.toml)
+sets `[dependencies.syn] version = "3"` (crates.io dependency API
+`req` `^3`, accessed: 2026-08-31). serde_derive 1.0.229 itself
+published 2026-07-18.
+
+These skips are intentional. They are not leftover unify-work.
 
 ## Pins after the 2026-08-31 lock refresh
 
@@ -214,4 +305,5 @@ links. The operator recipe that runs the proof is `just check-remote`
   `cargo deny --offline --locked check --config cargo-deny.toml`, then
   `cargo audit`.
 - Remote (`just check-remote`): `nix flake check`. That is nextest and the
-  crane package builds. It is not deny or audit.
+  crane package builds. It is not deny or audit. Crane vendors from
+  `Cargo.lock` and does not query Menhera.
