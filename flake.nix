@@ -46,26 +46,39 @@
           rustToolchain = pkgs.rust-bin.stable."1.98.0".default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-          # Prefer one nixpkgs rocksdb for both binaries. Bindgen uses
-          # ROCKSDB_INCLUDE_DIR (nixpkgs headers, currently 10.10.1), not the
-          # crate's bundled librocksdb-sys 0.17.3+10.4.2 tree. Named check
-          # `rocksdbMoldLink` (ELF NEEDED librocksdb + mold .comment on both
-          # packages) is the proof path. If that check fails, set this to
-          # false (bundled rocksdb 0.24.0). See doc/supply-chain.md.
-          useSystemRocksdb = true;
+          # Prefer one nixpkgs rocksdb for both binaries when the builder
+          # can link it. 2026-09-01 `just check-remote` never reached
+          # `rocksdbMoldLink`: `splora-deps` failed because gcc rejected
+          # `-fuse-ld=` plus the mold store path. Mold does not still
+          # link. Fallback is bundled rocksdb 0.24.0 (no ROCKSDB_* env,
+          # no mold RUSTFLAGS). See doc/supply-chain.md.
+          useSystemRocksdb = false;
 
           # Laptop `.cargo/config.toml` rewrites crates.io to Menhera.
           # Crane must not copy it: after vendor, cargo would still query
           # index.crates.menhera.org. Keep Cargo.lock.
+          # cleanCargoSource omits flake.nix, nix/module.nix, and
+          # rust-toolchain that src/config.rs tests include_str. Compose
+          # filterCargoSources from the unfiltered tree so those stay in
+          # src without pulling the Menhera rewrite.
           src = lib.cleanSourceWith {
-            src = craneLib.cleanCargoSource ./.;
+            src = lib.cleanSource ./.;
             filter =
-              path: _type:
+              path: type:
               let
                 p = toString path;
+                base = baseNameOf p;
+                parent = baseNameOf (dirOf p);
+                isMenheraCargoConfig =
+                  parent == ".cargo" && (base == "config.toml" || base == "config");
+                isIncludeStrPackaging =
+                  base == "flake.nix"
+                  || base == "rust-toolchain"
+                  || (parent == "nix" && base == "module.nix");
               in
-              !(lib.hasSuffix "/.cargo/config.toml" p)
-              && !(lib.hasSuffix "/.cargo/config" p);
+              !isMenheraCargoConfig
+              && (craneLib.filterCargoSources path type || isIncludeStrPackaging);
+            name = "source";
           };
 
           commonArgs = {
@@ -78,7 +91,6 @@
               clang
               cmake
               pkg-config
-              mold
               rustPlatform.bindgenHook
             ];
             buildInputs =
@@ -94,7 +106,6 @@
               ];
             LIBCLANG_PATH = "${lib.getLib pkgs.llvmPackages.libclang}/lib";
             GIT_HASH = self.shortRev or self.dirtyShortRev or "unknown";
-            RUSTFLAGS = "-C link-arg=-fuse-ld=${pkgs.mold}/bin/mold";
           }
           // lib.optionalAttrs useSystemRocksdb {
             ROCKSDB_LIB_DIR = "${pkgs.rocksdb}/lib";
@@ -258,11 +269,40 @@
               && lib.hasInfix "queueListen" a.message
             ) evalQueueListenWithDefaultSocket.config.assertions;
             pkgs.runCommand "splora-nixos-queue-listen-xor-socket" { } "echo ok > $out";
-          # Named proof that crane linked nixpkgs rocksdb and mold. Operators
-          # run this via `just check-remote` (`nix flake check`). Agents do
-          # not run that recipe. Laptop cargo without ROCKSDB_LIB_DIR still
-          # embeds bundled 10.4.2 and is not this proof. If it fails (liburing,
-          # header skew), set useSystemRocksdb = false and keep bundled 0.24.0.
+          # One-instance remote JSON-RPC: cookie path + rpc addr, no local
+          # bitcoind datadir. Dummy package; not a crane rebuild. Cookie
+          # bytes never appear in argv (path only).
+          evalRemoteJsonrpc = mkSploraEval {
+            instances = {
+              mainnet = {
+                network = "mainnet";
+                jsonrpcImport = true;
+                daemonRpcAddr = "10.0.0.1:8332";
+                cookieFile = "/run/bitcoind/.cookie";
+                daemonDir = null;
+              };
+            };
+          };
+          remoteStart = evalRemoteJsonrpc.config.systemd.services.splora-mainnet.serviceConfig.ExecStart;
+          remoteReadOnly = lib.toList evalRemoteJsonrpc.config.systemd.services.splora-mainnet.serviceConfig.ReadOnlyPaths;
+          remoteModuleText = builtins.readFile ./nix/module.nix;
+          nixosRemoteJsonrpcImport =
+            assert lib.hasInfix "--jsonrpc-import" remoteStart;
+            assert lib.hasInfix "--daemon-rpc-addr" remoteStart;
+            assert lib.hasInfix "10.0.0.1:8332" remoteStart;
+            assert lib.hasInfix "--cookie-file" remoteStart;
+            assert lib.hasInfix "/run/bitcoind/.cookie" remoteStart;
+            assert !(lib.hasInfix "--daemon-dir" remoteStart);
+            assert !(lib.any (p: p == "/var/lib/bitcoind") remoteReadOnly);
+            assert !(lib.hasInfix "/var/lib/bitcoind" (lib.concatStringsSep " " remoteReadOnly));
+            assert !(lib.hasInfix "--cookie " (" " + remoteStart + " "));
+            assert !(lib.hasInfix "USER:PASSWORD" remoteStart);
+            assert !(lib.hasInfix "USER:PASSWORD" remoteModuleText);
+            pkgs.runCommand "splora-nixos-remote-jsonrpc-import" { } "echo ok > $out";
+          # Named proof that crane linked nixpkgs rocksdb and mold when
+          # useSystemRocksdb is true. 2026-09-01 `just check-remote` failed
+          # in splora-deps on mold (`gcc: unrecognized -fuse-ld=` path).
+          # useSystemRocksdb is false; this check records bundled 0.24.0.
           rocksdbMoldLink =
             if built.useSystemRocksdb then
               pkgs.runCommand "splora-nixpkgs-rocksdb-mold" {
@@ -292,6 +332,7 @@
           nextest = built.nextest;
           inherit nixosFiveInstances;
           inherit nixosQueueListenXorSocket;
+          inherit nixosRemoteJsonrpcImport;
           inherit rocksdbMoldLink;
         }
       );

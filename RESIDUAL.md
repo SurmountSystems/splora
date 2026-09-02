@@ -13,9 +13,13 @@ stays `/var/lib/splora/allow-npubs`. Those review items are not leftover.
 The crate is named `splora`. Crane builds `splora` and `splora-liquid`.
 `.cargo/config.toml` rewrites crates.io to the Menhera 7-day sparse index
 for laptop `cargo`. Crane `src` omits that file and keeps `Cargo.lock`.
+Crane `src` is `lib.cleanSource` plus `filterCargoSources`, plus
+`flake.nix`, `nix/module.nix`, and `rust-toolchain`, so `src/config.rs`
+tests can `include_str!` those files. It still omits `.cargo/config.toml`.
 After vendor, `buildDepsOnly`, `buildPackage`, and nextest pass
 `--offline --locked`, so Nix does not query `index.crates.menhera.org`.
-That flake fix is in the tree. The operator re-runs `just check-remote`.
+That flake fix is in the tree. 2026-09-01 `just check-remote` after
+the include_str src union passed (`all checks passed!`).
 `cargo-deny.toml` allows the crates.io index URL that lockfiles still
 record after that rewrite. Fetch still uses Menhera. Unknown git sources
 are denied. Duplicate crate versions this tree cannot unify are skipped
@@ -49,6 +53,11 @@ vulnerabilities and 0 warnings. Those rustsec rows are not leftover.
 Authorization is two files. Pending queue is CSV `npub,email` with no status
 column (`src/queue.rs`, `tests/queue_csv.rs`). Approved allowlist is one npub
 per line. NIP-98 allowlist load, reload, and verify live in `src/auth.rs`.
+Named unit test `watch_reloads_listed_npub_without_calling_reload` starts
+`Allowlist::watch` on a temp file, writes a listed npub, and asserts
+`contains()` without the test calling `reload()`. Empty allowlist stays
+fail-closed. The wait is bounded at 3 seconds. That live inotify test is
+in the tree.
 That verifier caps the encoded `Authorization` payload before Base64
 allocates, then caps decoded JSON at 64 KiB (`MAX_NIP98_AUTH_EVENT_BYTES`,
 matching nostr 0.45.3 / RUSTSEC-2026-0229). Queue HTTP is the
@@ -78,10 +87,18 @@ notify are not the only path. Named test
 `handle_socket_track_addresses_fills_known_history` is green on that
 contract (fixture history; production fills from `Query`). Block notify
 emits confirmed txs for every new height after the previous tip (named
-test `notify_block_emits_confirmed_from_two_new_heights`). Dropped
-mempool txs keep a full object in `removed` when that body is still
-available (named tests `prefer_full_removed_uses_available_body_not_txid_stub`
-and `notify_mempool_removed_emits_full_object_when_available`).
+test `notify_block_emits_confirmed_from_two_new_heights`). A tip that
+moves to a different hash at the same or a lower height replays orphaned
+heights as `removed` then the new branch as `confirmed` via in-process
+`Query` (named test `notify_new_tip_reorg_emits_removed_then_confirmed`).
+Dropped mempool txs keep a full object in `removed` when the hub saw that
+tx on add, on subscribe fill, or when Query still has the body. `MwckHub`
+holds a capped txid-to-JSON map (`MAX_MEMPOOL_TX_BODIES`), uses cache then
+Query then `{txid}`, and drops the cache entry after emit. Named tests
+`prefer_full_removed_uses_available_body_not_txid_stub`,
+`notify_mempool_removed_emits_full_object_when_available`, and
+`notify_mempool_removed_emits_full_object_from_add_when_query_empty`.
+This slice does not snapshot the whole mempool on every loop.
 
 `ErrorKind::DaemonBusy` and `ErrorKind::DaemonUnavailable` exist.
 REST daemon-proxy paths map occupancy to HTTP 503 and a missing or
@@ -93,16 +110,30 @@ Electrum JSON-RPC stays JSON on the wire, not those HTTP statuses.
 `ReadWritePaths`, and an assertion that the queue directory is not the
 allowlist directory. Queue listen is `--socket-file` XOR `--bind`. Default
 listen is unix `/run/splora/queue.sock`. TCP needs `queueSocketFile =
-null`. `systemd.timers.splora-popular-scripts` and
+null`. Instance `daemonDir` is `nullOr str`. When `cookieFile` and
+`daemonRpcAddr` are set, `daemonDir` may be null: the unit omits
+`--daemon-dir` and omits a missing `/var/lib/bitcoind` from
+`ReadOnlyPaths`. Remote mode asserts cookie path plus rpc addr.
+`jsonrpcImport` default false passes `--jsonrpc-import` when true.
+`publicHealth` default false passes `--public-health`. Empty allowlist
+still 401s address, tx, and mempool REST. `dbBlockCacheMb` module
+default is 24 (same as CLI). REST does not require 4096. Optional
+instance `memoryMax` sets systemd `MemoryMax` when set; public sample
+leaves it unset. Cookie bytes never appear in the module.
+`systemd.timers.splora-popular-scripts` and
 `systemd.services.splora-popular-scripts` are in the module when
 `services.splora.popularScripts.enable` is set. The oneshot writes
 `/var/lib/splora/popular-scripts/popular-scripts.txt` and
-`ReadWritePaths` is that directory only. `flake.nix` exports
+`ReadWritePaths` is that directory only. Popular-scripts omits
+`--daemon-dir` when that instance has no datadir. `flake.nix` exports
 `nixosModules.splora`, `apps.popular-scripts`, overlays, the
-`nixosFiveInstances` eval check, `nixosQueueListenXorSocket` (default
-socket plus `queueListen` must fail the module assertion), and named
-check `rocksdbMoldLink` (`splora-nixpkgs-rocksdb-mold`). README matches
-the production argv (CLI versus module). There is no nginx in this tree.
+`nixosFiveInstances` eval check, `nixosRemoteJsonrpcImport` (one
+instance, remote JSON-RPC, no local datadir), `nixosQueueListenXorSocket`
+(default socket plus `queueListen` must fail the module assertion), and
+named check `rocksdbMoldLink` (`splora-nixpkgs-rocksdb-mold`). README
+matches the production argv (CLI versus module), including remote-node
+REST without Let's Encrypt, HTTP/3, hypervisor UDP 443, grok-oss, or
+queue-only enable. Queue is not REST. There is no nginx in this tree.
 Public TLS, HTTP/2, HTTP/3, and cipher suites belong on the first-party
 Axum edge in surmount-server. splora on the unix socket is local
 cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket. The README
@@ -117,30 +148,31 @@ Repo-root [FORK.md](FORK.md) names lineage, the Mempool schema lock, Blockstream
 
 ### Operator-owned gates
 
-The operator must run `just check-local` and then `just check-remote`.
+The operator still owns `just check-local` (fmt, clippy, deny, audit).
 The crane Menhera DNS miss (`Could not resolve host:
 index.crates.menhera.org` on `splora-deps-3.4.0-dev` after vendor) is
-fixed in `flake.nix`. Agents did not run `just check-remote`.
-This deny-hygiene wave ran `cargo check --lib` (exit 0),
+fixed in `flake.nix`. 2026-09-01 `just check-remote` run 3 after the
+include_str src union exited 0: `all checks passed!` Nix omitted
+aarch64-linux. This deny-hygiene wave ran `cargo check --lib` (exit 0),
 `cargo check --lib --features liquid` (exit 0), named `--lib` tests
 `new_index::mempool::tests` (exit 0), `cargo fmt --all --check` (exit
 0), and `cargo deny --offline --locked check --config cargo-deny.toml`
 (exit 0, no unmatched-source, license-not-encountered, or SPDX
-parse-error). Agents did not prove crate-wide clippy, nextest, or
-`nix flake check` on this laptop. Named unit tests are not a substitute
-for those two recipes.
+parse-error). Named unit tests are not a substitute for `just
+check-local`.
 
-The flake sets `useSystemRocksdb = true` and bindgen against nixpkgs
-headers (rocksdb 10.10.1, SONAME `librocksdb.so.10`). The crate vendor
-stays `librocksdb-sys` 0.17.3+10.4.2. Named check `rocksdbMoldLink`
-(`splora-nixpkgs-rocksdb-mold`) requires both crane binaries to `NEEDED`
-`librocksdb` and show mold in `.comment`. Agents did not run
-`just check-remote`. The system RocksDB plus mold link is therefore
-unproven on the builder. A laptop `cargo` ELF with `ROCKSDB_*` from
-nixpkgs did `NEEDED` `librocksdb.so.10`; that ELF `.comment` is Wild
-0.10.0, not mold, and is not the crane check. The bundled `rocksdb`
-0.24.0 fallback, and how to set `useSystemRocksdb = false`, is in
+The flake sets `useSystemRocksdb = false`. Crane uses bundled `rocksdb`
+0.24.0 (`librocksdb-sys` 0.17.3+10.4.2). 2026-09-01 `just check-remote`
+did not query Menhera. Run 1 `splora-deps` failed because gcc rejected
+`-fuse-ld=` plus the mold store path. Named check `rocksdbMoldLink`
+is `splora-bundled-rocksdb` and does not run `readelf` (`NEEDED
+librocksdb` / mold `.comment` unproven). That is a mold fail, not
+builder DNS. Mold does not still link, so `RUSTFLAGS` mold and the
+`mold` native input are dropped. How the fallback works is in
 `doc/supply-chain.md`.
+The `include_str!` nextest compile miss is fixed in `flake.nix`.
+`packaging_pins_rust_198_edition_2024_and_system_rocksdb` now asserts
+`useSystemRocksdb = false` and the bundled 0.24.0 stub string.
 
 Nix flakes only see git-tracked files. `flake.nix`, `flake.lock`,
 `nix/module.nix`, and other new packaging files stay invisible to
@@ -150,13 +182,16 @@ those files.
 ### HTTP/2 and HTTP/3 (other tree)
 
 HTTP/2 and HTTP/3 are not served on the splora unix socket. They
-terminate on surmount-server Axum (`sploraProxy`, `http3Enable`). This
+terminate on first-party Axum in surmount-server: TCP ALPN `h2` plus
+HTTP/1.1, and UDP QUIC ALPN `h3` (`sploraProxy`, `http3Enable`). This
 crate's unix sockets stay local cleartext HTTP/1.1. QUIC cannot sit on a
-Unix domain socket. Integration already started in that other tree:
-`SURMOUNT_SPLORA_*`, instance names, and a refuse of Electrum newline
-sockets on the HTTP proxy. Remaining work, if any, is operator enable of
-that proxy on the edge host, not nginx or HTTP/2 inside this crate. This
-session did not edit surmount-server. Do not add nginx here.
+Unix domain socket. On surmount-1, `surmount.sploraProxy` is already
+enabled. `http3Enable` stays true. Module `httpSocketFile` already
+defaults to `/run/splora/${name}.http.sock`; do not change that default
+to TCP. The edge must proxy HTTP only to that path, not to
+`/run/splora/${name}.electrum.sock`. This session did not edit
+surmount-server. Do not add nginx here. README and [FORK.md](FORK.md)
+section 5 state that contract.
 
 ### Agent-doable leftover
 
@@ -171,43 +206,43 @@ wave (base64 0.22, itertools 0.13, socket2 0.5, notify 8.2.0, mempool
 capped VecDeque) is also in the tree. This wave ran the named `--lib`
 tests (clap HTTP-wire help without an `--allow-npubs` list flag, HTTP/1
 header-read timeout, historical 56-byte `bincode_settings`, oversized
-NIP-98 caps, mempool recent-queue cap eviction). That is not crate-wide
-nextest. The operator still owns `just check-local` and
-`just check-remote`.
+NIP-98 caps, mempool recent-queue cap eviction). `just check-remote`
+run 3 on 2026-09-01 ran crate-wide nextest and passed. The operator
+still owns `just check-local`.
 
 The CSV two-file queue, unix-socket defaults, queue XOR bind, queue
 mutex, popular-scripts timer and isolated output dir, live hyper WS
 101 fixture, MWCK subscribe fill from `Query` on first track, REST
-503/504 on daemon-proxy paths, named `rocksdbMoldLink` check (unproven
-on the builder), README CLI versus module, no nginx, and the
+503/504 on daemon-proxy paths, named `rocksdbMoldLink` check (fallback:
+`useSystemRocksdb = false` after mold gcc reject on 2026-09-01), README CLI versus module, no nginx, and the
 surmount-server socket contract are already in this tree.
 
 `nixosFiveInstances` now requires the default queue unit to carry
 `--socket-file` `/run/splora/queue.sock` and to omit TCP `--bind`. That
-matches `nix/module.nix`. Operator still owns `nix flake check`.
+matches `nix/module.nix`. `nixosRemoteJsonrpcImport` requires one
+instance with `jsonrpcImport = true`, `daemonRpcAddr = "10.0.0.1:8332"`,
+`cookieFile = "/run/bitcoind/.cookie"`, and `daemonDir = null`. ExecStart
+must contain `--jsonrpc-import`, `--daemon-rpc-addr`, and `--cookie-file`.
+ReadOnlyPaths must not list `/var/lib/bitcoind`. Cookie `USER:PASSWORD`
+bytes must not appear in argv or the module source. Operator still owns
+`nix flake check`. The cheap remote-JSON-RPC eval was observed green
+without a crane rebuild. That is not crate-wide `just check-remote`.
 
-Named flake check `rocksdbMoldLink` is in the tree. The operator still
-has to prove it with `just check-remote` after those flake files are
-tracked. If that link fails, set `useSystemRocksdb = false` and keep
-bundled 0.24.0.
+Named flake check `rocksdbMoldLink` now records bundled 0.24.0 because
+`useSystemRocksdb` is false. Do not flip it back to true until crane
+on the builder links `NEEDED librocksdb` with a linker gcc accepts.
 
 ### Sibling product paths still unfixed
 
-Block notify walks heights after the previous tip. It does not emit a
-full reorg replay of orphaned blocks. A tip that moves backward is a
-no-op. That would need indexer reorg replay, which this slice did not
-do.
-
-Removed mempool transactions that are gone from both mempool and chain
-are still notified as `{txid}` only. Full objects are used when the tx
-is still on chain or in fixture history. This slice does not snapshot
-the whole mempool on every loop to keep evicted bodies.
+MWCK reorg replay is in the tree. `notify_new_tip` is not a no-op when
+the new height is lower or equal and the tip hash changed. Orphaned
+heights emit `removed`, then the new branch emits `confirmed`.
 
 Each RocksDB open gets its own LRU block cache. There is not one shared
 cache across txstore, history, and cache. Sharing would need `schema.rs`.
 
-Allowlist tests call `reload()` after a file write. There is no live
-inotify integration test of `Allowlist::watch`.
+`Allowlist::watch` has a live inotify unit test in `src/auth.rs`
+(`watch_reloads_listed_npub_without_calling_reload`). That is not leftover.
 
 `pkgs.nixosTest` was not added. The cheap `nixosFiveInstances` eval does
 not boot five indexers and does not prove approve-then-HTTP-without-restart
@@ -215,11 +250,21 @@ on a VM.
 
 ## Highest value next
 
-The operator still owns `just check-local` then `just check-remote` after
-the flake files are staged. Agents do not run those recipes as crate-wide
-proof on this laptop. The next proof on the builder is named check
-`rocksdbMoldLink` (crane `NEEDED librocksdb` plus mold in `.comment`).
-A laptop Wild-linked `librocksdb.so.10` ELF is not that proof.
+`just check-remote` on 2026-09-01 run 1 failed in `splora-deps` on mold,
+not Menhera DNS. After `useSystemRocksdb = false` and dropping mold
+`RUSTFLAGS`, run 2 built `splora-bundled-rocksdb` (text
+`useSystemRocksdb is false; bundled rocksdb 0.24.0`) and copied
+`splora-deps` from the builder. Run 2 then failed nextest (exit 101)
+because crane `cleanCargoSource` omitted `flake.nix`, `nix/module.nix`,
+and `rust-toolchain`. That filter hole is closed in `flake.nix`: crane
+`src` unions those three paths onto `filterCargoSources` and still omits
+`.cargo/config.toml`. `cargoExtraArgs` stays `--offline --locked`.
+Run 3 (`just check-remote`) exited 0 with `all checks passed!` and
+`checks.x86_64-linux.rocksdbMoldLink` still `splora-bundled-rocksdb`.
+`useSystemRocksdb` stays false. A laptop Wild-linked
+`librocksdb.so.10` ELF is not a crane proof.
+Evicted mempool txs the hub saw on add keep a full object in `removed`.
+That slice is in the tree, not leftover.
 
 The clap 4 rewrite, the serde-wincode on-disk codec, and nostr 0.45.3
 NIP-98 types are in the tree. Do not treat those rustsec rows as a
@@ -230,7 +275,7 @@ surmount-server `sploraProxy` (and HTTPS `http3Enable`) on that other
 tree. Do not add nginx or HTTP/2 in this crate. This session did not
 edit surmount-server.
 
-Parked sibling gaps on this tree (not the next proof) are full MWCK
-reorg replay, evicted mempool txs that are gone from chain staying
-`{txid}` only, shared LRU, a live inotify watch test, and a `nixosTest`
-VM.
+Parked sibling gaps on this tree (not the next proof) are a shared LRU
+block cache and a `nixosTest` VM. Full MWCK reorg replay is in the tree.
+Evicted mempool txs the hub saw on add keep a full object in `removed`.
+The live inotify allowlist watch test is in the tree.

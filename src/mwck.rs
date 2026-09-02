@@ -14,17 +14,35 @@
 //! upgrade, that pubkey owns the connection.
 
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::auth::Allowlist;
-use crate::chain::{Network, Script};
+use crate::chain::{BlockHash, Network, Script};
 use crate::new_index::{Query, compute_script_hash};
+
+/// Safety bound on mempool tx JSON kept for later `{txid}`-only drops.
+/// Populated on add and subscribe fill, not by scanning the whole mempool.
+const MAX_MEMPOOL_TX_BODIES: usize = 65_536;
+
+#[derive(Default)]
+struct MempoolTxBodies {
+    by_txid: HashMap<String, Value>,
+    order: VecDeque<String>,
+}
 
 struct HubClient {
     state: ClientState,
     out: Option<UnboundedSender<Value>>,
+}
+
+/// One indexed height last emitted as confirmed. Used to replay orphaned
+/// txs after Query has already moved to the new tip.
+#[derive(Clone)]
+struct TipBlock {
+    hash: BlockHash,
+    txs: Vec<Value>,
 }
 
 /// Per-key buckets that [`emit_multi`] fills for MWCK multi-* events.
@@ -62,6 +80,15 @@ pub struct MwckHub {
     /// `track-scriptpubkeys` string. Production fills from [`Query`].
     #[cfg(test)]
     test_history: Option<BTreeMap<String, TxBuckets>>,
+    /// Heights last emitted as confirmed, keyed by height. Reorg replay
+    /// compares these hashes to the current [`Query`] (or test) chain.
+    recent_confirmed: Mutex<BTreeMap<usize, TipBlock>>,
+    /// Test-only stand-in for [`Query`] `hash_by_height` / `get_block_txs`.
+    #[cfg(test)]
+    test_blocks: Mutex<BTreeMap<usize, TipBlock>>,
+    /// Full JSON for mempool txs this hub has seen, keyed by txid. Used when a
+    /// later drop is `{txid}` only and Query no longer has the body.
+    mempool_tx_bodies: Mutex<MempoolTxBodies>,
 }
 
 impl MwckHub {
@@ -72,6 +99,10 @@ impl MwckHub {
             next_id: Mutex::new(1),
             #[cfg(test)]
             test_history: None,
+            recent_confirmed: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            test_blocks: Mutex::new(BTreeMap::new()),
+            mempool_tx_bodies: Mutex::new(MempoolTxBodies::default()),
         })
     }
 
@@ -84,6 +115,9 @@ impl MwckHub {
             clients: Mutex::new(BTreeMap::new()),
             next_id: Mutex::new(1),
             test_history: None,
+            recent_confirmed: Mutex::new(BTreeMap::new()),
+            test_blocks: Mutex::new(BTreeMap::new()),
+            mempool_tx_bodies: Mutex::new(MempoolTxBodies::default()),
         })
     }
 
@@ -96,6 +130,9 @@ impl MwckHub {
             clients: Mutex::new(BTreeMap::new()),
             next_id: Mutex::new(1),
             test_history: Some(history),
+            recent_confirmed: Mutex::new(BTreeMap::new()),
+            test_blocks: Mutex::new(BTreeMap::new()),
+            mempool_tx_bodies: Mutex::new(MempoolTxBodies::default()),
         })
     }
 
@@ -137,6 +174,7 @@ impl MwckHub {
     }
 
     pub fn notify_mempool(&self, added: &[Value], removed: &[Value]) {
+        self.remember_mempool_bodies(added);
         let removed = self.enrich_removed(removed);
         let pending: Vec<(Option<UnboundedSender<Value>>, Value)> = {
             let clients = self.clients.lock().expect("mwck clients");
@@ -180,28 +218,131 @@ impl MwckHub {
         }
     }
 
-    /// Walk chain heights `(prev_height, new_height]` and emit confirmed txs.
-    /// No-op without [`Query`]. Reorgs that lower the tip are leftover.
+    /// Walk chain heights via in-process [`Query`] (or a test chain).
+    /// Orphaned heights are emitted as `removed`, then the new branch as
+    /// `confirmed`. A lower or equal new height is not a no-op when the tip
+    /// hash changed. Does not HTTP self-poll.
     pub fn notify_new_tip(&self, prev_height: usize, new_height: usize) {
-        let Some(query) = self.query.as_ref() else {
-            return;
-        };
-        if new_height <= prev_height {
+        if !self.has_block_source() {
             return;
         }
-        let chain = query.chain();
-        let config = query.config();
-        let mut blocks = Vec::new();
-        for height in prev_height.saturating_add(1)..=new_height {
-            if let Some(hash) = chain.hash_by_height(height)
-                && let Some(txs) = chain.get_block_txs(&hash)
-            {
-                let blockid = chain.blockid_by_hash(&hash);
-                let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
-                blocks.push(crate::rest::transactions_as_json(pairs, query, config));
+
+        let mut orphaned = Vec::new();
+        let mut replacements = BTreeMap::new();
+        {
+            let mut recent = self.recent_confirmed.lock().expect("mwck recent");
+            let stale: Vec<usize> = recent
+                .iter()
+                .filter_map(|(&h, old)| match self.block_at(h) {
+                    Some(cur) if cur.hash == old.hash => None,
+                    _ => Some(h),
+                })
+                .collect();
+            for h in stale {
+                if let Some(old) = recent.remove(&h) {
+                    orphaned.extend(old.txs);
+                }
+                if let Some(cur) = self.block_at(h) {
+                    replacements.insert(h, cur);
+                }
             }
         }
-        self.notify_blocks(&blocks);
+
+        let mut forward = Vec::new();
+        if new_height > prev_height {
+            let recent = self.recent_confirmed.lock().expect("mwck recent");
+            for h in prev_height.saturating_add(1)..=new_height {
+                if recent.contains_key(&h) || replacements.contains_key(&h) {
+                    continue;
+                }
+                if let Some(cur) = self.block_at(h) {
+                    forward.push((h, cur));
+                }
+            }
+        }
+
+        if !orphaned.is_empty() {
+            self.notify_mempool(&[], &orphaned);
+        }
+
+        let mut confirmed_blocks = Vec::new();
+        let mut to_store = Vec::new();
+        for (h, block) in replacements {
+            if !block.txs.is_empty() {
+                confirmed_blocks.push(block.txs.clone());
+            }
+            to_store.push((h, block));
+        }
+        for (h, block) in forward {
+            if !block.txs.is_empty() {
+                confirmed_blocks.push(block.txs.clone());
+            }
+            to_store.push((h, block));
+        }
+        self.notify_blocks(&confirmed_blocks);
+
+        let mut recent = self.recent_confirmed.lock().expect("mwck recent");
+        for (h, block) in to_store {
+            recent.insert(h, block);
+        }
+        let keep_from = new_height.saturating_sub(16);
+        recent.retain(|&h, _| h >= keep_from);
+    }
+
+    fn has_block_source(&self) -> bool {
+        if self.query.is_some() {
+            return true;
+        }
+        #[cfg(test)]
+        {
+            !self
+                .test_blocks
+                .lock()
+                .expect("mwck test_blocks")
+                .is_empty()
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
+    fn block_at(&self, height: usize) -> Option<TipBlock> {
+        #[cfg(test)]
+        {
+            let test = self.test_blocks.lock().expect("mwck test_blocks");
+            if !test.is_empty() {
+                return test.get(&height).cloned();
+            }
+        }
+        let query = self.query.as_ref()?;
+        let chain = query.chain();
+        let hash = chain.hash_by_height(height)?;
+        let txs = match chain.get_block_txs(&hash) {
+            Some(txs) => {
+                let blockid = chain.blockid_by_hash(&hash);
+                let pairs = txs.into_iter().map(|tx| (tx, blockid.clone())).collect();
+                crate::rest::transactions_as_json(pairs, query, query.config())
+            }
+            None => Vec::new(),
+        };
+        Some(TipBlock { hash, txs })
+    }
+
+    #[cfg(test)]
+    pub fn set_test_block(&self, height: usize, hash: BlockHash, txs: Vec<Value>) {
+        self.test_blocks
+            .lock()
+            .expect("mwck test_blocks")
+            .insert(height, TipBlock { hash, txs });
+    }
+
+    #[cfg(test)]
+    pub fn remember_confirmed_for_test(&self, height: usize, hash: BlockHash, txs: Vec<Value>) {
+        self.recent_confirmed
+            .lock()
+            .expect("mwck recent")
+            .insert(height, TipBlock { hash, txs });
     }
 
     /// Apply one client JSON message. REST must not call this unless the
@@ -229,6 +370,7 @@ impl MwckHub {
         {
             for (orig, canon) in &state.track_addresses {
                 let buckets = self.snapshot_for(orig, Some(canon));
+                self.remember_mempool_bodies(&buckets.mempool);
                 if let Ok(v) = serde_json::to_value(&buckets) {
                     obj.insert(orig.clone(), v);
                 }
@@ -240,6 +382,7 @@ impl MwckHub {
         {
             for spk in &state.track_scriptpubkeys {
                 let buckets = self.snapshot_for(spk, None);
+                self.remember_mempool_bodies(&buckets.mempool);
                 if let Ok(v) = serde_json::to_value(&buckets) {
                     obj.insert(spk.clone(), v);
                 }
@@ -269,8 +412,47 @@ impl MwckHub {
         }
     }
 
+    fn remember_mempool_bodies(&self, txs: &[Value]) {
+        let mut cache = self.mempool_tx_bodies.lock().expect("mwck mempool bodies");
+        for tx in txs {
+            remember_mempool_body(&mut cache, tx);
+        }
+    }
+
     fn enrich_removed(&self, removed: &[Value]) -> Vec<Value> {
-        let mut available = self.available_tx_bodies();
+        let mut available = BTreeMap::new();
+        {
+            let cache = self.mempool_tx_bodies.lock().expect("mwck mempool bodies");
+            for v in removed {
+                if is_full_tx_object(v) {
+                    continue;
+                }
+                let Some(txid_s) = v.get("txid").and_then(|t| t.as_str()) else {
+                    continue;
+                };
+                if let Some(full) = cache.by_txid.get(txid_s) {
+                    available.insert(txid_s.to_string(), full.clone());
+                }
+            }
+        }
+        #[cfg(test)]
+        {
+            let history = self.available_tx_bodies();
+            for v in removed {
+                if is_full_tx_object(v) {
+                    continue;
+                }
+                let Some(txid_s) = v.get("txid").and_then(|t| t.as_str()) else {
+                    continue;
+                };
+                if available.contains_key(txid_s) {
+                    continue;
+                }
+                if let Some(full) = history.get(txid_s) {
+                    available.insert(txid_s.to_string(), full.clone());
+                }
+            }
+        }
         if let Some(query) = &self.query {
             for v in removed {
                 if is_full_tx_object(v) {
@@ -293,34 +475,34 @@ impl MwckHub {
                 }
             }
         }
-        prefer_full_removed(removed, &available)
+        let out = prefer_full_removed(removed, &available);
+        let mut cache = self.mempool_tx_bodies.lock().expect("mwck mempool bodies");
+        for v in removed {
+            if let Some(txid) = v.get("txid").and_then(|t| t.as_str()) {
+                cache.by_txid.remove(txid);
+            }
+        }
+        out
     }
 
+    #[cfg(test)]
     fn available_tx_bodies(&self) -> BTreeMap<String, Value> {
-        #[cfg(not(test))]
-        {
-            let _ = self;
-            BTreeMap::new()
-        }
-        #[cfg(test)]
-        {
-            let mut map = BTreeMap::new();
-            if let Some(history) = &self.test_history {
-                for buckets in history.values() {
-                    for tx in buckets
-                        .mempool
-                        .iter()
-                        .chain(buckets.confirmed.iter())
-                        .chain(buckets.removed.iter())
-                    {
-                        if let Some(txid) = tx.get("txid").and_then(|t| t.as_str()) {
-                            map.entry(txid.to_string()).or_insert_with(|| tx.clone());
-                        }
+        let mut map = BTreeMap::new();
+        if let Some(history) = &self.test_history {
+            for buckets in history.values() {
+                for tx in buckets
+                    .mempool
+                    .iter()
+                    .chain(buckets.confirmed.iter())
+                    .chain(buckets.removed.iter())
+                {
+                    if let Some(txid) = tx.get("txid").and_then(|t| t.as_str()) {
+                        map.entry(txid.to_string()).or_insert_with(|| tx.clone());
                     }
                 }
             }
-            map
         }
+        map
     }
 }
 
@@ -476,6 +658,27 @@ pub fn prefer_full_removed(removed: &[Value], available: &BTreeMap<String, Value
 
 fn is_full_tx_object(v: &Value) -> bool {
     v.get("vin").is_some() || v.get("vout").is_some()
+}
+
+fn remember_mempool_body(cache: &mut MempoolTxBodies, tx: &Value) {
+    if !is_full_tx_object(tx) {
+        return;
+    }
+    let Some(txid) = tx.get("txid").and_then(|t| t.as_str()) else {
+        return;
+    };
+    if cache.by_txid.contains_key(txid) {
+        cache.by_txid.insert(txid.to_string(), tx.clone());
+        return;
+    }
+    while cache.by_txid.len() >= MAX_MEMPOOL_TX_BODIES {
+        let Some(old) = cache.order.pop_front() else {
+            break;
+        };
+        cache.by_txid.remove(&old);
+    }
+    cache.order.push_back(txid.to_string());
+    cache.by_txid.insert(txid.to_string(), tx.clone());
 }
 
 /// Pure JSON state machine. No network. Tests call this directly.
@@ -1164,6 +1367,41 @@ mod tests {
         );
     }
 
+    /// Named contract: a mempool drop notified as `{txid}` only still emits a
+    /// full object when the hub saw that tx on add, even if Query/chain no
+    /// longer have it. Handshake fixture has no Query.
+    #[test]
+    fn notify_mempool_removed_emits_full_object_from_add_when_query_empty() {
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let hub = MwckHub::handshake_fixture();
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        let id = hub.register_socket(out_tx);
+        hub.set_client_state(id, state);
+        let full = sample_tx_for(genesis_addr());
+        let txid = full["txid"].as_str().expect("txid").to_string();
+        hub.notify_mempool(&[full.clone()], &[]);
+        let added_ev = out_rx.try_recv().expect("added notify");
+        assert_eq!(
+            added_ev["multi-address-transactions"][genesis_addr()]["mempool"]
+                .as_array()
+                .expect("mempool array")
+                .len(),
+            1
+        );
+        hub.notify_mempool(&[], &[json!({ "txid": txid })]);
+        let ev = out_rx.try_recv().expect("removed notify");
+        let removed = ev["multi-address-transactions"][genesis_addr()]["removed"]
+            .as_array()
+            .expect("removed array");
+        assert_eq!(removed.len(), 1);
+        assert!(
+            removed[0].get("vout").is_some(),
+            "dropped tx the hub saw on add must be a full object when Query is empty"
+        );
+        assert_eq!(removed[0]["txid"], full["txid"]);
+    }
+
     /// Named contract: when the tip moves more than one height, confirmed
     /// txs from every new height are emitted (not only the last height).
     #[test]
@@ -1202,5 +1440,63 @@ mod tests {
             2,
             "tip jump of two heights must include confirmed txs from both heights"
         );
+    }
+
+    fn test_block_hash(n: u8) -> BlockHash {
+        use crate::chain::hashes::Hash;
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        BlockHash::from_raw_hash(crate::chain::hashes::sha256d::Hash::from_byte_array(bytes))
+    }
+
+    fn tracked_tx(txid_byte: &str, height: u64) -> Value {
+        json!({
+            "txid": txid_byte.repeat(32),
+            "status": { "block_height": height },
+            "vin": [],
+            "vout": [{
+                "scriptpubkey": "76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac",
+                "scriptpubkey_address": genesis_addr(),
+            }]
+        })
+    }
+
+    /// Named contract: when the tip moves to a different hash at the same
+    /// height, clients see removed for the old-tip txs then confirmed for
+    /// the new branch. A lower or equal new height is not a no-op.
+    #[test]
+    fn notify_new_tip_reorg_emits_removed_then_confirmed() {
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let hub = MwckHub::handshake_fixture();
+        let mut state = ClientState::default();
+        let _ = handle_client_json(&mut state, json!({ "track-addresses": [genesis_addr()] }));
+        let id = hub.register_socket(out_tx);
+        hub.set_client_state(id, state);
+
+        let old_tx = tracked_tx("aa", 10);
+        let new_tx = tracked_tx("dd", 10);
+        let old_hash = test_block_hash(1);
+        let new_hash = test_block_hash(2);
+        hub.remember_confirmed_for_test(10, old_hash, vec![old_tx.clone()]);
+        hub.set_test_block(10, new_hash, vec![new_tx.clone()]);
+        hub.notify_new_tip(10, 10);
+
+        let removed_ev = out_rx
+            .try_recv()
+            .expect("reorg must emit removed for old-tip txs");
+        let removed = removed_ev["multi-address-transactions"][genesis_addr()]["removed"]
+            .as_array()
+            .expect("removed");
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0]["txid"], old_tx["txid"]);
+
+        let confirmed_ev = out_rx
+            .try_recv()
+            .expect("reorg must then emit confirmed for the new branch");
+        let confirmed = confirmed_ev["multi-address-transactions"][genesis_addr()]["confirmed"]
+            .as_array()
+            .expect("confirmed");
+        assert_eq!(confirmed.len(), 1);
+        assert_eq!(confirmed[0]["txid"], new_tx["txid"]);
     }
 }

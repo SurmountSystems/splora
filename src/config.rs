@@ -870,8 +870,8 @@ mod tests {
         assert!(src.contains("!(lib.hasInfix \"--bind\" queueStart)"));
     }
 
-    /// Named contract: rustc 1.98, edition 2024, and the flake still links
-    /// one nixpkgs RocksDB (bindgen against those headers). CLI cache stays 24.
+    /// Named contract: rustc 1.98, edition 2024. System RocksDB stays
+    /// off until the builder links NEEDED librocksdb. CLI cache stays 24.
     #[test]
     fn packaging_pins_rust_198_edition_2024_and_system_rocksdb() {
         let toolchain = include_str!("../rust-toolchain");
@@ -895,16 +895,30 @@ mod tests {
             "flake.nix must use rust-overlay stable 1.98.0"
         );
         assert!(
-            flake.contains("useSystemRocksdb = true"),
-            "do not leave useSystemRocksdb as a lie; keep system RocksDB"
+            flake.contains("useSystemRocksdb = false"),
+            "do not claim system RocksDB while the builder still rejects mold"
+        );
+        assert!(
+            !flake.contains("useSystemRocksdb = true"),
+            "do not leave useSystemRocksdb = true while bundled rocksdb is the fallback"
+        );
+        assert!(
+            flake.contains("useSystemRocksdb is false; bundled rocksdb 0.24.0"),
+            "rocksdbMoldLink stub must record bundled 0.24.0"
+        );
+        assert!(
+            flake.contains("isMenheraCargoConfig")
+                && flake.contains("isIncludeStrPackaging")
+                && flake.contains("filterCargoSources"),
+            "crane src must keep include_str packaging files and omit Menhera config"
         );
         assert!(
             flake.contains("readelf -d \"$bin\"") && flake.contains("NEEDED.*librocksdb"),
-            "rocksdbMoldLink must inspect ELF NEEDED librocksdb"
+            "rocksdbMoldLink must inspect ELF NEEDED librocksdb when system rocksdb is on"
         );
         assert!(
             flake.contains("readelf -p .comment") && flake.contains("grep -qi mold"),
-            "rocksdbMoldLink must inspect mold in .comment on both packages"
+            "rocksdbMoldLink must inspect mold in .comment on both packages when system rocksdb is on"
         );
         assert!(flake.contains("check_bin ${built.splora}/bin/splora"));
         assert!(flake.contains("check_bin ${built.splora-liquid}/bin/splora"));
@@ -919,10 +933,11 @@ mod tests {
         );
     }
 
-    /// Named contract: CLI cache default stays 24. The module default is
-    /// 4096 and indexer argv still passes `--db-block-cache-mb`.
+    /// Named contract: CLI cache default stays 24. The module default
+    /// matches that 24 unless the operator sets more. REST does not
+    /// require 4096. Indexer argv still passes `--db-block-cache-mb`.
     #[test]
-    fn cli_db_block_cache_default_24_module_4096() {
+    fn cli_db_block_cache_default_24_module_24() {
         let help = clap_long_help();
         assert!(help.contains("CLI default 24"));
         let parsed = super::Config::indexer_clap_app()
@@ -936,9 +951,38 @@ mod tests {
         );
         let module = include_str!("../nix/module.nix");
         assert!(module.contains("dbBlockCacheMb"));
-        assert!(module.contains("default = 4096"));
+        assert!(module.contains("default = 24"));
+        assert!(!module.contains("default = 4096"));
         assert!(module.contains("\"--db-block-cache-mb\""));
         assert!(module.contains("(toString inst.dbBlockCacheMb)"));
+    }
+
+    /// Named contract: remote JSON-RPC omits --daemon-dir, passes
+    /// --jsonrpc-import, cookie path only, never cookie bytes.
+    #[test]
+    fn nixos_remote_jsonrpc_import_omits_local_datadir() {
+        let module = include_str!("../nix/module.nix");
+        let flake = include_str!("../flake.nix");
+        assert!(module.contains("jsonrpcImport"));
+        assert!(module.contains("\"--jsonrpc-import\""));
+        assert!(module.contains("publicHealth"));
+        assert!(module.contains("\"--public-health\""));
+        assert!(module.contains("types.nullOr types.str"));
+        assert!(
+            module.contains("remote mode (daemonDir = null) requires cookieFile and daemonRpcAddr")
+        );
+        assert!(module.contains("optionals (inst.daemonDir != null)"));
+        assert!(module.contains("optional (inst.daemonDir != null) inst.daemonDir"));
+        assert!(module.contains("--cookie-file"));
+        assert!(!module.contains("USER:PASSWORD"));
+        assert!(flake.contains("nixosRemoteJsonrpcImport"));
+        assert!(flake.contains("jsonrpcImport = true"));
+        assert!(flake.contains("daemonRpcAddr = \"10.0.0.1:8332\""));
+        assert!(flake.contains("cookieFile = \"/run/bitcoind/.cookie\""));
+        assert!(flake.contains("daemonDir = null"));
+        assert!(flake.contains("!(lib.hasInfix \"--daemon-dir\" remoteStart)"));
+        assert!(flake.contains("!(lib.any (p: p == \"/var/lib/bitcoind\") remoteReadOnly)"));
+        assert!(flake.contains("!(lib.hasInfix \"USER:PASSWORD\" remoteStart)"));
     }
 
     /// Named contract: queue TCP plus the default unix socket must fail

@@ -611,4 +611,50 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, AuthError::BadEncoding);
     }
+
+    /// Live inotify: `Allowlist::watch` must reload a listed npub without the
+    /// test calling `reload()`. Empty file stays fail-closed. If the watcher
+    /// cannot start, skip with a named reason (do not assert success).
+    #[test]
+    fn watch_reloads_listed_npub_without_calling_reload() {
+        let keys = Keys::generate();
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_allowlist(&dir, &[]);
+        let allow = Allowlist::load(&path).unwrap();
+        let pk = pubkey32(&keys);
+        assert!(
+            !allow.contains(&pk),
+            "empty allowlist must stay fail-closed before watch"
+        );
+
+        let _watch = match Arc::clone(&allow).watch() {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!(
+                    "SKIP watch_reloads_listed_npub_without_calling_reload: inotify/watch cannot run: {e}"
+                );
+                return;
+            }
+        };
+
+        assert!(
+            !allow.contains(&pk),
+            "empty allowlist must stay fail-closed after watch starts"
+        );
+
+        fs::write(&path, format!("{}\n", npub_of(&keys))).unwrap();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if allow.contains(&pk) {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!(
+                    "Allowlist::watch did not load listed npub within 3s (test did not call reload())"
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
 }

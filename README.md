@@ -22,15 +22,15 @@ Light mode stays off unless you pass `--lightmode`. Do not pass it for this depl
 
 | Setting | CLI default (no flags) | NixOS production module |
 | --- | --- | --- |
-| HTTP | TCP `127.0.0.1` plus the per-network port, or `--http-socket-file` if set | Unix socket `/run/splora/<instance>.http.sock`. TCP only if you set instance `httpAddr` and `httpSocketFile = null`. |
-| Electrum | No TCP bind. Unix socket if `--rpc-socket-file`. Else `POST /electrum` only | Unix socket `/run/splora/<instance>.electrum.sock` plus `POST /electrum` on the HTTP socket |
+| HTTP | TCP `127.0.0.1` plus the per-network port, or `--http-socket-file` if set | Unix socket `/run/splora/<instance>.http.sock` (`httpSocketFile` already defaults to that path). Do not change that module default to TCP. TCP only if you set instance `httpAddr` and `httpSocketFile = null`. |
+| Electrum | No TCP bind. Unix socket if `--rpc-socket-file`. Else `POST /electrum` only | Unix socket `/run/splora/<instance>.electrum.sock` (`electrumSocketFile`) plus `POST /electrum` on the HTTP socket. The edge must not point at the Electrum socket. |
 | Queue | `splora-queue --bind` or `--socket-file`, not both | Own unit. Prefer `/run/splora/queue.sock` via `--socket-file`. TCP is `queueListen` with `queueSocketFile = null`. Not on indexer `ExecStart`. |
-| `--db-block-cache-mb` | **24** per DB | **4096** per instance |
+| `--db-block-cache-mb` | **24** per DB | **24** per instance (same as CLI). Set more on the instance if you want a larger cache. REST does not require 4096. |
 | `--db-parallelism` | **2** | **32** |
 | `--lightmode` | off unless passed | off |
 | Allowlist path | omitted means empty snapshot (nobody) | `--allow-npubs-file` one shared path |
 
-Five instances times three DBs times 4096 MiB is about 60 GB of RocksDB cache on a large box. That is an operator choice for the module, not a change to the CLI default.
+The module default for `--db-block-cache-mb` follows the CLI (24). A larger cache is an operator choice, not a REST requirement.
 
 ## Allowlist, queue, and import CLI
 
@@ -55,7 +55,11 @@ The queue file must live in its own directory so the queue unit `ReadWritePaths`
 
 Authenticated indexer HTTP uses a **NIP-98** header. Queue POST stays unauthenticated.
 
-Bitcoind cookies stay in a cookie file (`--cookie-file` or the network subdirectory under `--daemon-dir`). Do not put cookie contents in Nix.
+Bitcoind cookies stay in a cookie file (`--cookie-file` or the network subdirectory under `--daemon-dir`). Do not put cookie contents in Nix. Do not put `USER:PASSWORD` on argv.
+
+Mempool REST on this binary talks to bitcoind JSON-RPC. It does not need Let's Encrypt vhosts, HTTP/3, hypervisor UDP 443, grok-oss, or queue-only enable. The import queue is not REST. Queue HTTP is a different unit (`splora-queue`).
+
+A remote full node does not need a local bitcoind datadir. Pass a cookie **path**, `--daemon-rpc-addr`, and `--jsonrpc-import`. Omit `--daemon-dir`. The NixOS instance sets `cookieFile`, `daemonRpcAddr`, `jsonrpcImport = true`, and `daemonDir = null`. systemd then omits that missing datadir from `ReadOnlyPaths`. `--public-health` (instance `publicHealth`) opens tip health only; an empty allowlist still 401s address, tx, and mempool REST.
 
 ## HTTP, Electrum, and MWCK
 
@@ -63,7 +67,7 @@ REST and WebSocket listen on `--http-addr` (CLI default `127.0.0.1`, ports 3000/
 
 `POST /electrum` is one JSON-RPC 2.0 body per request (object or batch array) with the same method names as socket Electrum. It is not a wrapped TCP framer. Socket Electrum is newline JSON-RPC on `--rpc-socket-file`. Omitting `--rpc-socket-file` does not bind Electrum TCP.
 
-HTTP/2 and HTTP/3 are not served on the splora unix socket. They terminate on the Surmount Axum HTTPS edge in another tree. See [FORK.md](FORK.md) section 5. Splora sockets are local cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket.
+HTTP/2 and HTTP/3 are not served on the splora unix socket. They terminate on first-party Axum in another tree: TCP ALPN `h2` plus HTTP/1.1, and UDP QUIC ALPN `h3`. See [FORK.md](FORK.md) section 5. Splora sockets are local cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket. Do not put QUIC on a unix socket.
 
 ## NixOS
 
@@ -73,7 +77,7 @@ The flake should export:
 nixosModules.splora = import ./nix/module.nix;
 ```
 
-Example (unix sockets, module cache numbers):
+Example (unix sockets; local datadir default `/var/lib/bitcoind`):
 
 ```nix
 {
@@ -86,27 +90,48 @@ Example (unix sockets, module cache numbers):
 }
 ```
 
+Example (one instance, remote bitcoind JSON-RPC, no local datadir):
+
+```nix
+{
+  services.splora.enable = true;
+  services.splora.instances.mainnet = {
+    network = "mainnet";
+    jsonrpcImport = true;
+    daemonRpcAddr = "10.0.0.1:8332";
+    cookieFile = "/run/bitcoind/.cookie";
+    daemonDir = null;
+  };
+}
+```
+
+That unit passes `--jsonrpc-import`, `--daemon-rpc-addr`, and `--cookie-file`. It does not pass `--daemon-dir`. Cookie bytes never appear in the module. Optional instance `memoryMax` sets systemd `MemoryMax`; leave it unset unless you want a cap. One instance is enough for REST; five networks are not required.
+
 Activation creates an empty allowlist and an empty queue if they are missing. Inspect `/var/lib/splora/allow-npubs` and `/var/lib/splora/queue/import-queue` on the host. The queue unit can write only the queue directory, not the allowlist parent.
 
 `RuntimeDirectory` is `splora` (`/run/splora`). Default sockets:
 
-| Socket | Path |
-| --- | --- |
-| Indexer HTTP (REST, `POST /electrum`, `/api/v1/ws`) | `/run/splora/<instance>.http.sock` |
-| Electrum JSON-RPC | `/run/splora/<instance>.electrum.sock` |
-| Queue HTTP | `/run/splora/queue.sock` |
+| Socket | Path | NixOS option |
+| --- | --- | --- |
+| Indexer HTTP (REST, `POST /electrum`, `/api/v1/ws`) | `/run/splora/<instance>.http.sock` | `httpSocketFile` (already this path; do not change the default to TCP) |
+| Electrum newline JSON-RPC | `/run/splora/<instance>.electrum.sock` | `electrumSocketFile` (not an HTTP edge target) |
+| Queue HTTP | `/run/splora/queue.sock` | `queueSocketFile` |
 
-TCP remains optional. Set instance `httpAddr` and `httpSocketFile = null` for indexer HTTP on a host port. Set `services.splora.queueListen` and `queueSocketFile = null` for queue TCP. The binary takes `--socket-file` or `--bind`, not both. There is no assertion that the queue must bind localhost. The queue is unauthenticated; prefer the unix socket.
+The edge binds Splora HTTP only at `/run/splora/<instance>.http.sock`. Electrum newline stays on `/run/splora/<instance>.electrum.sock`. The edge must not point at the Electrum socket.
+
+TCP remains optional. Set instance `httpAddr` and `httpSocketFile = null` for indexer HTTP on a host port. That is an operator override, not the production default. Set `services.splora.queueListen` and `queueSocketFile = null` for queue TCP. The binary takes `--socket-file` or `--bind`, not both. There is no assertion that the queue must bind localhost. The queue is unauthenticated; prefer the unix socket.
 
 Optional `services.splora.popularScripts.enable` starts a systemd timer that runs the existing `popular-scripts` binary (same flake app) against one instance DB.
 
 ### Surmount edge (no nginx)
 
-There is no nginx in this tree. Do not enable an nginx vhost for splora. Public TLS, HTTP/2, HTTP/3, and cipher suites live on the first-party Axum edge in surmount-server (`surmount.sploraProxy`, `surmount.managementUi.http3Enable`). splora on the unix socket is local cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket. Fork law for that split is [FORK.md](FORK.md) section 5.
+There is no nginx in this tree. Do not add nginx here. Public TLS, HTTP/2, and HTTP/3 terminate on first-party Axum in surmount-server: TCP ALPN `h2` plus HTTP/1.1, and UDP QUIC ALPN `h3`. The named knobs there are `surmount.sploraProxy` and `surmount.managementUi.http3Enable`. On surmount-1, `surmount.sploraProxy` is already enabled. `http3Enable` stays true. This repo documents the socket contract. It does not implement the edge.
 
-That other tree already maps Hosts to `/run/splora/<instance>.http.sock` (`SURMOUNT_SPLORA_*`, instance names `mainnet`, `testnet3`, `testnet4`, `mutinynet`, `liquid`) and refuses Electrum newline sockets on the HTTP proxy. This repo documents the socket contract. It does not implement the edge.
+splora on the unix socket is local cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket. Do not put QUIC on a unix socket. Fork law for that split is [FORK.md](FORK.md) section 5.
 
-Point that edge at the socket paths above. Forward `Host` and `X-Forwarded-Proto` (usually `https`). splora still verifies NIP-98. The `u` tag is the public absolute URL. A terminator that omits `X-Forwarded-Proto` will 401 because this binary otherwise reconstructs `http://`. Do not verify NIP-98 twice at the proxy unless that sibling tree later opts in. WebSocket `/api/v1/ws` needs the same edge websocket proxy to the indexer HTTP socket.
+The edge must proxy HTTP only to `/run/splora/<instance>.http.sock`. Electrum newline stays on `/run/splora/<instance>.electrum.sock`. The edge must not point at the Electrum socket. That other tree already maps Hosts to the HTTP sockets (`SURMOUNT_SPLORA_*`, instance names `mainnet`, `testnet3`, `testnet4`, `mutinynet`, `liquid`) and refuses Electrum newline sockets on the HTTP proxy.
+
+Point that edge at the HTTP socket paths above. Forward `Host` and `X-Forwarded-Proto` (usually `https`). splora still verifies NIP-98. The `u` tag is the public absolute URL. A terminator that omits `X-Forwarded-Proto` will 401 because this binary otherwise reconstructs `http://`. Do not verify NIP-98 twice at the proxy unless that sibling tree later opts in. WebSocket `/api/v1/ws` needs the same edge websocket proxy to the indexer HTTP socket.
 
 ## Build (without Nix)
 

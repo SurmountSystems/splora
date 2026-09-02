@@ -40,6 +40,7 @@ let
     mkOption
     nameValuePair
     optional
+    optionalAttrs
     optionals
     optionalString
     types
@@ -104,12 +105,14 @@ let
         };
 
         daemonDir = mkOption {
-          type = types.str;
+          type = types.nullOr types.str;
           description = ''
             Bitcoind or elementsd data-directory root passed as --daemon-dir.
             The indexer appends the network subdirectory (testnet3, testnet4,
             signet, liquidv1). Mutinynet uses the bitcoind signet datadir
-            under this root.
+            under this root. Null is remote JSON-RPC: omit --daemon-dir and
+            omit that path from ReadOnlyPaths. Remote mode requires cookieFile
+            and daemonRpcAddr. Never put cookie bytes in this option.
           '';
         };
 
@@ -126,6 +129,35 @@ let
             Path to the bitcoind or elementsd cookie file, passed as
             --cookie-file. Never put cookie contents in Nix. When null, the
             indexer reads the cookie from daemonDir's network subdirectory.
+            Required when daemonDir is null (remote JSON-RPC).
+          '';
+        };
+
+        jsonrpcImport = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            Pass --jsonrpc-import so the indexer uses bitcoind JSON-RPC
+            instead of local blk*.dat files. Set true for a remote node.
+          '';
+        };
+
+        publicHealth = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            Pass --public-health. Tip health is open; an empty allowlist
+            still 401s address, tx, and mempool REST.
+          '';
+        };
+
+        memoryMax = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "8G";
+          description = ''
+            Optional systemd MemoryMax for this indexer unit. Null leaves
+            MemoryMax unset. Public sample leaves this unset.
           '';
         };
 
@@ -218,8 +250,6 @@ let
       "--timestamp"
       "--network"
       cliNetwork.${inst.network}
-      "--daemon-dir"
-      inst.daemonDir
       "--daemon-rpc-addr"
       inst.daemonRpcAddr
       "--db-dir"
@@ -233,6 +263,10 @@ let
       "--rpc-socket-file"
       inst.electrumSocketFile
     ]
+    ++ optionals (inst.daemonDir != null) [
+      "--daemon-dir"
+      inst.daemonDir
+    ]
     ++ optionals (inst.httpSocketFile != null) [
       "--http-socket-file"
       inst.httpSocketFile
@@ -241,8 +275,12 @@ let
       "--http-addr"
       "${inst.httpAddr}:${toString inst.httpPort}"
     ]
-    ++ optional (inst.cookieFile != null) "--cookie-file"
-    ++ optional (inst.cookieFile != null) inst.cookieFile
+    ++ optionals (inst.cookieFile != null) [
+      "--cookie-file"
+      inst.cookieFile
+    ]
+    ++ optional inst.jsonrpcImport "--jsonrpc-import"
+    ++ optional inst.publicHealth "--public-health"
     ++ optional (inst.network == "mutinynet") "--magic"
     ++ optional (inst.network == "mutinynet") mutinynetMagic
     ++ optional (inst.network == "liquid" && inst.assetDbPath != null) "--asset-db-path"
@@ -281,11 +319,13 @@ let
         inst.dbDir
       ]
       ++ optional (inst.network == "liquid" && inst.assetDbPath != null) inst.assetDbPath;
-      ReadOnlyPaths = [
-        inst.daemonDir
-        (dirOf cfg.allowNpubsFile)
-      ];
+      ReadOnlyPaths =
+        [ (dirOf cfg.allowNpubsFile) ]
+        ++ optional (inst.daemonDir != null) inst.daemonDir;
       MemoryDenyWriteExecute = true;
+    }
+    // optionalAttrs (inst.memoryMax != null) {
+      MemoryMax = inst.memoryMax;
     };
   };
 
@@ -392,8 +432,12 @@ in
 
     dbBlockCacheMb = mkOption {
       type = types.ints.positive;
-      default = 4096;
-      description = "Default RocksDB block cache in MiB for new instances.";
+      default = 24;
+      description = ''
+        Default RocksDB block cache in MiB for new instances. Matches the
+        CLI default of 24. REST does not require 4096. Set more if the
+        operator wants a larger cache.
+      '';
     };
 
     dbParallelism = mkOption {
@@ -472,6 +516,10 @@ in
       ++ lib.mapAttrsToList (name: inst: {
         assertion = inst.httpSocketFile != null || inst.httpAddr != null;
         message = "services.splora.instances.${name} needs httpSocketFile (preferred /run/splora/${name}.http.sock) or httpAddr for TCP.";
+      }) enabledInstances
+      ++ lib.mapAttrsToList (name: inst: {
+        assertion = inst.daemonDir != null || (inst.cookieFile != null && inst.daemonRpcAddr != "");
+        message = "services.splora.instances.${name}: remote mode (daemonDir = null) requires cookieFile and daemonRpcAddr.";
       }) enabledInstances;
 
       warnings = lib.filter (w: w != "") (
@@ -568,10 +616,12 @@ in
               (lib.getExe' cfg.package "popular-scripts")
               "--db-dir"
               (lib.escapeShellArg popularInstance.dbDir)
-              "--daemon-dir"
-              (lib.escapeShellArg popularInstance.daemonDir)
               "--network"
               cliNetwork.${popularInstance.network}
+            ]
+            ++ optionals (popularInstance.daemonDir != null) [
+              "--daemon-dir"
+              (lib.escapeShellArg popularInstance.daemonDir)
             ]
             ++ optional (popularInstance.network == "mutinynet") "--magic"
             ++ optional (popularInstance.network == "mutinynet") mutinynetMagic
@@ -582,10 +632,9 @@ in
           PrivateTmp = true;
           ProtectSystem = "strict";
           ProtectHome = true;
-          ReadOnlyPaths = [
-            popularInstance.dbDir
-            popularInstance.daemonDir
-          ];
+          ReadOnlyPaths =
+            [ popularInstance.dbDir ]
+            ++ optional (popularInstance.daemonDir != null) popularInstance.daemonDir;
           ReadWritePaths = [ (dirOf cfg.popularScripts.outputFile) ];
           MemoryDenyWriteExecute = true;
         };

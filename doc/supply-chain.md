@@ -13,9 +13,11 @@ Cargo source rewrite, not through a laptop-only user config.
    [sparse+https://index.crates.menhera.org/7d/](https://index.crates.menhera.org/7d/)
    (accessed: 2026-08-28). Laptop `cargo` in this workspace uses that rewrite.
    Do not delete that file.
-4. Crane `src` is `cleanCargoSource` without `.cargo/config.toml`.
-   `Cargo.lock` stays. After vendor, `buildDepsOnly`, `buildPackage`, and
-   nextest pass `--offline --locked`.
+4. Crane `src` is `lib.cleanSource` plus `craneLib.filterCargoSources`,
+   plus `flake.nix`, `nix/module.nix`, and `rust-toolchain` so
+   `src/config.rs` tests can `include_str!` those files. It still omits
+   `.cargo/config.toml`. `Cargo.lock` stays. After vendor,
+   `buildDepsOnly`, `buildPackage`, and nextest pass `--offline --locked`.
 
 Nix crane builds vendor crate sources from `Cargo.lock` and must not query
 [index.crates.menhera.org](https://index.crates.menhera.org/7d/)
@@ -253,50 +255,46 @@ is rustc 1.98 (edition 2024); ICU4X is not required for that pin.
 
 ## RocksDB and mold
 
-The flake links one nixpkgs `rocksdb` for both `splora` and `splora-liquid`,
-with mold as the linker (`useSystemRocksdb = true` in `flake.nix`):
+The flake **does not** currently link nixpkgs `rocksdb` or mold.
 
-- `ROCKSDB_LIB_DIR` / `ROCKSDB_INCLUDE_DIR` from `pkgs.rocksdb`
-- `clang` and `cmake` as native inputs (bindgen and the crate build script)
-- `liburing` in `buildInputs` because nixpkgs `librocksdb.so.10` `NEEDED`s it
-- `RUSTFLAGS` `-C link-arg=-fuse-ld=` plus the store path of `pkgs.mold`
+`just check-remote` on 2026-09-01 (`nix flake check` to
+`ssh-ng://nixbuilder@23.182.128.234`) evaluated
+`checks.x86_64-linux.rocksdbMoldLink` to
+`/nix/store/jnc9iq7rlbc8c8wp7v6wwyn0dnqbv36g-splora-nixpkgs-rocksdb-mold.drv`
+then failed in `splora-deps-3.4.0-dev` (exit 101) before that check ran.
+`cargo check --release --offline --locked --all-targets` did **not** query
+[index.crates.menhera.org](https://index.crates.menhera.org/7d/)
+(accessed: 2026-09-01). The builder log has no `Could not resolve host`.
+gcc rejected the mold flag:
+
+`gcc: error: unrecognized command-line option '-fuse-ld=/nix/store/.../mold-unwrapped-wrapper-2.42.0/bin/mold'`
+
+That is a mold link failure, not builder DNS. Per the fallback plan,
+`useSystemRocksdb` is **false** in `flake.nix`. Crane keeps bundled
+`rocksdb` **0.24.0** (`librocksdb-sys` 0.17.3+10.4.2). Mold does not
+still link, so `RUSTFLAGS` `-fuse-ld=` and the `mold` native input are
+dropped, not only the `ROCKSDB_*` env vars. Leave
+`rocksdb = "0.24.0"` in `Cargo.toml`. Do not bump to 0.25.0.
+
+Named check `rocksdbMoldLink` now writes
+`useSystemRocksdb is false; bundled rocksdb 0.24.0` and does not require
+`NEEDED librocksdb` or mold in `.comment`. The 2026-09-01 re-run built
+that stub (`/nix/store/psjfa2wkfniyk5vifhj75frysyp1pmlh-splora-bundled-rocksdb`)
+and finished `splora-deps` with `--offline --locked`. It then failed
+`checks.x86_64-linux.nextest` because crane `cleanCargoSource` omitted
+`flake.nix`, `nix/module.nix`, and `rust-toolchain` that `src/config.rs`
+tests `include_str!`. Crane `src` now unions those three paths onto
+`filterCargoSources` and still omits `.cargo/config.toml`. 2026-09-01
+`just check-remote` after that union exited 0 (`all checks passed!`).
+That nextest miss is not leftover. It is not a Menhera DNS miss.
 
 Pinned flake nixpkgs (`github:NixOS/nixpkgs/9fbb54b33e91ee4ca368e35a78e0613c720600b3`)
-evaluates `pkgs.rocksdb.version` to **10.10.1** (accessed: 2026-08-31). The
-shared object SONAME is `librocksdb.so.10`. That library’s own `RUNPATH`
-already includes liburing.
+still evaluates `pkgs.rocksdb.version` to **10.10.1** (accessed: 2026-08-31).
+That eval is not a link proof. A laptop `cargo` ELF is not a link proof.
 
-The crate still vendors `librocksdb-sys` **0.17.3+10.4.2**. That gap is
-closed by **bindgen against nixpkgs headers**, not by overlay-pinning
-RocksDB 10.4.2 and not by bumping to `rocksdb` 0.25.0 (that crate vendors
-**11.8.1**, farther from 10.10.1). When `ROCKSDB_LIB_DIR` and
-`ROCKSDB_INCLUDE_DIR` are set, bindgen reads `pkgs.rocksdb` 10.10.1
-headers and the linker uses `librocksdb.so`. The bundled 10.4.2 tree is
-not the linked ABI.
-
-Proven path versus fallback:
-
-1. **Proven (crane / `just check-remote`):** named flake check
-   **`checks.<system>.rocksdbMoldLink`** (`splora-nixpkgs-rocksdb-mold`)
-   builds both crane packages and requires:
-   - `readelf -d` `NEEDED` contains `librocksdb` on `splora` and `splora-liquid`
-   - `readelf -p .comment` mentions `mold` on both binaries
-2. **Not a proof:** laptop `cargo build` without those env vars. A local
-   `target/debug/splora` on this machine (2026-08-31) `NEEDED`s libc and
-   libstdc++ only, and `.comment` names the Wild linker, not mold. That
-   ELF is bundled RocksDB. `nix eval` of `pkgs.rocksdb.version` is also
-   not the link proof.
-3. **Fallback:** if `rocksdbMoldLink` fails (liburing symbols, header
-   skew versus `rust-rocksdb` 0.24, or mold), set `useSystemRocksdb =
-   false` in `flake.nix`. The same check then writes that it is using
-   bundled 0.24.0 and does not require `NEEDED librocksdb`. Leave
-   `rocksdb = "0.24.0"` in `Cargo.toml`. Keep mold if it still links;
-   drop only the RocksDB env vars.
-
-Do not leave `useSystemRocksdb = true` if the check is rewritten to skip
-`NEEDED`. Do not compile RocksDB once per binary when the system library
-links. The operator recipe that runs the proof is `just check-remote`
-(`nix flake check`). Agents do not run that recipe.
+Do not set `useSystemRocksdb = true` again until crane on the builder
+links `NEEDED librocksdb` with a linker gcc (or rustc) actually accepts.
+Do not treat builder DNS as the first fix for this fail.
 
 ## Flake checks versus laptop checks
 
