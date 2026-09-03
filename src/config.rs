@@ -870,8 +870,9 @@ mod tests {
         assert!(src.contains("!(lib.hasInfix \"--bind\" queueStart)"));
     }
 
-    /// Named contract: rustc 1.98, edition 2024. System RocksDB stays
-    /// off until the builder links NEEDED librocksdb. CLI cache stays 24.
+    /// Named contract: rustc 1.98, edition 2024. System RocksDB is on
+    /// (`useSystemRocksdb = true`). ELF NEEDED librocksdb. Not the bundled
+    /// rocksdb stub. Not mold in `.comment`. CLI cache stays 24.
     #[test]
     fn packaging_pins_rust_198_edition_2024_and_system_rocksdb() {
         let toolchain = include_str!("../rust-toolchain");
@@ -895,16 +896,12 @@ mod tests {
             "flake.nix must use rust-overlay stable 1.98.0"
         );
         assert!(
-            flake.contains("useSystemRocksdb = false"),
-            "do not claim system RocksDB while the builder still rejects mold"
+            flake.contains("useSystemRocksdb = true"),
+            "flake.nix must set useSystemRocksdb = true"
         );
         assert!(
-            !flake.contains("useSystemRocksdb = true"),
-            "do not leave useSystemRocksdb = true while bundled rocksdb is the fallback"
-        );
-        assert!(
-            flake.contains("useSystemRocksdb is false; bundled rocksdb 0.24.0"),
-            "rocksdbMoldLink stub must record bundled 0.24.0"
+            flake.contains("Do not require mold in .comment"),
+            "rocksdbMoldLink must not require mold in .comment"
         );
         assert!(
             flake.contains("isMenheraCargoConfig")
@@ -915,10 +912,6 @@ mod tests {
         assert!(
             flake.contains("readelf -d \"$bin\"") && flake.contains("NEEDED.*librocksdb"),
             "rocksdbMoldLink must inspect ELF NEEDED librocksdb when system rocksdb is on"
-        );
-        assert!(
-            flake.contains("readelf -p .comment") && flake.contains("grep -qi mold"),
-            "rocksdbMoldLink must inspect mold in .comment on both packages when system rocksdb is on"
         );
         assert!(flake.contains("check_bin ${built.splora}/bin/splora"));
         assert!(flake.contains("check_bin ${built.splora-liquid}/bin/splora"));

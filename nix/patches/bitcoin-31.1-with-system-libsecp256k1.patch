@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Unlicense
+#
+# Bitcoin Core 31.1 CMake has no WITH_SYSTEM_SECP256K1 and no
+# WITH_SYSTEM_LEVELDB. Those names are unused cache variables.
+# Gentoo's CMake option is WITH_SYSTEM_LIBSECP256K1 (see
+# net-p2p/bitcoin-core files/29.0-cmake-syslibs.patch). This patch
+# teaches Core 31.1 that option. It does not unbundle leveldb.
+# Core still compiles cmake/leveldb.cmake from the tarball subtree.
+#
+# Accessed: 2026-09-02
+# https://github.com/bitcoin/bitcoin/blob/v31.1/cmake/secp256k1.cmake
+# https://github.com/bitcoin/bitcoin/blob/v31.1/CMakeLists.txt
+# https://gitweb.gentoo.org/repo/gentoo.git/tree/net-p2p/bitcoin-core/files/29.0-cmake-syslibs.patch
+#
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -164,6 +164,10 @@ if(ENABLE_IPC AND WITH_EXTERNAL_LIBMULTIPROCESS)
+   )
+ endif()
+ 
++option(WITH_SYSTEM_LIBSECP256K1 "Link with system-installed libsecp256k1." OFF)
++mark_as_advanced(WITH_SYSTEM_LIBSECP256K1)
++
+ cmake_dependent_option(BUILD_GUI_TESTS "Build test_bitcoin-qt executable." ON "BUILD_GUI;BUILD_TESTS" OFF)
+ if(BUILD_GUI)
+   set(qt_components Core Gui Widgets LinguistTools)
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -23,8 +23,50 @@ add_subdirectory(univalue)
+   include(../cmake/libmultiprocess.cmake)
+   add_libmultiprocess(ipc/libmultiprocess)
+ endif()
++if(WITH_SYSTEM_LIBSECP256K1)
++  find_package(PkgConfig REQUIRED)
++  pkg_check_modules(libsecp256k1 REQUIRED IMPORTED_TARGET libsecp256k1)
++  add_library(secp256k1 ALIAS PkgConfig::libsecp256k1)
++  block()
++    string(APPEND CMAKE_REQUIRED_FLAGS " ${libsecp256k1_CFLAGS_OTHER}")
++    list(APPEND CMAKE_REQUIRED_INCLUDES ${libsecp256k1_INCLUDE_DIRS})
++    list(APPEND CMAKE_REQUIRED_LINK_OPTIONS ${libsecp256k1_LDFLAGS})
++    list(APPEND CMAKE_REQUIRED_LIBRARIES ${libsecp256k1_LIBRARIES})
++    unset(missing_modules)
++    include(CheckSymbolExists)
++    macro(check_secp256k1_module module symbol)
++      string(TOUPPER "${symbol}" VAR)
++      set(VAR "libsecp256k1_HAS_${VAR}")
++      unset(${VAR})
++      check_symbol_exists("${symbol}" "secp256k1_${module}.h" ${VAR})
++      if(NOT ${VAR})
++        list(APPEND missing_modules "${module}")
++      endif()
++    endmacro()
++    message(CHECK_START "Checking for required libsecp256k1 modules")
++    list(APPEND CMAKE_MESSAGE_INDENT "  ")
++    check_secp256k1_module(ellswift secp256k1_ellswift_create)
++    check_secp256k1_module(extrakeys secp256k1_xonly_pubkey_parse)
++    check_secp256k1_module(recovery secp256k1_ecdsa_recover)
++    check_secp256k1_module(schnorrsig secp256k1_schnorrsig_verify)
++    check_secp256k1_module(musig secp256k1_musig_pubkey_agg)
++    list(POP_BACK CMAKE_MESSAGE_INDENT)
++    if(missing_modules)
++      list(JOIN missing_modules ", " missing_modules)
++      message(FATAL_ERROR "System-installed libsecp256k1 lacks these required modules: ${missing_modules}.")
++    endif()
++    message(CHECK_PASS "all were found")
++  endblock()
++else()
+ include(../cmake/secp256k1.cmake)
+ add_secp256k1(secp256k1)
++endif()
+ 
+ # Set top-level target output locations.
+ if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)

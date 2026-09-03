@@ -1,6 +1,8 @@
-# NixOS module for splora. Import from a flake with:
+# NixOS module for the splora appliance. Import from a flake with:
 #   nixosModules.splora = import ./nix/module.nix;
 #
+# Splora is the appliance: this module starts the indexer processes and,
+# by default, local bitcoind / elementsd units built in this project.
 # One indexer process per network. Do not pass npubs on ExecStart.
 # Writes to the allowlist are:
 #   splora-import approve --queue <queueFile> --allowlist <allowNpubsFile> <npub>
@@ -15,9 +17,29 @@
 # Mutinynet uses --network signet --magic a5df2dcb.
 # Default Bitcoin signet magic is 0x0A03CF40.
 #
-# No nginx in this module. Public TLS, HTTP/2, and HTTP/3 terminate on the
-# Surmount Axum edge (surmount-server). That edge should proxy to the unix
-# sockets below and forward Host and X-Forwarded-Proto.
+# Local daemons: four systemd bitcoind units from one bitcoindPackage
+# (bitcoind-mainnet, bitcoind-testnet3, bitcoind-testnet4,
+# bitcoind-mutinynet) plus elementsd-liquid. Wallet off. Cookie paths
+# only. Never put rpc user/password pairs on argv. RPC on 127.0.0.1.
+# P2P stays on (no -listen=0). Per-instance startLocalDaemon=false skips
+# that chain's daemon unit and uses remote cookieFile + daemonRpcAddr +
+# daemonDir=null.
+#
+# Core appends testnet3 / testnet4 / signet (and Elements liquidv1) under
+# -datadir. -rpccookiefile=/var/lib/bitcoind/<net>/.cookie (and the
+# elementsd liquid cookie) pins a stable cookie path. -blocksdir pins
+# blk*.dat at that named datadir so indexer daemonDir can stay the spec
+# path. jsonrpcImport defaults true, so the indexer talks JSON-RPC and
+# does not require nested blk*.dat. Chainstate may still nest under
+# Core's network subdirectory.
+#
+# Indexer HTTP is the unix socket /run/splora/<name>.http.sock. No nginx.
+# Electrum is unix socket only (never TCP). Public TLS, HTTP/2 (TCP 443),
+# and HTTP/3 (QUIC UDP 443) terminate on splora-http.service. That unit
+# is distinct from indexer instances. It passes --socket-dir /run/splora
+# and proxies only to the five <name>.http.sock files. It never opens
+# *.electrum.sock. --tls-cert and --tls-key are file paths. Never put
+# private key or certificate PEM bytes in Nix or git.
 {
   config,
   lib,
@@ -77,9 +99,42 @@ let
   # Mutinynet chain magic. Default signet is 0x0A03CF40.
   mutinynetMagic = "a5df2dcb";
 
+  # Published Mutinynet faucet challenge (mutinynet.com / nobsbitcoin).
+  # Indexer magic stays a5df2dcb. Do not wrap the challenge: stock Core
+  # treats the hex as the script, so wrapping would change P2P magic away
+  # from a5df2dcb. Mutinynet's 30-second interval is a miner/network
+  # property. Stock Core 31.1 has no -signetblocktime (unregistered: the
+  # unit would refuse start). A follower only needs the unwrapped
+  # challenge, addnode, and dnsseed=0.
+  mutinynetSignetChallenge = "512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae";
+  mutinynetAddnode = "45.79.52.207:38333";
+
+  applianceDatadir = net: if net == "liquid" then "/var/lib/elementsd/liquid" else "/var/lib/bitcoind/${net}";
+
+  applianceCookie = net: "${applianceDatadir net}/.cookie";
+
+  daemonUnitName = net: if net == "liquid" then "elementsd-liquid" else "bitcoind-${net}";
+
+  chainArgv = {
+    mainnet = [ ];
+    testnet3 = [ "-testnet" ];
+    testnet4 = [ "-testnet4" ];
+    mutinynet = [
+      "-signet"
+      "-signetchallenge=${mutinynetSignetChallenge}"
+      "-addnode=${mutinynetAddnode}"
+      "-dnsseed=0"
+    ];
+    liquid = [ "-chain=liquidv1" ];
+  };
+
   instancePackage = inst: if inst.network == "liquid" then cfg.liquidPackage else cfg.package;
 
   enabledInstances = filterAttrs (_: inst: inst.enable) cfg.instances;
+
+  localDaemonWanted =
+    net:
+    lib.any (inst: inst.startLocalDaemon && inst.network == net) (lib.attrValues enabledInstances);
 
   instanceOptions =
     { name, config, ... }:
@@ -104,15 +159,29 @@ let
           '';
         };
 
+        startLocalDaemon = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            Start this module's bitcoind or elementsd unit for this chain.
+            When false, skip that daemon unit. Use remote cookieFile plus
+            daemonRpcAddr and set daemonDir = null. Cookie path only.
+            Never put rpc user/password pairs on argv.
+          '';
+        };
+
         daemonDir = mkOption {
           type = types.nullOr types.str;
           description = ''
             Bitcoind or elementsd data-directory root passed as --daemon-dir.
             The indexer appends the network subdirectory (testnet3, testnet4,
-            signet, liquidv1). Mutinynet uses the bitcoind signet datadir
-            under this root. Null is remote JSON-RPC: omit --daemon-dir and
-            omit that path from ReadOnlyPaths. Remote mode requires cookieFile
-            and daemonRpcAddr. Never put cookie bytes in this option.
+            signet, liquidv1) when it walks blk*.dat. Appliance defaults are
+            /var/lib/bitcoind/<net> and /var/lib/elementsd/liquid. Local
+            daemons pass -blocksdir at that same path and jsonrpcImport
+            defaults true, so nested Core blocks are not required. Null is
+            remote JSON-RPC: omit --daemon-dir and omit that path from
+            ReadOnlyPaths. Remote mode requires cookieFile and daemonRpcAddr.
+            Never put cookie bytes in this option.
           '';
         };
 
@@ -124,21 +193,22 @@ let
         cookieFile = mkOption {
           type = types.nullOr types.str;
           default = null;
-          example = "/var/lib/bitcoind/.cookie";
+          example = "/var/lib/bitcoind/mainnet/.cookie";
           description = ''
             Path to the bitcoind or elementsd cookie file, passed as
-            --cookie-file. Never put cookie contents in Nix. When null, the
-            indexer reads the cookie from daemonDir's network subdirectory.
-            Required when daemonDir is null (remote JSON-RPC).
+            --cookie-file. Never put cookie contents in Nix. Appliance
+            default is the stable -rpccookiefile path under the named
+            datadir. Required when daemonDir is null (remote JSON-RPC).
           '';
         };
 
         jsonrpcImport = mkOption {
           type = types.bool;
-          default = false;
+          default = true;
           description = ''
             Pass --jsonrpc-import so the indexer uses bitcoind JSON-RPC
-            instead of local blk*.dat files. Set true for a remote node.
+            instead of local blk*.dat files. Default true on the appliance.
+            Set true for a remote node.
           '';
         };
 
@@ -232,9 +302,8 @@ let
       };
 
       config = {
-        daemonDir = mkDefault (
-          if config.network == "liquid" then "/var/lib/elementsd" else "/var/lib/bitcoind"
-        );
+        daemonDir = mkDefault (applianceDatadir config.network);
+        cookieFile = mkDefault (applianceCookie config.network);
         httpPort = mkDefault defaultHttpPort.${config.network};
         daemonRpcAddr = mkDefault "127.0.0.1:${toString defaultDaemonRpcPort.${config.network}}";
         assetDbPath = mkDefault (
@@ -290,7 +359,8 @@ let
   indexerService = name: inst: {
     description = "splora indexer (${name}, ${inst.network})";
     wantedBy = [ "multi-user.target" ];
-    after = [ "network.target" ];
+    after = [ "network.target" ] ++ optional inst.startLocalDaemon "${daemonUnitName inst.network}.service";
+    wants = optional inst.startLocalDaemon "${daemonUnitName inst.network}.service";
     serviceConfig = {
       Type = "simple";
       User = cfg.user;
@@ -329,6 +399,48 @@ let
     };
   };
 
+  daemonArgv =
+    net:
+    [
+      "-datadir=${applianceDatadir net}"
+      "-blocksdir=${applianceDatadir net}"
+      "-rpccookiefile=${applianceCookie net}"
+      "-disablewallet"
+      "-txindex=1"
+      "-server=1"
+      "-rpcallowip=127.0.0.1"
+      "-rpcbind=127.0.0.1"
+      "-rpcport=${toString defaultDaemonRpcPort.${net}}"
+      "-printtoconsole"
+    ]
+    ++ optional (net != "liquid") "-rpccookieperms=group"
+    ++ optional (net == "liquid") "-startupnotify=chmod g+r ${applianceCookie net}"
+    ++ chainArgv.${net};
+
+  daemonService =
+    net: pkg: userName:
+    {
+      description = "splora appliance ${if net == "liquid" then "elementsd" else "bitcoind"} (${net})";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      serviceConfig = {
+        Type = "simple";
+        User = userName;
+        Group = userName;
+        ExecStart = "${lib.getExe pkg} ${escapeShellArgs (daemonArgv net)}";
+        Restart = "on-failure";
+        RestartSec = 10;
+        StateDirectory = if net == "liquid" then "elementsd/liquid" else "bitcoind/${net}";
+        StateDirectoryMode = "0750";
+        UMask = "0027";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        MemoryDenyWriteExecute = true;
+      };
+    };
+
   queueHasSocket = cfg.queueSocketFile != null;
   queueHasListen = cfg.queueListen != null;
 
@@ -347,16 +459,40 @@ let
   popularInstance =
     if cfg.popularScripts.enable then cfg.instances.${cfg.popularScripts.instance} or null else null;
 
+  daemonUnits =
+    optionalAttrs (localDaemonWanted "mainnet") {
+      bitcoind-mainnet = daemonService "mainnet" cfg.bitcoindPackage "bitcoind";
+    }
+    // optionalAttrs (localDaemonWanted "testnet3") {
+      bitcoind-testnet3 = daemonService "testnet3" cfg.bitcoindPackage "bitcoind";
+    }
+    // optionalAttrs (localDaemonWanted "testnet4") {
+      bitcoind-testnet4 = daemonService "testnet4" cfg.bitcoindPackage "bitcoind";
+    }
+    // optionalAttrs (localDaemonWanted "mutinynet") {
+      bitcoind-mutinynet = daemonService "mutinynet" cfg.bitcoindPackage "bitcoind";
+    }
+    // optionalAttrs (localDaemonWanted "liquid") {
+      elementsd-liquid = daemonService "liquid" cfg.elementsdPackage "elementsd";
+    };
+
 in
 {
   options.services.splora = {
-    enable = mkEnableOption "splora indexer, import queue HTTP, and shared allowlist";
+    enable = mkEnableOption "splora indexer, import queue HTTP, TLS HTTP front, local bitcoind/elementsd, and shared allowlist";
 
     package = mkOption {
       type = types.package;
       default = pkgs.splora;
       defaultText = literalExpression "pkgs.splora";
       description = "splora package for Bitcoin-family instances and the queue service.";
+    };
+
+    httpPackage = mkOption {
+      type = types.package;
+      default = pkgs.splora-http;
+      defaultText = literalExpression "pkgs.splora-http";
+      description = "splora-http path-routing TLS front (packages.splora-http). Not the indexer package; that crane drv does not install this bin.";
     };
 
     liquidPackage = mkOption {
@@ -366,16 +502,34 @@ in
       description = "splora package built with the liquid feature (assetDbPath).";
     };
 
+    bitcoindPackage = mkOption {
+      type = types.package;
+      default = pkgs.bitcoind;
+      defaultText = literalExpression "pkgs.bitcoind";
+      description = ''
+        One bitcoind derivation for mainnet, testnet3, testnet4, and
+        mutinynet units. Prefer this flake overlay so pkgs.bitcoind is
+        Bitcoin Core 31.1 from nix/bitcoind.nix.
+      '';
+    };
+
+    elementsdPackage = mkOption {
+      type = types.package;
+      default = pkgs.elementsd;
+      defaultText = literalExpression "pkgs.elementsd";
+      description = "elementsd derivation for the liquid unit. Prefer this flake overlay.";
+    };
+
     user = mkOption {
       type = types.str;
       default = "splora";
-      description = "System user for indexer and queue units.";
+      description = "System user for indexer, queue, and splora-http units.";
     };
 
     group = mkOption {
       type = types.str;
       default = "splora";
-      description = "System group for indexer and queue units.";
+      description = "System group for indexer, queue, and splora-http units.";
     };
 
     allowNpubsFile = mkOption {
@@ -430,13 +584,77 @@ in
       description = "Start the import-queue HTTP service (splora-queue).";
     };
 
+    http = {
+      enable = mkEnableOption "splora-http TLS front (TCP 443 and QUIC UDP 443)" // {
+        # Default false so existing NixOS evals that do not set TLS file
+        # paths still succeed. Set true and set tlsCertFile plus tlsKeyFile
+        # on the appliance.
+        default = false;
+      };
+
+      listen = mkOption {
+        type = types.str;
+        default = "0.0.0.0:443";
+        description = ''
+          TCP listen address for TLS HTTP/1.1 and HTTP/2 (--listen).
+          Required by splora-http. Default is all interfaces port 443.
+        '';
+      };
+
+      quic = mkOption {
+        type = types.str;
+        default = "0.0.0.0:443";
+        description = ''
+          UDP listen address for HTTP/3 QUIC (--quic). QUIC is UDP, not a
+          Unix domain socket. Default matches --listen (0.0.0.0:443).
+        '';
+      };
+
+      tlsCertFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/var/lib/splora/tls/fullchain.pem";
+        description = ''
+          Path to the PEM certificate chain file, passed as --tls-cert.
+          File path only. Never put certificate bytes in this option.
+          Never use types.path (that copies the file into the Nix store).
+          Required when http.enable is true.
+        '';
+      };
+
+      tlsKeyFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/var/lib/splora/tls/privkey.pem";
+        description = ''
+          Path to the PEM private key file, passed as --tls-key. File
+          path only. Never put private key bytes in this option, in git,
+          or in the Nix store. Never use types.path. Required when
+          http.enable is true.
+        '';
+      };
+
+      socketDir = mkOption {
+        type = types.str;
+        default = "/run/splora";
+        description = ''
+          Directory of indexer HTTP unix sockets (--socket-dir). Default
+          /run/splora, created as RuntimeDirectory on indexer units and
+          on this front. Backends are only <instance>.http.sock (the five
+          default instances: mainnet, testnet3, testnet4, mutinynet,
+          liquid). Never point this at *.electrum.sock.
+        '';
+      };
+    };
+
     dbBlockCacheMb = mkOption {
       type = types.ints.positive;
       default = 24;
       description = ''
         Default RocksDB block cache in MiB for new instances. Matches the
         CLI default of 24. REST does not require 4096. Set more if the
-        operator wants a larger cache.
+        operator wants a larger cache. LSM indexes live on NVMe. The block
+        cache is RAM.
       '';
     };
 
@@ -473,7 +691,13 @@ in
 
     instances = mkOption {
       type = types.attrsOf (types.submodule instanceOptions);
-      default = { };
+      default = {
+        mainnet.network = "mainnet";
+        testnet3.network = "testnet3";
+        testnet4.network = "testnet4";
+        mutinynet.network = "mutinynet";
+        liquid.network = "liquid";
+      };
       example = literalExpression ''
         {
           mainnet.network = "mainnet";
@@ -483,7 +707,10 @@ in
           liquid.network = "liquid";
         }
       '';
-      description = "One indexer process per network name.";
+      description = ''
+        One indexer process per network name. Default is five instances
+        on: mainnet, testnet3, testnet4, mutinynet, liquid.
+      '';
     };
   };
 
@@ -512,6 +739,10 @@ in
             || dirOf cfg.popularScripts.outputFile != dirOf cfg.allowNpubsFile;
           message = "services.splora.popularScripts.outputFile must live in a different directory than the allowlist so the oneshot cannot write allowNpubsFile.";
         }
+        {
+          assertion = !(cfg.http.enable && (cfg.http.tlsCertFile == null || cfg.http.tlsKeyFile == null));
+          message = "services.splora.http.enable requires http.tlsCertFile and http.tlsKeyFile as filesystem paths to PEM files. Never put PEM bytes in Nix.";
+        }
       ]
       ++ lib.mapAttrsToList (name: inst: {
         assertion = inst.httpSocketFile != null || inst.httpAddr != null;
@@ -535,8 +766,24 @@ in
         group = cfg.group;
         home = "/var/lib/splora";
         createHome = true;
+        extraGroups = [
+          "bitcoind"
+          "elementsd"
+        ];
       };
       users.groups.${cfg.group} = { };
+
+      users.users.bitcoind = {
+        isSystemUser = true;
+        group = "bitcoind";
+      };
+      users.groups.bitcoind = { };
+
+      users.users.elementsd = {
+        isSystemUser = true;
+        group = "elementsd";
+      };
+      users.groups.elementsd = { };
 
       systemd.tmpfiles.rules = [
         "d /var/lib/splora 0750 ${cfg.user} ${cfg.group} -"
@@ -547,6 +794,8 @@ in
         # is authorized. The queue directory is not the allowlist parent.
         "f ${cfg.allowNpubsFile} 0640 ${cfg.user} ${cfg.group} -"
         "f ${cfg.queueFile} 0640 ${cfg.user} ${cfg.group} -"
+        "d /var/lib/bitcoind 0750 bitcoind bitcoind -"
+        "d /var/lib/elementsd 0750 elementsd elementsd -"
       ]
       ++ optional cfg.popularScripts.enable "d ${dirOf cfg.popularScripts.outputFile} 0750 ${cfg.user} ${cfg.group} -"
       ++ lib.mapAttrsToList (_name: inst: "d ${inst.dbDir} 0750 ${cfg.user} ${cfg.group} -") enabledInstances
@@ -556,12 +805,74 @@ in
           optionalString (inst.assetDbPath != null)
             "d ${inst.assetDbPath} 0750 ${cfg.user} ${cfg.group} -"
         ) enabledInstances
-      );
+      )
+      ++ optional (localDaemonWanted "mainnet") "d ${applianceDatadir "mainnet"} 0750 bitcoind bitcoind -"
+      ++ optional (localDaemonWanted "testnet3") "d ${applianceDatadir "testnet3"} 0750 bitcoind bitcoind -"
+      ++ optional (localDaemonWanted "testnet4") "d ${applianceDatadir "testnet4"} 0750 bitcoind bitcoind -"
+      ++ optional (localDaemonWanted "mutinynet") "d ${applianceDatadir "mutinynet"} 0750 bitcoind bitcoind -"
+      ++ optional (localDaemonWanted "liquid") "d ${applianceDatadir "liquid"} 0750 elementsd elementsd -";
 
-      systemd.services = mapAttrs' (
-        name: inst: nameValuePair "splora-${name}" (indexerService name inst)
-      ) enabledInstances;
+      systemd.services =
+        (mapAttrs' (name: inst: nameValuePair "splora-${name}" (indexerService name inst)) enabledInstances)
+        // daemonUnits;
     }
+
+    (mkIf (cfg.http.enable && cfg.http.tlsCertFile != null && cfg.http.tlsKeyFile != null) {
+      networking.firewall.allowedTCPPorts = [ 443 ];
+      networking.firewall.allowedUDPPorts = [ 443 ];
+
+      systemd.services.splora-http = {
+        description = "splora TLS HTTP front (HTTP/2 TCP 443, HTTP/3 QUIC UDP 443)";
+        wantedBy = [ "multi-user.target" ];
+        # Indexer units own RuntimeDirectory=splora so /run/splora exists.
+        # There is no umbrella splora.service; instances are splora-<name>.
+        after = [ "network.target" ] ++ lib.mapAttrsToList (name: _: "splora-${name}.service") enabledInstances;
+        wants = lib.mapAttrsToList (name: _: "splora-${name}.service") enabledInstances;
+        serviceConfig = {
+          Type = "simple";
+          User = cfg.user;
+          Group = cfg.group;
+          ExecStart = concatStringsSep " " (
+            [
+              (lib.getExe' cfg.httpPackage "splora-http")
+            ]
+            ++ map lib.escapeShellArg [
+              "--listen"
+              cfg.http.listen
+              "--quic"
+              cfg.http.quic
+              "--tls-cert"
+              cfg.http.tlsCertFile
+              "--tls-key"
+              cfg.http.tlsKeyFile
+              "--socket-dir"
+              cfg.http.socketDir
+            ]
+          );
+          Restart = "on-failure";
+          RestartSec = 5;
+          # Shared /run/splora with the indexers. Preserve so stopping this
+          # front does not delete indexer HTTP sockets.
+          RuntimeDirectory = "splora";
+          RuntimeDirectoryMode = "0750";
+          RuntimeDirectoryPreserve = true;
+          UMask = "0007";
+          # Bind TCP 443 and UDP 443 as User=splora.
+          AmbientCapabilities = "CAP_NET_BIND_SERVICE";
+          CapabilityBoundingSet = "CAP_NET_BIND_SERVICE";
+          # File paths only. Never PEM bytes.
+          BindReadOnlyPaths = [
+            cfg.http.tlsCertFile
+            cfg.http.tlsKeyFile
+          ];
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          MemoryDenyWriteExecute = true;
+        };
+      };
+    })
 
     (mkIf cfg.queueEnable {
       systemd.services.splora-queue = {

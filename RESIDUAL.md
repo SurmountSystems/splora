@@ -1,4 +1,4 @@
-# Residual — splora production indexer
+# Residual for the splora production indexer
 
 This file is the Open leftover list for the approved production indexer work.
 Chat status is not this list. Dual honesty: finished slices are not Open;
@@ -106,15 +106,17 @@ timed-out daemon to HTTP 504. Named test
 `daemon_proxy_failures_map_to_503_and_504` covers that mapping.
 Electrum JSON-RPC stays JSON on the wire, not those HTTP statuses.
 
-`nix/module.nix` ships five-instance NixOS options, isolated queue
+`nix/module.nix` ships five-instance NixOS defaults, isolated queue
 `ReadWritePaths`, and an assertion that the queue directory is not the
 allowlist directory. Queue listen is `--socket-file` XOR `--bind`. Default
 listen is unix `/run/splora/queue.sock`. TCP needs `queueSocketFile =
-null`. Instance `daemonDir` is `nullOr str`. When `cookieFile` and
-`daemonRpcAddr` are set, `daemonDir` may be null: the unit omits
-`--daemon-dir` and omits a missing `/var/lib/bitcoind` from
-`ReadOnlyPaths`. Remote mode asserts cookie path plus rpc addr.
-`jsonrpcImport` default false passes `--jsonrpc-import` when true.
+null`. Instance `daemonDir` is `nullOr str`. Appliance defaults are
+`/var/lib/bitcoind/<net>` and `/var/lib/elementsd/liquid` with explicit
+cookie paths. When `cookieFile` and `daemonRpcAddr` are set, `daemonDir`
+may be null: the unit omits `--daemon-dir` and omits a missing
+`/var/lib/bitcoind` from `ReadOnlyPaths`. `startLocalDaemon = false`
+skips that chain's bitcoind or elementsd unit. Remote mode asserts cookie
+path plus rpc addr. `jsonrpcImport` default true passes `--jsonrpc-import`.
 `publicHealth` default false passes `--public-health`. Empty allowlist
 still 401s address, tx, and mempool REST. `dbBlockCacheMb` module
 default is 24 (same as CLI). REST does not require 4096. Optional
@@ -125,24 +127,80 @@ leaves it unset. Cookie bytes never appear in the module.
 `services.splora.popularScripts.enable` is set. The oneshot writes
 `/var/lib/splora/popular-scripts/popular-scripts.txt` and
 `ReadWritePaths` is that directory only. Popular-scripts omits
-`--daemon-dir` when that instance has no datadir. `flake.nix` exports
-`nixosModules.splora`, `apps.popular-scripts`, overlays, the
-`nixosFiveInstances` eval check, `nixosRemoteJsonrpcImport` (one
-instance, remote JSON-RPC, no local datadir), `nixosQueueListenXorSocket`
+`--daemon-dir` when that instance has no datadir.
+
+The appliance units `bitcoind-mainnet`, `bitcoind-testnet3`,
+`bitcoind-testnet4`, `bitcoind-mutinynet`, and `elementsd-liquid` are in
+the module. Four bitcoind units share one `bitcoindPackage`. Wallet is
+off. RPC is 127.0.0.1 only. P2P stays on. Cookie group-read for `splora`
+is supplementary groups plus `-rpccookieperms=group` on Core 31 and
+`-startupnotify=chmod g+r` on elementsd. `flake.nix` exports
+`packages.bitcoind`, `packages.elementsd`, overlay replacements for
+`pkgs.bitcoind` / `pkgs.elementsd`, `nixosModules.splora`,
+`apps.popular-scripts`, the `nixosFiveInstances` eval check,
+`nixosTenUnits` (ten units, same bitcoind store path, `-disablewallet`,
+cookie paths), `nixosRemoteJsonrpcImport` (one instance, remote JSON-RPC,
+no local datadir, no local daemon), `nixosQueueListenXorSocket`
 (default socket plus `queueListen` must fail the module assertion), and
-named check `rocksdbMoldLink` (`splora-nixpkgs-rocksdb-mold`). README
-matches the production argv (CLI versus module), including remote-node
-REST without Let's Encrypt, HTTP/3, hypervisor UDP 443, grok-oss, or
-queue-only enable. Queue is not REST. There is no nginx in this tree.
-Public TLS, HTTP/2, HTTP/3, and cipher suites belong on the first-party
-Axum edge in surmount-server. splora on the unix socket is local
-cleartext HTTP/1.1. QUIC cannot sit on a Unix domain socket. The README
-and [FORK.md](FORK.md) section 5 state that socket contract. This
-session did not edit surmount-server.
+named check `rocksdbMoldLink` (`NEEDED librocksdb` when
+`useSystemRocksdb` is true; mold is not required in `.comment`). README
+matches the production argv (CLI versus module), including the appliance
+story, remote-node REST without Let's Encrypt, hypervisor UDP 443,
+grok-oss, or queue-only enable. Queue is not REST. There is no nginx in
+this tree.
+
+The HTTP front is in this tree. Cargo bin `splora-http` and
+`src/http_front` terminate TLS 1.3, HTTP/2 (TCP ALPN `h2`), HTTP/1.1, and
+HTTP/3 (UDP QUIC ALPN `h3`) on this host. Unix indexers stay local
+cleartext HTTP/1.1 on `/run/splora/<instance>.http.sock`. QUIC is UDP.
+QUIC is not a Unix domain socket. Public `/signet` is HTTP 307 to
+`/mutinynet` and does not connect a backend (named test
+`signet_api_tx_returns_307_to_mutinynet_and_does_not_connect_backend`).
+The five named `http_front` contracts are unchanged
+(`signet_api_tx_returns_307_to_mutinynet_and_does_not_connect_backend`,
+`liquid_api_tx_hits_liquid_uds_with_path_tx`,
+`mainnet_api_v1_ws_stays_on_mainnet_http_sock`,
+`electrum_sock_is_never_a_proxy_target`,
+`tls_1_2_handshake_is_refused`). This wave landed a product type fix in
+`src/http_front/mod.rs` so h3 0.0.8 can typecheck, then
+`hyper::upgrade::on` before `into_parts` and `wait_for_socket` using
+`tokio::time::sleep` so unix tests do not stall the current-thread
+runtime. Those tests were not rewritten. Named command
+`cargo test --offline --locked --lib http_front -- --test-threads=1`
+passed all five contracts (`ok. 5 passed`). That is not a crane build of
+`packages.splora-http` and is not `NEEDED librocksdb`. Sharing one
+RocksDB LRU across indexer processes stays not Open.
+[FORK.md](FORK.md) section 5 records that this crate terminates TLS,
+HTTP/2, and HTTP/3 on `splora-http`. Do not say the edge lives only on
+surmount-server. Do not claim HTTP/2 and HTTP/3 do not terminate in this
+crate. surmount-server `sploraProxy` can still sit in front of this
+process, or instead of it. That is not leftover for this tree. Sharing
+one RocksDB LRU across indexer processes is not Open.
+
+Repo-root [FORK.md](FORK.md) names lineage, the Mempool schema lock,
+Blockstream ports that were copied without merging trees, Surmount-only
+modules, the appliance, and the HTTP/2 HTTP/3 split (section 5). README
+points at that file. Do not list `FORK.md` as Open.
+
+Named test `packaging_pins_rust_198_edition_2024_and_system_rocksdb`
+matches `useSystemRocksdb = true`. That pin landed with this wave. It is
+not leftover. It is not proof that the builder observed `NEEDED
+librocksdb`.
 
 The indexer was not rewritten. `mempool/mempool` was not vendored.
 
-Repo-root [FORK.md](FORK.md) names lineage, the Mempool schema lock, Blockstream ports that were copied without merging trees, Surmount-only modules, and the HTTP/2 HTTP/3 split (section 5). README points at that file. Do not list `FORK.md` as Open.
+Bitcoin Core 31.1 is fetched from the bitcoincore.org tarball. This git
+tree does not vendor that C. Do not copy C into git. CMake follows
+nixpkgs bitcoin 31 flags plus Gentoo `WITH_SYSTEM_LIBSECP256K1`. Unused
+Core 31.1 names `WITH_SYSTEM_SECP256K1` and `WITH_SYSTEM_LEVELDB` remain
+unused in upstream CMake; this package no longer passes them.
+`nix/bitcoind.nix` applies
+`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`, passes
+`(lib.cmakeBool "WITH_SYSTEM_LIBSECP256K1" true)`, and keeps
+`secp256k1` in `buildInputs`. `leveldb` is not in `buildInputs`. There
+is no honest CMake switch for system leveldb on v31.1; Core 31.1 still
+compiles the in-tarball leveldb subtree via `cmake/leveldb.cmake`.
+Wallet is off, so no BDB.
 
 ## Open
 
@@ -161,37 +219,27 @@ aarch64-linux. This deny-hygiene wave ran `cargo check --lib` (exit 0),
 parse-error). Named unit tests are not a substitute for `just
 check-local`.
 
-The flake sets `useSystemRocksdb = false`. Crane uses bundled `rocksdb`
-0.24.0 (`librocksdb-sys` 0.17.3+10.4.2). 2026-09-01 `just check-remote`
-did not query Menhera. Run 1 `splora-deps` failed because gcc rejected
-`-fuse-ld=` plus the mold store path. Named check `rocksdbMoldLink`
-is `splora-bundled-rocksdb` and does not run `readelf` (`NEEDED
-librocksdb` / mold `.comment` unproven). That is a mold fail, not
-builder DNS. Mold does not still link, so `RUSTFLAGS` mold and the
-`mold` native input are dropped. How the fallback works is in
-`doc/supply-chain.md`.
-The `include_str!` nextest compile miss is fixed in `flake.nix`.
-`packaging_pins_rust_198_edition_2024_and_system_rocksdb` now asserts
-`useSystemRocksdb = false` and the bundled 0.24.0 stub string.
-
-Nix flakes only see git-tracked files. `flake.nix`, `flake.lock`,
-`nix/module.nix`, and other new packaging files stay invisible to
-`just check-remote` until the operator stages them. Agents do not stage
-those files.
-
-### HTTP/2 and HTTP/3 (other tree)
-
-HTTP/2 and HTTP/3 are not served on the splora unix socket. They
-terminate on first-party Axum in surmount-server: TCP ALPN `h2` plus
-HTTP/1.1, and UDP QUIC ALPN `h3` (`sploraProxy`, `http3Enable`). This
-crate's unix sockets stay local cleartext HTTP/1.1. QUIC cannot sit on a
-Unix domain socket. On surmount-1, `surmount.sploraProxy` is already
-enabled. `http3Enable` stays true. Module `httpSocketFile` already
-defaults to `/run/splora/${name}.http.sock`; do not change that default
-to TCP. The edge must proxy HTTP only to that path, not to
-`/run/splora/${name}.electrum.sock`. This session did not edit
-surmount-server. Do not add nginx here. README and [FORK.md](FORK.md)
-section 5 state that contract.
+Nix flakes only see git-tracked files. `flake.nix` and `nix/module.nix`
+are already tracked, so dirty edits eval. These paths are still
+untracked (`git status --short` shows `??`; `git ls-files --others
+--exclude-standard` names the files): `nix/bitcoind.nix`,
+`nix/elementsd.nix`,
+`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`,
+`src/bin/splora-http.rs`, and `src/http_front/mod.rs` (directory
+`src/http_front/`). Staging only the three Nix daemon paths does not put
+the HTTP front into the flake source copy. This re-run observed
+`nix eval --impure --raw .#packages.x86_64-linux.bitcoind.drvPath` fail
+with `error: path '/nix/store/...-source/nix/bitcoind.nix' does not
+exist` (flake copy omits untracked files). Cheap check `nixosTenUnits`
+still produced
+`/nix/store/mwvbq6sig760wqccwy52q1ma5g4g2wcs-splora-nixos-ten-units.drv`
+on `nix eval --impure --raw .#checks.x86_64-linux.nixosTenUnits.drvPath`
+(dummy `pkgs.hello`, no Core compile). Named assert
+`mutinynetStockCoreArgv` inside `nixosTenUnits` is still green on that
+eval. Packages `bitcoind` / `elementsd` and `packages.splora-http` stay
+invisible to a flake copy until the operator stages all of those
+untracked paths (HTTP front plus the two Nix daemon files and the secp
+patch). Agents do not stage them.
 
 ### Agent-doable leftover
 
@@ -213,69 +261,127 @@ still owns `just check-local`.
 The CSV two-file queue, unix-socket defaults, queue XOR bind, queue
 mutex, popular-scripts timer and isolated output dir, live hyper WS
 101 fixture, MWCK subscribe fill from `Query` on first track, REST
-503/504 on daemon-proxy paths, named `rocksdbMoldLink` check (fallback:
-`useSystemRocksdb = false` after mold gcc reject on 2026-09-01), README CLI versus module, no nginx, and the
-surmount-server socket contract are already in this tree.
+503/504 on daemon-proxy paths, README CLI versus module, no nginx, the
+`splora-http` TLS front, [FORK.md](FORK.md) section 5, and the appliance
+units are already in this tree.
 
-`nixosFiveInstances` now requires the default queue unit to carry
+`nixosFiveInstances` still requires the default queue unit to carry
 `--socket-file` `/run/splora/queue.sock` and to omit TCP `--bind`. That
 matches `nix/module.nix`. `nixosRemoteJsonrpcImport` requires one
 instance with `jsonrpcImport = true`, `daemonRpcAddr = "10.0.0.1:8332"`,
-`cookieFile = "/run/bitcoind/.cookie"`, and `daemonDir = null`. ExecStart
-must contain `--jsonrpc-import`, `--daemon-rpc-addr`, and `--cookie-file`.
-ReadOnlyPaths must not list `/var/lib/bitcoind`. Cookie `USER:PASSWORD`
-bytes must not appear in argv or the module source. Operator still owns
-`nix flake check`. The cheap remote-JSON-RPC eval was observed green
-without a crane rebuild. That is not crate-wide `just check-remote`.
+`cookieFile = "/run/bitcoind/.cookie"`, `daemonDir = null`, and
+`startLocalDaemon = false`. ExecStart must contain `--jsonrpc-import`,
+`--daemon-rpc-addr`, and `--cookie-file`. ReadOnlyPaths must not list
+`/var/lib/bitcoind`. Cookie user/password pairs must not appear in argv
+or the module source. Operator still owns `nix flake check`. The cheap
+remote-JSON-RPC eval was observed green without a crane rebuild. That is
+not crate-wide `just check-remote`.
 
-Named flake check `rocksdbMoldLink` now records bundled 0.24.0 because
-`useSystemRocksdb` is false. Do not flip it back to true until crane
-on the builder links `NEEDED librocksdb` with a linker gcc accepts.
+Named flake check `rocksdbMoldLink` now inspects `NEEDED librocksdb`
+because `useSystemRocksdb` is true. It does not require mold in
+`.comment`. Mold stays off. clang or default ld. Never gcc `-fuse-ld=`
+plus a mold store path. That ELF `NEEDED librocksdb` line is still
+unproven until a builder runs that check. A laptop Wild-linked
+`librocksdb.so.10` ELF is not a crane proof.
+
+`nix/elementsd.nix` pins the unpacked GitHub archive hash
+`07p0zknrz74jyvxm04pa20y35kdarp9y0f5k99xz72psx9achkxv` for
+`ElementsProject/elements` tag `elements-23.3.3` (`nix-prefetch-url
+--unpack`, 2026-09-02). That is not a compile proof.
+
+secp256k1 and leveldb: Bitcoin Core 31.1 CMake still vendors the
+leveldb subtree. `WITH_SYSTEM_SECP256K1` and `WITH_SYSTEM_LEVELDB` are
+unused cache variables (no `option()` in v31.1). This package no longer
+passes those names. `nix/bitcoind.nix` applies
+`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch` and passes
+`(lib.cmakeBool "WITH_SYSTEM_LIBSECP256K1" true)`, with `secp256k1`
+still in `buildInputs`. ELF `NEEDED libsecp256k1` still requires a Core
+compile. There is no honest CMake switch for `pkgs.leveldb` on Core
+31.1. Do not invent one. Elements 23.3.3 is autotools and also vendors
+secp256k1 and leveldb. System linking of secp256k1 is still unproven.
+That outcome is recorded, not a silent claim of system-only linking.
 
 ### Sibling product paths still unfixed
 
 MWCK reorg replay is in the tree. `notify_new_tip` is not a no-op when
 the new height is lower or equal and the tip hash changed. Orphaned
-heights emit `removed`, then the new branch emits `confirmed`.
-
-Each RocksDB open gets its own LRU block cache. There is not one shared
-cache across txstore, history, and cache. Sharing would need `schema.rs`.
+heights emit `removed`, then the new branch emits `confirmed`. Do not
+re-open MWCK.
 
 `Allowlist::watch` has a live inotify unit test in `src/auth.rs`
 (`watch_reloads_listed_npub_without_calling_reload`). That is not leftover.
 
-`pkgs.nixosTest` was not added. The cheap `nixosFiveInstances` eval does
-not boot five indexers and does not prove approve-then-HTTP-without-restart
-on a VM.
+`pkgs.nixosTest` was not added and is not leftover. The cheap
+`nixosFiveInstances` and `nixosTenUnits` evals do not boot QEMU and do
+not prove approve-then-HTTP-without-restart on a VM. e2e/QEMU is not on
+`just check-remote`. Do not put a NixOS VM test on that gate.
+
+Public `/signet` 307 to `/mutinynet` is implemented in
+`src/http_front` (named test
+`signet_api_tx_returns_307_to_mutinynet_and_does_not_connect_backend`).
+README and FORK also document that redirect for the public edge. That
+redirect is not leftover.
+
+Mutinynet `signetchallenge` is the published faucet hex
+`512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae`.
+Indexer magic stays `a5df2dcb`. `bitcoind-mutinynet` ExecStart keeps
+that unwrapped challenge, `-addnode=45.79.52.207:38333`, and
+`-dnsseed=0`. It does not pass `-signetblocktime`. Named flake assert
+`mutinynetStockCoreArgv` inside `nixosTenUnits` forbids
+`-signetblocktime` on mutinynet and on the other daemons. Mutinynet's
+30-second interval is a miner/network property. Stock Core 31.1 has no
+`-signetblocktime`. This package does not produce a 30-second-block
+outcome via argv. Do not wrap the challenge on stock Core: wrapping
+would change P2P magic. Wallet stays off.
 
 ## Highest value next
 
-`just check-remote` on 2026-09-01 run 1 failed in `splora-deps` on mold,
-not Menhera DNS. After `useSystemRocksdb = false` and dropping mold
-`RUSTFLAGS`, run 2 built `splora-bundled-rocksdb` (text
-`useSystemRocksdb is false; bundled rocksdb 0.24.0`) and copied
-`splora-deps` from the builder. Run 2 then failed nextest (exit 101)
-because crane `cleanCargoSource` omitted `flake.nix`, `nix/module.nix`,
-and `rust-toolchain`. That filter hole is closed in `flake.nix`: crane
-`src` unions those three paths onto `filterCargoSources` and still omits
-`.cargo/config.toml`. `cargoExtraArgs` stays `--offline --locked`.
-Run 3 (`just check-remote`) exited 0 with `all checks passed!` and
-`checks.x86_64-linux.rocksdbMoldLink` still `splora-bundled-rocksdb`.
-`useSystemRocksdb` stays false. A laptop Wild-linked
-`librocksdb.so.10` ELF is not a crane proof.
-Evicted mempool txs the hub saw on add keep a full object in `removed`.
-That slice is in the tree, not leftover.
+This review pass dropped `-signetblocktime=30` from `bitcoind-mutinynet`
+ExecStart. The unit still passes the unwrapped published challenge,
+`-addnode=45.79.52.207:38333`, and `-dnsseed=0`. Wallet stays off.
+Named flake assert `mutinynetStockCoreArgv` forbids `-signetblocktime`
+on mutinynet and on the other daemons. That assert is green on
+`nix eval --impure --raw .#checks.x86_64-linux.nixosTenUnits.drvPath`.
+Mutinynet's 30-second interval is a miner/network property. Stock Core
+31.1 has no `-signetblocktime`. This package does not produce a
+30-second-block outcome via argv.
 
-The clap 4 rewrite, the serde-wincode on-disk codec, and nostr 0.45.3
-NIP-98 types are in the tree. Do not treat those rustsec rows as a
-lock-only job.
+This review pass also wired Gentoo `WITH_SYSTEM_LIBSECP256K1` into
+`nix/bitcoind.nix`: the derivation applies
+`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`, passes
+`(lib.cmakeBool "WITH_SYSTEM_LIBSECP256K1" true)`, keeps `secp256k1` in
+`buildInputs`, and dropped unused `WITH_SYSTEM_SECP256K1` /
+`WITH_SYSTEM_LEVELDB` plus `leveldb` from `buildInputs`. Unused Core
+31.1 names remain unused in upstream CMake. There is no honest CMake
+switch for system leveldb. Do not copy C into git. ELF
+`NEEDED libsecp256k1` still requires a Core compile. That link is
+unproven.
 
-If public HTTP/2 and HTTP/3 are wanted, enable the existing
-surmount-server `sploraProxy` (and HTTPS `http3Enable`) on that other
-tree. Do not add nginx or HTTP/2 in this crate. This session did not
-edit surmount-server.
+This wave landed a product type fix in `src/http_front/mod.rs` so h3
+0.0.8 can typecheck, then upgrade-order and `wait_for_socket` so the
+five named contracts run. This re-run of
+`cargo test --offline --locked --lib http_front -- --test-threads=1`
+passed all five contracts (`ok. 5 passed; 0 failed`). `nixosTenUnits`
+eval is still green. Compiling `packages.splora-http` on the builder is
+still unproven. It is not how those five tests run. This re-run did not
+readelf a built ELF; `NEEDED librocksdb` is still unproven.
 
-Parked sibling gaps on this tree (not the next proof) are a shared LRU
-block cache and a `nixosTest` VM. Full MWCK reorg replay is in the tree.
-Evicted mempool txs the hub saw on add keep a full object in `removed`.
-The live inotify allowlist watch test is in the tree.
+The operator staging every still-untracked flake source is the unblock:
+`src/bin/splora-http.rs`, `src/http_front/` (`src/http_front/mod.rs`),
+`nix/bitcoind.nix`, `nix/elementsd.nix`, and
+`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`. Staging only
+the three Nix files still omits the HTTP front from the flake source
+copy. Agents do not stage.
+
+Unproven builder proofs after that full stage: `just check-remote`
+observing `NEEDED librocksdb` (clang or default ld, no gcc+mold),
+compiling `packages.splora-http` (aws-lc-rs + cmake) once those HTTP
+front sources are tracked, and a Core compile that shows ELF `NEEDED
+libsecp256k1` after this wiring. String pins are not that link proof.
+This file does not claim `NEEDED librocksdb` without readelf. Do not
+invent a copy workaround.
+
+Do not re-open clap 4, wallet-on, MWCK, nginx, or RocksDB LRU-share.
+Sharing one RocksDB LRU across indexer processes is not Open. Do not
+put `pkgs.nixosTest` on `just check-remote`. e2e/QEMU stays off that
+gate.

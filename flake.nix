@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Unlicense
 {
-  description = "splora: Surmount production Bitcoin and Liquid indexer";
+  description = "splora: Surmount production Bitcoin and Liquid indexer appliance";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -46,13 +46,12 @@
           rustToolchain = pkgs.rust-bin.stable."1.98.0".default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-          # Prefer one nixpkgs rocksdb for both binaries when the builder
-          # can link it. 2026-09-01 `just check-remote` never reached
-          # `rocksdbMoldLink`: `splora-deps` failed because gcc rejected
-          # `-fuse-ld=` plus the mold store path. Mold does not still
-          # link. Fallback is bundled rocksdb 0.24.0 (no ROCKSDB_* env,
-          # no mold RUSTFLAGS). See doc/supply-chain.md.
-          useSystemRocksdb = false;
+          # Link nixpkgs rocksdb. Use clang / default ld. Never gcc
+          # -fuse-ld= plus a mold store path. Mold stays off.
+          # src/config.rs packaging_pins_rust_198_edition_2024_and_system_rocksdb
+          # asserts useSystemRocksdb = true. ELF NEEDED librocksdb is still
+          # unproven until a builder runs rocksdbMoldLink.
+          useSystemRocksdb = true;
 
           # Laptop `.cargo/config.toml` rewrites crates.io to Menhera.
           # Crane must not copy it: after vendor, cargo would still query
@@ -90,6 +89,9 @@
             nativeBuildInputs = with pkgs; [
               clang
               cmake
+              # aws-lc-sys (rustls / splora-http). cmake is required.
+              # nasm is the x86 assembler path; unused on aarch64.
+              nasm
               pkg-config
               rustPlatform.bindgenHook
             ];
@@ -135,6 +137,18 @@
             }
           );
 
+          # Default (non-liquid) lineage. Same Cargo.lock and cargoArtifacts
+          # as splora. Third package next to splora and splora-liquid.
+          splora-http = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              pname = "splora-http";
+              cargoExtraArgs = "${commonArgs.cargoExtraArgs} --bin splora-http";
+              doCheck = false;
+            }
+          );
+
           nextest = craneLib.cargoNextest (
             commonArgs
             // {
@@ -145,17 +159,19 @@
           );
         in
         {
-          inherit splora splora-liquid nextest useSystemRocksdb;
+          inherit splora splora-liquid splora-http nextest useSystemRocksdb;
         };
     in
     {
       packages = forEachSystem (
         pkgs:
         let
-          inherit (mkPkgs pkgs) splora splora-liquid;
+          inherit (mkPkgs pkgs) splora splora-liquid splora-http;
+          bitcoind = pkgs.callPackage ./nix/bitcoind.nix { };
+          elementsd = pkgs.callPackage ./nix/elementsd.nix { };
         in
         {
-          inherit splora splora-liquid;
+          inherit splora splora-liquid splora-http bitcoind elementsd;
           default = splora;
         }
       );
@@ -176,6 +192,9 @@
       overlays.default = final: _prev: {
         splora = self.packages.${final.system}.splora;
         splora-liquid = self.packages.${final.system}.splora-liquid;
+        splora-http = self.packages.${final.system}.splora-http;
+        bitcoind = self.packages.${final.system}.bitcoind;
+        elementsd = self.packages.${final.system}.elementsd;
       };
 
       checks = forEachSystem (
@@ -183,7 +202,10 @@
         let
           inherit (pkgs) lib;
           built = mkPkgs pkgs;
-          # Dummy packages: this check is argv/unit eval, not a crane rebuild.
+          firstWord =
+            s: lib.head (lib.filter (x: x != "") (lib.splitString " " s));
+          # Dummy packages: this check is argv/unit eval, not a crane rebuild
+          # and not a Bitcoin Core compile.
           mkSploraEval =
             extraSplora:
             import (pkgs.path + "/nixos/lib/eval-config.nix") {
@@ -200,7 +222,10 @@
                   services.splora = {
                     enable = true;
                     package = pkgs.hello;
+                    httpPackage = pkgs.hello;
                     liquidPackage = pkgs.hello;
+                    bitcoindPackage = pkgs.hello;
+                    elementsdPackage = pkgs.hello;
                     instances = {
                       mainnet.network = "mainnet";
                       testnet3.network = "testnet3";
@@ -224,6 +249,13 @@
             "splora-testnet4"
             "splora-mutinynet"
             "splora-liquid"
+          ];
+          daemonNames = [
+            "bitcoind-mainnet"
+            "bitcoind-testnet3"
+            "bitcoind-testnet4"
+            "bitcoind-mutinynet"
+            "elementsd-liquid"
           ];
           indexersOk = lib.all (
             name:
@@ -256,6 +288,56 @@
             assert queueDir;
             assert queueNotAllowParent;
             pkgs.runCommand "splora-nixos-five-instances" { } "echo ok > $out";
+          bitcoindStarts = map exec [
+            "bitcoind-mainnet"
+            "bitcoind-testnet3"
+            "bitcoind-testnet4"
+            "bitcoind-mutinynet"
+          ];
+          bitcoindStore = firstWord (lib.head bitcoindStarts);
+          tenUnitsPresent = lib.all (name: lib.hasAttr name eval.config.systemd.services) (
+            indexerNames ++ daemonNames
+          );
+          sameBitcoind = lib.all (s: firstWord s == bitcoindStore) bitcoindStarts;
+          disablewalletAll = lib.all (s: lib.hasInfix "-disablewallet" s) bitcoindStarts;
+          cookiePaths =
+            lib.hasInfix "/var/lib/bitcoind/mainnet/.cookie" (exec "bitcoind-mainnet")
+            && lib.hasInfix "/var/lib/bitcoind/testnet3/.cookie" (exec "bitcoind-testnet3")
+            && lib.hasInfix "/var/lib/bitcoind/testnet4/.cookie" (exec "bitcoind-testnet4")
+            && lib.hasInfix "/var/lib/bitcoind/mutinynet/.cookie" (exec "bitcoind-mutinynet")
+            && lib.hasInfix "/var/lib/elementsd/liquid/.cookie" (exec "elementsd-liquid");
+          moduleText = builtins.readFile ./nix/module.nix;
+          noUserPassword = !(lib.hasInfix "USER:PASSWORD" moduleText);
+          indexerAfterDaemon =
+            lib.elem "bitcoind-mainnet.service" eval.config.systemd.services.splora-mainnet.after
+            && lib.elem "bitcoind-testnet3.service" eval.config.systemd.services.splora-testnet3.after
+            && lib.elem "bitcoind-testnet4.service" eval.config.systemd.services.splora-testnet4.after
+            && lib.elem "bitcoind-mutinynet.service" eval.config.systemd.services.splora-mutinynet.after
+            && lib.elem "elementsd-liquid.service" eval.config.systemd.services.splora-liquid.after;
+          # Mutinynet follower argv on stock Core 31.1: published unwrapped
+          # challenge, addnode, dnsseed=0, wallet off. Mutinynet's 30-second
+          # interval is a miner/network property; stock 31.1 has no
+          # -signetblocktime (unregistered: the unit would refuse start).
+          mutinynetExec = exec "bitcoind-mutinynet";
+          mutinynetStockCoreArgv =
+            lib.hasInfix "-signetchallenge=512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae" mutinynetExec
+            && lib.hasInfix "-addnode=45.79.52.207:38333" mutinynetExec
+            && lib.hasInfix "-dnsseed=0" mutinynetExec
+            && lib.hasInfix "-disablewallet" mutinynetExec
+            && !(lib.hasInfix "-signetblocktime" mutinynetExec)
+            && !(lib.hasInfix "-signetblocktime" (exec "bitcoind-mainnet"))
+            && !(lib.hasInfix "-signetblocktime" (exec "bitcoind-testnet3"))
+            && !(lib.hasInfix "-signetblocktime" (exec "bitcoind-testnet4"))
+            && !(lib.hasInfix "-signetblocktime" (exec "elementsd-liquid"));
+          nixosTenUnits =
+            assert tenUnitsPresent;
+            assert sameBitcoind;
+            assert disablewalletAll;
+            assert cookiePaths;
+            assert noUserPassword;
+            assert indexerAfterDaemon;
+            assert mutinynetStockCoreArgv;
+            pkgs.runCommand "splora-nixos-ten-units" { } "echo ok > $out";
           # Default socket plus queueListen must fail the module assertion,
           # not wait for clap to refuse both flags at start.
           evalQueueListenWithDefaultSocket = mkSploraEval {
@@ -271,12 +353,14 @@
             pkgs.runCommand "splora-nixos-queue-listen-xor-socket" { } "echo ok > $out";
           # One-instance remote JSON-RPC: cookie path + rpc addr, no local
           # bitcoind datadir. Dummy package; not a crane rebuild. Cookie
-          # bytes never appear in argv (path only).
+          # bytes never appear in argv (path only). startLocalDaemon false
+          # skips the appliance bitcoind unit.
           evalRemoteJsonrpc = mkSploraEval {
             instances = {
               mainnet = {
                 network = "mainnet";
                 jsonrpcImport = true;
+                startLocalDaemon = false;
                 daemonRpcAddr = "10.0.0.1:8332";
                 cookieFile = "/run/bitcoind/.cookie";
                 daemonDir = null;
@@ -298,11 +382,11 @@
             assert !(lib.hasInfix "--cookie " (" " + remoteStart + " "));
             assert !(lib.hasInfix "USER:PASSWORD" remoteStart);
             assert !(lib.hasInfix "USER:PASSWORD" remoteModuleText);
+            assert !(evalRemoteJsonrpc.config.systemd.services ? bitcoind-mainnet);
             pkgs.runCommand "splora-nixos-remote-jsonrpc-import" { } "echo ok > $out";
-          # Named proof that crane linked nixpkgs rocksdb and mold when
-          # useSystemRocksdb is true. 2026-09-01 `just check-remote` failed
-          # in splora-deps on mold (`gcc: unrecognized -fuse-ld=` path).
-          # useSystemRocksdb is false; this check records bundled 0.24.0.
+          # Named proof that crane linked nixpkgs rocksdb when
+          # useSystemRocksdb is true. Do not require mold in .comment.
+          # Mold does not link. clang / default ld only.
           rocksdbMoldLink =
             if built.useSystemRocksdb then
               pkgs.runCommand "splora-nixpkgs-rocksdb-mold" {
@@ -312,14 +396,13 @@
                 check_bin() {
                   local bin="$1"
                   readelf -d "$bin" | grep -E 'NEEDED.*librocksdb'
-                  readelf -p .comment "$bin" | grep -qi mold
                 }
                 check_bin ${built.splora}/bin/splora
                 check_bin ${built.splora-liquid}/bin/splora
                 mkdir "$out"
                 echo "nixpkgs rocksdb ${pkgs.rocksdb.version}" > "$out/ok"
                 echo "bindgen ROCKSDB_INCLUDE_DIR ${pkgs.rocksdb}/include" >> "$out/ok"
-                echo "SONAME librocksdb.so.10 (10.10.1); crate vendor is 10.4.2 unused" >> "$out/ok"
+                echo "SONAME librocksdb.so.10; mold is not required in .comment" >> "$out/ok"
               ''
             else
               pkgs.runCommand "splora-bundled-rocksdb" { } ''
@@ -329,8 +412,10 @@
         {
           splora = built.splora;
           splora-liquid = built.splora-liquid;
+          splora-http = built.splora-http;
           nextest = built.nextest;
           inherit nixosFiveInstances;
+          inherit nixosTenUnits;
           inherit nixosQueueListenXorSocket;
           inherit nixosRemoteJsonrpcImport;
           inherit rocksdbMoldLink;
