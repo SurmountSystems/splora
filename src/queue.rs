@@ -3,6 +3,9 @@
 //! This file is the queue. It is not the allowlist.
 
 use crate::auth::{Allowlist, parse_pubkey_line};
+use crate::http_types::{
+    HttpRequest, HttpResponse, full_body, http1_builder_with_header_read_timeout,
+};
 use clap::{Arg, ArgMatches, Command};
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -15,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
-/// Same HTTP/1 header-read timeout as indexer REST (`Server::http1_header_read_timeout`).
-/// TCP queue still uses tiny_http and does not have this valve.
+/// Same HTTP/1 header-read timeout as indexer REST (`http1::Builder::header_read_timeout`
+/// plus `TokioTimer`). TCP queue still uses tiny_http and does not have this valve.
 const HTTP1_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
@@ -541,36 +544,37 @@ pub fn run_unix(
 }
 
 async fn serve_unix(socket_path: PathBuf, store: Arc<QueueStore>) -> Result<(), QueueError> {
-    use hyper::service::{make_service_fn, service_fn};
-    use hyperlocal::UnixServerExt;
+    use hyper::service::service_fn;
+    use hyper_util::rt::TokioIo;
+    use std::convert::Infallible;
+    use tokio::net::UnixListener;
 
-    let make = make_service_fn(move |_| {
+    let listener = UnixListener::bind(&socket_path).map_err(|e| QueueError::Io(e.to_string()))?;
+    loop {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| QueueError::Io(e.to_string()))?;
         let store = Arc::clone(&store);
-        async move {
-            Ok::<_, hyper::Error>(service_fn(move |req: hyper::Request<hyper::Body>| {
+        let io = TokioIo::new(stream);
+        let builder = http1_builder_with_header_read_timeout(HTTP1_HEADER_READ_TIMEOUT);
+        tokio::spawn(async move {
+            let svc = service_fn(move |req: HttpRequest| {
                 let store = Arc::clone(&store);
-                async move { Ok::<_, hyper::Error>(handle_unix_http(store, req).await) }
-            }))
-        }
-    });
-    hyper::Server::bind_unix(&socket_path)
-        .map_err(|e| QueueError::Io(e.to_string()))?
-        .http1_header_read_timeout(HTTP1_HEADER_READ_TIMEOUT)
-        .serve(make)
-        .await
-        .map_err(|e| QueueError::Io(e.to_string()))
+                async move { Ok::<_, Infallible>(handle_unix_http(store, req).await) }
+            });
+            let _ = builder.serve_connection(io, svc).await;
+        });
+    }
 }
 
-async fn handle_unix_http(
-    store: Arc<QueueStore>,
-    req: hyper::Request<hyper::Body>,
-) -> hyper::Response<hyper::Body> {
+async fn handle_unix_http(store: Arc<QueueStore>, req: HttpRequest) -> HttpResponse {
     if req.method() != hyper::Method::POST {
         return hyper_json_status(405, "method not allowed");
     }
     let ip = unix_client_ip(&req);
-    let body = match hyper::body::to_bytes(req.into_body()).await {
-        Ok(b) => b,
+    let body = match http_body_util::BodyExt::collect(req.into_body()).await {
+        Ok(c) => c.to_bytes(),
         Err(_) => return hyper_json_status(400, "bad body"),
     };
     let body = match std::str::from_utf8(&body) {
@@ -589,7 +593,7 @@ async fn handle_unix_http(
                 let s = serde_json::to_string(&row).unwrap_or_else(|_| "{}".into());
                 hyper::Response::builder()
                     .header("Content-Type", "application/json")
-                    .body(hyper::Body::from(s))
+                    .body(full_body(s))
                     .unwrap_or_else(|_| hyper_json_status(500, "response"))
             }
             Err(QueueError::InvalidNpub) => hyper_json_status(400, "invalid npub"),
@@ -605,7 +609,7 @@ async fn handle_unix_http(
 
 /// First `X-Forwarded-For` hop when the Surmount edge forwarded a client
 /// address. No header means rate-limit by npub only (do not share 127.0.0.1).
-fn unix_client_ip(req: &hyper::Request<hyper::Body>) -> Option<IpAddr> {
+fn unix_client_ip<B>(req: &hyper::Request<B>) -> Option<IpAddr> {
     req.headers()
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
@@ -618,13 +622,13 @@ fn unix_client_ip(req: &hyper::Request<hyper::Body>) -> Option<IpAddr> {
         })
 }
 
-fn hyper_json_status(code: u16, msg: &str) -> hyper::Response<hyper::Body> {
+fn hyper_json_status(code: u16, msg: &str) -> HttpResponse {
     let body = format!("{{\"error\":\"{}\"}}", msg);
     hyper::Response::builder()
         .status(code)
         .header("Content-Type", "application/json")
-        .body(hyper::Body::from(body.clone()))
-        .unwrap_or_else(|_| hyper::Response::new(hyper::Body::from(body)))
+        .body(full_body(body.clone()))
+        .unwrap_or_else(|_| hyper::Response::new(full_body(body)))
 }
 
 // Silence unused Allowlist import until rest.rs wires NIP-98 plus import.
@@ -1065,13 +1069,13 @@ mod tests {
             .method("POST")
             .uri("/")
             .header("x-forwarded-for", "203.0.113.9, 10.0.0.1")
-            .body(hyper::Body::empty())
+            .body(())
             .unwrap();
         assert_eq!(unix_client_ip(&req), Some("203.0.113.9".parse().unwrap()));
         let bare = hyper::Request::builder()
             .method("POST")
             .uri("/")
-            .body(hyper::Body::empty())
+            .body(())
             .unwrap();
         assert_eq!(unix_client_ip(&bare), None);
     }
@@ -1092,9 +1096,16 @@ mod tests {
         panic!("unix queue socket did not appear: {:?}", path);
     }
 
-    fn unix_post_json(sock: &Path, npub: &str, email: &str) -> hyper::Response<hyper::Body> {
-        use hyperlocal::UnixClientExt;
-        let client = hyper::Client::unix();
+    fn unix_post_json(
+        sock: &Path,
+        npub: &str,
+        email: &str,
+    ) -> hyper::Response<hyper::body::Incoming> {
+        use bytes::Bytes;
+        use http_body_util::Full;
+        use hyper_util::client::legacy::Client;
+        use hyperlocal::{UnixClientExt, UnixConnector};
+        let client: Client<UnixConnector, Full<Bytes>> = Client::unix();
         let body = format!(r#"{{"npub":"{}","email":"{}"}}"#, npub, email);
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1105,7 +1116,7 @@ mod tests {
             let uri: hyper::Uri = hyperlocal::Uri::new(sock, "/").into();
             let req = hyper::Request::post(uri)
                 .header("content-type", "application/json")
-                .body(hyper::Body::from(body.clone()))
+                .body(Full::new(Bytes::from(body.clone())))
                 .unwrap();
             match rt.block_on(client.request(req)) {
                 Ok(resp) => return resp,

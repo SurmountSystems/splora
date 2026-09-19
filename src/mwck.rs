@@ -7,7 +7,7 @@
 //! `multi-scriptpubkey-transactions` with `{mempool, confirmed, removed}`
 //! per key.
 //!
-//! Hyper 0.14 WebSocket upgrade is wired from `rest.rs` later. This module is
+//! Hyper 1 WebSocket upgrade is wired from `rest.rs`. This module is
 //! the in-process JSON state machine. Do not HTTP self-poll.
 //!
 //! The `/api/v1/ws` upgrade must require [`crate::auth::Allowlist`]. After
@@ -107,7 +107,7 @@ impl MwckHub {
     }
 
     /// Handshake-only hub. No chain [`Query`]. REST tests use this so a live
-    /// hyper 0.14 upgrade does not boot the indexer.
+    /// hyper 1 upgrade does not boot the indexer.
     #[cfg(test)]
     pub fn handshake_fixture() -> Arc<Self> {
         Arc::new(MwckHub {
@@ -346,7 +346,7 @@ impl MwckHub {
     }
 
     /// Apply one client JSON message. REST must not call this unless the
-    /// upgrade already proved `pubkey` is on `allow`. Hyper 0.14 upgrade
+    /// upgrade already proved `pubkey` is on `allow`. Hyper 1 upgrade
     /// stays in `rest.rs`.
     ///
     /// The first `multi-address-transactions` / `multi-scriptpubkey-transactions`

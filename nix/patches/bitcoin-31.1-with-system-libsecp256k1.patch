@@ -14,7 +14,7 @@
 #
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -164,6 +164,10 @@ if(ENABLE_IPC AND WITH_EXTERNAL_LIBMULTIPROCESS)
+@@ -162,6 +162,9 @@ if(ENABLE_IPC AND WITH_EXTERNAL_LIBMULTIPROCESS)
    )
  endif()
  
@@ -26,7 +26,7 @@
    set(qt_components Core Gui Widgets LinguistTools)
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -23,8 +23,50 @@ add_subdirectory(univalue)
+@@ -23,8 +23,44 @@ add_subdirectory(univalue)
    include(../cmake/libmultiprocess.cmake)
    add_libmultiprocess(ipc/libmultiprocess)
  endif()

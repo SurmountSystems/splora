@@ -870,7 +870,7 @@ mod tests {
         assert!(src.contains("!(lib.hasInfix \"--bind\" queueStart)"));
     }
 
-    /// Named contract: rustc 1.98, edition 2024. System RocksDB is on
+    /// Named contract: rustc 1.98.1, edition 2024. System RocksDB is on
     /// (`useSystemRocksdb = true`). ELF NEEDED librocksdb. Not the bundled
     /// rocksdb stub. Not mold in `.comment`. CLI cache stays 24.
     #[test]
@@ -879,8 +879,8 @@ mod tests {
         let cargo = include_str!("../Cargo.toml");
         let flake = include_str!("../flake.nix");
         assert!(
-            toolchain.trim() == "1.98.0",
-            "rust-toolchain must pin 1.98.0, got {:?}",
+            toolchain.trim() == "1.98.1",
+            "rust-toolchain must pin 1.98.1, got {:?}",
             toolchain
         );
         assert!(
@@ -892,8 +892,8 @@ mod tests {
             "Cargo.toml must set rust-version 1.98"
         );
         assert!(
-            flake.contains("rust-bin.stable.\"1.98.0\""),
-            "flake.nix must use rust-overlay stable 1.98.0"
+            flake.contains("rust-bin.stable.\"1.98.1\""),
+            "flake.nix must use rust-overlay stable 1.98.1"
         );
         assert!(
             flake.contains("useSystemRocksdb = true"),

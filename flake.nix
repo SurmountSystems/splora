@@ -43,7 +43,7 @@
         pkgs:
         let
           inherit (pkgs) lib;
-          rustToolchain = pkgs.rust-bin.stable."1.98.0".default;
+          rustToolchain = pkgs.rust-bin.stable."1.98.1".default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
           # Link nixpkgs rocksdb. Use clang / default ld. Never gcc

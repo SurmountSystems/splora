@@ -6,6 +6,9 @@ use crate::chain::{
 };
 use crate::config::{BITCOIND_SUBVER, Config, VERSION_STRING};
 use crate::errors;
+use crate::http_types::{
+    HttpRequest, HttpResponse, empty_body, full_body, http1_builder_with_header_read_timeout,
+};
 use crate::metrics::Metrics;
 use crate::mwck::{ClientState, MwckHub};
 use crate::new_index::{Query, SpendingInput, Utxo, compute_script_hash};
@@ -23,25 +26,28 @@ use std::str::FromStr;
 
 use bitcoin::blockdata::opcodes;
 use bitcoin::hashes::Hash;
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use hex::{self, FromHexError};
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use http_body_util::BodyExt;
+use hyper::service::service_fn;
 use hyper::{
+    Method, Response, StatusCode,
     header::{self, HeaderValue},
-    service::{make_service_fn, service_fn},
-    upgrade::Upgraded,
 };
+use hyper_util::rt::TokioIo;
 use prometheus::{HistogramOpts, HistogramVec};
 use rayon::iter::ParallelIterator;
+use tokio::net::{TcpListener, UnixListener};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role;
 
-use hyperlocal::UnixServerExt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cmp, fs};
 #[cfg(feature = "liquid")]
@@ -87,17 +93,12 @@ const REQUEST_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BODY_SIZE: usize = 1_000_000;
 const NIP98_WINDOW_SECS: u64 = 60;
 const WS_ALLOWLIST_POLL: Duration = Duration::from_secs(2);
-/// HTTP/1 header-read timeout (Blockstream new-index ~10s). hyper 0.14.20+
-/// `Server::http1_header_read_timeout`. Closes a client that never finishes the
-/// request line and headers. Body collection still uses `REQUEST_BODY_TIMEOUT`.
+/// HTTP/1 header-read timeout (Blockstream new-index ~10s). hyper 1
+/// `http1::Builder::header_read_timeout` plus `TokioTimer`. Closes a client
+/// that never finishes the request line and headers. Body collection still
+/// uses `REQUEST_BODY_TIMEOUT`. Without a Timer, hyper 1 panics if this is set.
+/// Default with a timer is 30 seconds. This crate sets 10 seconds.
 const HTTP1_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
-
-fn with_http1_header_read_timeout<I>(
-    builder: hyper::server::Builder<I>,
-    timeout: Duration,
-) -> hyper::server::Builder<I> {
-    builder.http1_header_read_timeout(timeout)
-}
 
 // internal api prefix
 const INTERNAL_PREFIX: &str = "internal";
@@ -728,7 +729,7 @@ pub fn reconstruct_absolute_url(
     format!("{}://{}{}", proto, host, path)
 }
 
-fn reconstruct_from_req(req: &Request<Body>) -> String {
+fn reconstruct_from_req(req: &HttpRequest) -> String {
     let proto = req
         .headers()
         .get("x-forwarded-proto")
@@ -785,16 +786,16 @@ pub fn http_ws_auth_gate(
     Ok(HttpAuthOutcome::Pubkey(pk))
 }
 
-fn unauthorized_response(err: &AuthError) -> Response<Body> {
+fn unauthorized_response(err: &AuthError) -> HttpResponse {
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .header("Content-Type", "text/plain")
         .header("WWW-Authenticate", "Nostr")
-        .body(Body::from(err.to_string()))
+        .body(full_body(err.to_string()))
         .unwrap()
 }
 
-fn apply_common_headers(resp: &mut Response<Body>, config: &Config) {
+fn apply_common_headers(resp: &mut HttpResponse, config: &Config) {
     resp.headers_mut()
         .insert("X-Powered-By", HeaderValue::from_static(&VERSION_STRING));
     if let Some(ref origins) = config.cors {
@@ -807,7 +808,7 @@ fn apply_common_headers(resp: &mut Response<Body>, config: &Config) {
     }
 }
 
-fn is_websocket_upgrade(req: &Request<Body>) -> bool {
+fn is_websocket_upgrade(req: &HttpRequest) -> bool {
     let upgrade = req
         .headers()
         .get(header::UPGRADE)
@@ -823,7 +824,7 @@ fn is_websocket_upgrade(req: &Request<Body>) -> bool {
     upgrade && conn
 }
 
-fn auth_header_from(req: &Request<Body>) -> Option<String> {
+fn auth_header_from(req: &HttpRequest) -> Option<String> {
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -851,11 +852,11 @@ pub fn mwck_upgrade_http_status(
 }
 
 async fn handle_mwck_upgrade(
-    req: Request<Body>,
+    req: HttpRequest,
     allow: Arc<Allowlist>,
     hub: Arc<MwckHub>,
     public_health: bool,
-) -> Response<Body> {
+) -> HttpResponse {
     let authorization = auth_header_from(&req);
     let absolute = reconstruct_from_req(&req);
     let method = req.method().as_str().to_string();
@@ -890,7 +891,7 @@ async fn handle_mwck_upgrade(
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header("Content-Type", "text/plain")
-                .body(Body::from(msg))
+                .body(full_body(msg))
                 .unwrap();
         }
         _ => {}
@@ -906,7 +907,7 @@ async fn handle_mwck_upgrade(
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header("Content-Type", "text/plain")
-                .body(Body::from("missing Sec-WebSocket-Key"))
+                .body(full_body("missing Sec-WebSocket-Key"))
                 .unwrap();
         }
     };
@@ -915,7 +916,8 @@ async fn handle_mwck_upgrade(
     tokio::spawn(async move {
         match on_upgrade.await {
             Ok(upgraded) => {
-                let ws = WebSocketStream::from_raw_socket(upgraded, Role::Server, None).await;
+                let io = TokioIo::new(upgraded);
+                let ws = WebSocketStream::from_raw_socket(io, Role::Server, None).await;
                 run_mwck_socket(ws, allow, hub, pubkey).await;
             }
             Err(e) => warn!("websocket upgrade failed: {}", e),
@@ -927,12 +929,12 @@ async fn handle_mwck_upgrade(
         .header(header::UPGRADE, "websocket")
         .header(header::CONNECTION, "Upgrade")
         .header("Sec-WebSocket-Accept", accept)
-        .body(Body::empty())
+        .body(empty_body())
         .unwrap()
 }
 
 async fn run_mwck_socket(
-    ws: WebSocketStream<Upgraded>,
+    ws: WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>,
     allow: Arc<Allowlist>,
     hub: Arc<MwckHub>,
     pubkey: [u8; 32],
@@ -998,6 +1000,132 @@ async fn run_mwck_socket(
     let _ = sink.send(WsMessage::Close(None)).await;
 }
 
+async fn handle_one_rest_request(
+    req: HttpRequest,
+    query: Arc<Query>,
+    config: Arc<Config>,
+    allow: Arc<Allowlist>,
+    hub: Arc<MwckHub>,
+    metric: HistogramVec,
+) -> Result<HttpResponse, hyper::Error> {
+    let timer = metric.with_label_values(&["all_methods"]).start_timer();
+    if req.uri().path() == "/api/v1/ws" {
+        let mut resp = handle_mwck_upgrade(req, allow, hub, config.public_health).await;
+        apply_common_headers(&mut resp, &config);
+        timer.observe_duration();
+        return Ok(resp);
+    }
+
+    let authorization = auth_header_from(&req);
+    let absolute = reconstruct_from_req(&req);
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let body_result = timeout(REQUEST_BODY_TIMEOUT, req.into_body().collect()).await;
+
+    let body = match body_result {
+        Ok(Ok(collected)) => {
+            let bytes = collected.to_bytes();
+            if bytes.len() > MAX_BODY_SIZE {
+                return Ok(Response::builder()
+                    .status(StatusCode::PAYLOAD_TOO_LARGE)
+                    .header("Content-Type", "text/plain")
+                    .body(full_body("Request body too large"))
+                    .unwrap());
+            }
+            bytes
+        }
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            return Ok(Response::builder()
+                .status(StatusCode::REQUEST_TIMEOUT)
+                .header("Content-Type", "text/plain")
+                .body(full_body("Request timeout"))
+                .unwrap());
+        }
+    };
+
+    if let Err(e) = http_ws_auth_gate(
+        &HttpWsAuthRequest {
+            method: method.as_str(),
+            path: uri.path(),
+            authorization: authorization.as_deref(),
+            absolute_url: &absolute,
+            body: &body,
+            now_unix: now_unix(),
+        },
+        config.public_health,
+        &allow,
+    ) {
+        let mut resp = unauthorized_response(&e);
+        apply_common_headers(&mut resp, &config);
+        timer.observe_duration();
+        return Ok(resp);
+    }
+
+    let mut resp =
+        tokio::task::block_in_place(|| handle_request(method, uri, body, &query, &config))
+            .unwrap_or_else(|err| {
+                warn!("{:?}", err);
+                Response::builder()
+                    .status(err.0)
+                    .header("Content-Type", "text/plain")
+                    .body(full_body(err.1))
+                    .unwrap()
+            });
+    apply_common_headers(&mut resp, &config);
+    timer.observe_duration();
+    Ok(resp)
+}
+
+fn spawn_rest_http1<IO>(
+    stream: IO,
+    http_shutdown_tx: &watch::Sender<()>,
+    query: &Arc<Query>,
+    config: &Arc<Config>,
+    allow: &Arc<Allowlist>,
+    hub: &Arc<MwckHub>,
+    metric: &HistogramVec,
+) where
+    IO: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let query = Arc::clone(query);
+    let config = Arc::clone(config);
+    let allow = Arc::clone(allow);
+    let hub = Arc::clone(hub);
+    let metric = metric.clone();
+    let mut http_shutdown_rx = http_shutdown_tx.subscribe();
+    let io = TokioIo::new(stream);
+    let builder = http1_builder_with_header_read_timeout(HTTP1_HEADER_READ_TIMEOUT);
+    let conn = builder
+        .serve_connection(
+            io,
+            service_fn(move |req: HttpRequest| {
+                let query = Arc::clone(&query);
+                let config = Arc::clone(&config);
+                let allow = Arc::clone(&allow);
+                let hub = Arc::clone(&hub);
+                let metric = metric.clone();
+                async move { handle_one_rest_request(req, query, config, allow, hub, metric).await }
+            }),
+        )
+        .with_upgrades();
+    // with_upgrades() is required for GET /api/v1/ws 101. hyper-util 0.1.20
+    // does not impl GracefulConnection for http1::UpgradeableConnection.
+    tokio::spawn(async move {
+        tokio::pin!(conn);
+        tokio::select! {
+            biased;
+            r = conn.as_mut() => {
+                let _ = r;
+            }
+            _ = http_shutdown_rx.changed() => {
+                conn.as_mut().graceful_shutdown();
+                let _ = conn.await;
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn run_server(
     config: Arc<Config>,
@@ -1007,141 +1135,90 @@ async fn run_server(
     allow: Arc<Allowlist>,
     hub: Arc<MwckHub>,
 ) {
-    let addr = &config.http_addr;
-    let socket_file = &config.http_socket_file;
+    let addr = config.http_addr;
+    let socket_file = config.http_socket_file.clone();
+    let (http_shutdown_tx, _) = watch::channel(());
+    let mut rx = rx;
 
-    let config = Arc::clone(&config);
-    let query = Arc::clone(&query);
-
-    let make_service_fn_inn = || {
-        let query = Arc::clone(&query);
-        let config = Arc::clone(&config);
-        let allow = Arc::clone(&allow);
-        let hub = Arc::clone(&hub);
-        let metric = metric.clone();
-
-        async move {
-            Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
-                let query = Arc::clone(&query);
-                let config = Arc::clone(&config);
-                let allow = Arc::clone(&allow);
-                let hub = Arc::clone(&hub);
-                let timer = metric.with_label_values(&["all_methods"]).start_timer();
-
-                async move {
-                    if req.uri().path() == "/api/v1/ws" {
-                        let mut resp =
-                            handle_mwck_upgrade(req, allow, hub, config.public_health).await;
-                        apply_common_headers(&mut resp, &config);
-                        timer.observe_duration();
-                        return Ok::<_, hyper::Error>(resp);
-                    }
-
-                    let authorization = auth_header_from(&req);
-                    let absolute = reconstruct_from_req(&req);
-                    let method = req.method().clone();
-                    let uri = req.uri().clone();
-                    let body_result =
-                        timeout(REQUEST_BODY_TIMEOUT, hyper::body::to_bytes(req.into_body())).await;
-
-                    let body = match body_result {
-                        Ok(Ok(bytes)) if bytes.len() > MAX_BODY_SIZE => {
-                            return Ok(Response::builder()
-                                .status(StatusCode::PAYLOAD_TOO_LARGE)
-                                .header("Content-Type", "text/plain")
-                                .body(Body::from("Request body too large"))
-                                .unwrap());
-                        }
-                        Ok(Ok(bytes)) => bytes,
-                        Ok(Err(e)) => return Err(e),
-                        Err(_) => {
-                            return Ok(Response::builder()
-                                .status(StatusCode::REQUEST_TIMEOUT)
-                                .header("Content-Type", "text/plain")
-                                .body(Body::from("Request timeout"))
-                                .unwrap());
-                        }
-                    };
-
-                    if let Err(e) = http_ws_auth_gate(
-                        &HttpWsAuthRequest {
-                            method: method.as_str(),
-                            path: uri.path(),
-                            authorization: authorization.as_deref(),
-                            absolute_url: &absolute,
-                            body: &body,
-                            now_unix: now_unix(),
-                        },
-                        config.public_health,
-                        &allow,
-                    ) {
-                        let mut resp = unauthorized_response(&e);
-                        apply_common_headers(&mut resp, &config);
-                        timer.observe_duration();
-                        return Ok(resp);
-                    }
-
-                    let mut resp = tokio::task::block_in_place(|| {
-                        handle_request(method, uri, body, &query, &config)
-                    })
-                    .unwrap_or_else(|err| {
-                        warn!("{:?}", err);
-                        Response::builder()
-                            .status(err.0)
-                            .header("Content-Type", "text/plain")
-                            .body(Body::from(err.1))
-                            .unwrap()
-                    });
-                    apply_common_headers(&mut resp, &config);
-                    timer.observe_duration();
-                    Ok::<_, hyper::Error>(resp)
-                }
-            }))
-        }
-    };
-
-    let server = match socket_file {
+    match socket_file {
         None => {
             info!("REST server running on {}", addr);
 
-            let socket = create_socket(addr);
+            let socket = create_socket(&addr);
             socket.listen(511).expect("setting backlog failed");
+            let std_listener: std::net::TcpListener = socket.into();
+            std_listener
+                .set_nonblocking(true)
+                .expect("REST TCP nonblocking");
+            let listener = TcpListener::from_std(std_listener).expect("REST TCP from_std failed");
 
-            with_http1_header_read_timeout(
-                Server::from_tcp(socket.into()).expect("Server::from_tcp failed"),
-                HTTP1_HEADER_READ_TIMEOUT,
-            )
-            .serve(make_service_fn(move |_| make_service_fn_inn()))
-            .with_graceful_shutdown(async {
-                rx.await.ok();
-            })
-            .await
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut rx => break,
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, _)) => {
+                                spawn_rest_http1(
+                                    stream,
+                                    &http_shutdown_tx,
+                                    &query,
+                                    &config,
+                                    &allow,
+                                    &hub,
+                                    &metric,
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("server error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
         Some(path) => {
-            if let Ok(meta) = fs::metadata(path) {
+            if let Ok(meta) = fs::metadata(&path) {
                 // Cleanup socket file left by previous execution
                 if meta.file_type().is_socket() {
-                    fs::remove_file(path).ok();
+                    fs::remove_file(&path).ok();
                 }
             }
 
             info!("REST server running on unix socket {}", path.display());
 
-            with_http1_header_read_timeout(
-                Server::bind_unix(path).expect("Server::bind_unix failed"),
-                HTTP1_HEADER_READ_TIMEOUT,
-            )
-            .serve(make_service_fn(move |_| make_service_fn_inn()))
-            .with_graceful_shutdown(async {
-                rx.await.ok();
-            })
-            .await
+            let listener = UnixListener::bind(&path).expect("REST unix bind failed");
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut rx => break,
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, _)) => {
+                                spawn_rest_http1(
+                                    stream,
+                                    &http_shutdown_tx,
+                                    &query,
+                                    &config,
+                                    &allow,
+                                    &hub,
+                                    &metric,
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!("server error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
         }
-    };
-
-    if let Err(e) = server {
-        eprintln!("server error: {}", e);
     }
+
+    let _ = http_shutdown_tx.send(());
+    http_shutdown_tx.closed().await;
 }
 
 pub fn start(
@@ -1180,10 +1257,10 @@ impl Handle {
 fn handle_request(
     method: Method,
     uri: hyper::Uri,
-    body: hyper::body::Bytes,
+    body: Bytes,
     query: &Query,
     config: &Config,
-) -> Result<Response<Body>, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     // TODO it looks hyper does not have routing and query parsing :(
     let path: Vec<&str> = uri.path().split('/').skip(1).collect();
     let query_params = match uri.query() {
@@ -1299,7 +1376,7 @@ fn handle_request(
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/octet-stream")
                 .header("Cache-Control", format!("public, max-age={:}", TTL_LONG))
-                .body(Body::from(raw))
+                .body(full_body(raw))
                 .unwrap())
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txid"), Some(index), None) => {
@@ -1848,8 +1925,8 @@ fn handle_request(
                 .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
 
             let (content_type, body) = match *out_type {
-                "raw" => ("application/octet-stream", Body::from(rawtx)),
-                "hex" => ("text/plain", Body::from(hex::encode(rawtx))),
+                "raw" => ("application/octet-stream", full_body(rawtx)),
+                "hex" => ("text/plain", full_body(hex::encode(rawtx))),
                 _ => unreachable!(),
             };
             let ttl = ttl_by_depth(query.get_tx_status(&hash).block_height, query);
@@ -2246,7 +2323,7 @@ fn handle_request(
                 // Disable caching because we don't currently support caching with query string params
                 .header("Cache-Control", "no-store")
                 .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_string(&assets)?))
+                .body(full_body(serde_json::to_string(&assets)?))
                 .unwrap())
         }
 
@@ -2272,7 +2349,7 @@ fn handle_request(
                 .header("Cache-Control", "no-store")
                 .header("Content-Type", "application/json")
                 .header("X-Total-Results", total_num.to_string())
-                .body(Body::from(serde_json::to_string(&assets)?))
+                .body(full_body(serde_json::to_string(&assets)?))
                 .unwrap())
         }
 
@@ -2421,34 +2498,35 @@ fn handle_request(
     }
 }
 
-fn http_message<T>(status: StatusCode, message: T, ttl: u32) -> Result<Response<Body>, HttpError>
-where
-    T: Into<Body>,
-{
+fn http_message(
+    status: StatusCode,
+    message: impl Into<Bytes>,
+    ttl: u32,
+) -> Result<HttpResponse, HttpError> {
     Ok(Response::builder()
         .status(status)
         .header("Content-Type", "text/plain")
         .header("Cache-Control", format!("public, max-age={:}", ttl))
-        .body(message.into())
+        .body(full_body(message))
         .unwrap())
 }
 
-fn json_response<T: Serialize>(value: T, ttl: u32) -> Result<Response<Body>, HttpError> {
+fn json_response<T: Serialize>(value: T, ttl: u32) -> Result<HttpResponse, HttpError> {
     let value = serde_json::to_string(&value)?;
     Ok(Response::builder()
         .header("Content-Type", "application/json")
         .header("Cache-Control", format!("public, max-age={:}", ttl))
-        .body(Body::from(value))
+        .body(full_body(value))
         .unwrap())
 }
 
-fn json_response_no_store<T: Serialize>(value: T) -> Result<Response<Body>, HttpError> {
+fn json_response_no_store<T: Serialize>(value: T) -> Result<HttpResponse, HttpError> {
     let value = serde_json::to_string(&value)?;
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
         .header("Cache-Control", "no-store")
-        .body(Body::from(value))
+        .body(full_body(value))
         .unwrap())
 }
 
@@ -2463,7 +2541,7 @@ fn mining_rest_disabled_error(enable_mining_rest: bool) -> Option<HttpError> {
     }
 }
 
-fn handle_block_template(query: &Query, config: &Config) -> Result<Response<Body>, HttpError> {
+fn handle_block_template(query: &Query, config: &Config) -> Result<HttpResponse, HttpError> {
     if let Some(err) = mining_rest_disabled_error(config.enable_mining_rest) {
         return Err(err);
     }
@@ -2503,7 +2581,7 @@ fn blocks(
     query: &Query,
     config: &Config,
     start_height: Option<usize>,
-) -> Result<Response<Body>, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     let mut values = Vec::new();
     let mut current_hash = match start_height {
         Some(height) => *query
@@ -2599,7 +2677,7 @@ fn parse_scripthash(scripthash: &str) -> Result<FullHash, HttpError> {
 }
 
 #[inline]
-fn multi_address_too_long(body: &hyper::body::Bytes) -> bool {
+fn multi_address_too_long(body: &Bytes) -> bool {
     // ("",) (3) (quotes and comma between each entry)
     // (\n    ) (5) (allows for pretty printed JSON with 4 space indent)
     // The opening [] and whatnot don't need to be accounted for, we give more than enough leeway
@@ -3028,22 +3106,23 @@ mod tests {
         );
     }
 
-    /// Named contract: a live hyper 0.14 server (not the gate helper) returns
-    /// 401 on empty allowlist GET /api/v1/ws, 101 for a listed npub, and closes
-    /// the socket after an allowlist reload drops that npub. This fixture is
-    /// not a full indexer.
+    /// Named contract: a live hyper 1 HTTP/1.1 server (not the gate helper)
+    /// returns 401 on empty allowlist GET /api/v1/ws, 101 for a listed npub,
+    /// and closes the socket after an allowlist reload drops that npub. This
+    /// fixture is not a full indexer.
     #[tokio::test]
     async fn live_hyper_ws_101_handshake_allowlist() {
-        use super::{Server, handle_mwck_upgrade};
+        use super::handle_mwck_upgrade;
         use crate::auth::Allowlist;
+        use crate::http_types::{HttpRequest, http1_builder_with_header_read_timeout};
         use crate::mwck::MwckHub;
         use futures_util::{SinkExt, StreamExt};
-        use hyper::service::{make_service_fn, service_fn};
-        use hyper::{Body, Request};
+        use hyper::service::service_fn;
+        use hyper_util::rt::TokioIo;
         use nostr::nips::nip98::HttpMethod;
         use std::sync::Arc;
         use std::time::Duration;
-        use tokio::net::TcpStream;
+        use tokio::net::{TcpListener, TcpStream};
         use tokio_tungstenite::client_async;
         use tokio_tungstenite::tungstenite::Error as WsError;
         use tokio_tungstenite::tungstenite::Message;
@@ -3059,26 +3138,29 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
+        let listener = TcpListener::from_std(listener).expect("from_std");
         let hub = MwckHub::handshake_fixture();
-        let make_svc = make_service_fn(move |_| {
-            let allow = Arc::clone(&allow_server);
-            let hub = Arc::clone(&hub);
-            async move {
-                Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
-                    let allow = Arc::clone(&allow);
-                    let hub = Arc::clone(&hub);
-                    async move {
-                        Ok::<_, hyper::Error>(handle_mwck_upgrade(req, allow, hub, false).await)
-                    }
-                }))
-            }
-        });
         let server = tokio::spawn(async move {
-            Server::from_tcp(listener)
-                .expect("from_tcp")
-                .serve(make_svc)
-                .await
-                .expect("serve");
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let allow = Arc::clone(&allow_server);
+                let hub = Arc::clone(&hub);
+                let io = TokioIo::new(stream);
+                let builder = http1_builder_with_header_read_timeout(Duration::from_secs(10));
+                tokio::spawn(async move {
+                    let svc = service_fn(move |req: HttpRequest| {
+                        let allow = Arc::clone(&allow);
+                        let hub = Arc::clone(&hub);
+                        async move {
+                            Ok::<_, hyper::Error>(handle_mwck_upgrade(req, allow, hub, false).await)
+                        }
+                    });
+                    let _ = builder.serve_connection(io, svc).with_upgrades().await;
+                });
+            }
         });
         for _ in 0..50 {
             if TcpStream::connect(addr).await.is_ok() {
@@ -3113,7 +3195,6 @@ mod tests {
         let header = sign_header(&keys, HttpMethod::GET, &http_url, now());
         match handshake(addr, &ws_url, &header).await {
             Err(WsError::Http(resp)) => {
-                // tungstenite http 1 vs hyper http 0.2 StatusCode. Compare 401.
                 assert_eq!(resp.status().as_u16(), StatusCode::UNAUTHORIZED.as_u16());
             }
             other => panic!("empty allowlist must be HTTP 401, got {:?}", other),
@@ -3148,49 +3229,55 @@ mod tests {
         server.abort();
     }
 
-    /// Named contract: production REST uses hyper 0.14.20+
-    /// `Server::http1_header_read_timeout` for 10 seconds. This module does
-    /// not compile if that method is missing.
+    /// Named contract: production REST uses hyper 1
+    /// `http1::Builder::header_read_timeout` plus `TokioTimer` for 10 seconds.
+    /// This module does not compile if that helper is missing. Default with a
+    /// timer is 30 seconds. Callers must pass the 10 second constant.
     #[test]
     fn http1_header_read_timeout_is_ten_seconds() {
         assert_eq!(
             super::HTTP1_HEADER_READ_TIMEOUT,
             std::time::Duration::from_secs(10)
         );
-        let _apply: fn(
-            hyper::server::Builder<hyper::server::conn::AddrIncoming>,
-            std::time::Duration,
-        ) -> hyper::server::Builder<hyper::server::conn::AddrIncoming> =
-            super::with_http1_header_read_timeout;
-        let _ = _apply;
+        let _apply: fn(std::time::Duration) -> hyper::server::conn::http1::Builder =
+            crate::http_types::http1_builder_with_header_read_timeout;
+        let _ = _apply(super::HTTP1_HEADER_READ_TIMEOUT);
     }
 
-    /// Named contract: a live hyper 0.14 server with a short
-    /// `http1_header_read_timeout` closes a client that never finishes the
-    /// HTTP/1 request line. Same API REST and queue unix listeners call.
-    /// This fixture is not a full indexer.
+    /// Named contract: a live hyper 1 HTTP/1.1 server with a short
+    /// `header_read_timeout` closes a client that never finishes the HTTP/1
+    /// request line. Same helper REST and queue unix listeners call. This
+    /// fixture is not a full indexer.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn http1_header_read_timeout_closes_incomplete_request_line() {
-        use super::{Server, with_http1_header_read_timeout};
-        use hyper::service::{make_service_fn, service_fn};
-        use hyper::{Body, Request, Response};
+        use crate::http_types::{HttpRequest, full_body, http1_builder_with_header_read_timeout};
+        use hyper::Response;
+        use hyper::service::service_fn;
+        use hyper_util::rt::TokioIo;
         use std::io::{Read, Write};
         use std::time::Duration;
+        use tokio::net::TcpListener;
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
-        let make_svc = make_service_fn(|_| async {
-            Ok::<_, hyper::Error>(service_fn(|_req: Request<Body>| async {
-                Ok::<_, hyper::Error>(Response::new(Body::from("ok")))
-            }))
-        });
+        let listener = TcpListener::from_std(listener).expect("from_std");
         let short = Duration::from_millis(400);
         let server = tokio::spawn(async move {
-            with_http1_header_read_timeout(Server::from_tcp(listener).expect("from_tcp"), short)
-                .serve(make_svc)
-                .await
-                .ok();
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let io = TokioIo::new(stream);
+                let builder = http1_builder_with_header_read_timeout(short);
+                tokio::spawn(async move {
+                    let svc = service_fn(|_req: HttpRequest| async {
+                        Ok::<_, hyper::Error>(Response::new(full_body("ok")))
+                    });
+                    let _ = builder.serve_connection(io, svc).await;
+                });
+            }
         });
         for _ in 0..50 {
             if std::net::TcpStream::connect(addr).is_ok() {

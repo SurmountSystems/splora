@@ -19,14 +19,29 @@ tests can `include_str!` those files. It still omits `.cargo/config.toml`.
 After vendor, `buildDepsOnly`, `buildPackage`, and nextest pass
 `--offline --locked`, so Nix does not query `index.crates.menhera.org`.
 That flake fix is in the tree. 2026-09-01 `just check-remote` after
-the include_str src union passed (`all checks passed!`).
+the include_str src union passed (`all checks passed!`). 2026-09-09
+`just check-remote` (`nix flake check`) also exited 0 in about 12
+minutes 50 seconds on rustc **1.98.1**. `checks.x86_64-linux.nextest`
+passed as part of that gate. 2026-09-19 `just check-remote` after the
+`src/rest.rs` graceful fix exited 0 in 149 seconds (`all checks
+passed!`). nextest was 94/94. Named HTTP contracts passed (10s
+header-read timeout, WS 101, signet 307, daemon 503/504). The first
+`just check-remote` that day exited 1 on compile E0277 at
+`src/rest.rs`. That compile miss is closed by the rest.rs fix. It is
+not Open. There is no `test-remote` recipe. Nix omitted aarch64-linux.
+That omit is not a fail. `bitcoind` and
+`elementsd` evaluated. `packages.splora-http` built.
+`rocksdbMoldLink` observed `NEEDED librocksdb`. Previously untracked
+flake sources (`nix/bitcoind.nix`, `nix/elementsd.nix`, the secp patch,
+`src/bin/splora-http.rs`, `src/http_front/`) are tracked. They did not
+block that run.
 `cargo-deny.toml` allows the crates.io index URL that lockfiles still
 record after that rewrite. Fetch still uses Menhera. Unknown git sources
 are denied. Duplicate crate versions this tree cannot unify are skipped
 in `[bans.skip]` with a reason each (bitcoin 0.32 versus nostr 0.45,
-tungstenite rand 0.8 versus nostr rand 0.10, hyper 0.14 versus tungstenite
-http 1, bindgen/cc shlex, hyper socket2 0.5 versus tokio 0.6, syn 2 versus
-3, thiserror 1 versus 2). Those skips are intentional. They are not Open
+tungstenite rand 0.8 versus nostr rand 0.10, bindgen/cc shlex, direct
+socket2 0.5 versus tokio 0.6, syn 2 versus
+3, thiserror 1 versus 2, cpufeatures 0.2 versus 0.3). Those skips are intentional. They are not Open
 unify-work. The validated table is in [doc/supply-chain.md](doc/supply-chain.md).
 Do not bump bitcoin to 0.33-beta. Do not bump rocksdb off 0.24. Direct `base64`
 is 0.22, `itertools` is 0.13, `socket2` is 0.5, `notify` is 8.2.0 (notify
@@ -35,20 +50,36 @@ capped `VecDeque`, not `bounded-vec-deque` (GPL identifier).
 `just check-local` runs `cargo deny --offline --locked check`. Novel Surmount
 files use the Unlicense. Inherited electrs stays MIT.
 
-`rust-toolchain` is `1.98.0`. `Cargo.toml` is `edition = "2024"` and
-`rust-version = "1.98"`. The flake uses `pkgs.rust-bin.stable."1.98.0".default`.
-`hyper` is **0.14.32** (`Cargo.toml` floor 0.14.20, not hyper 1). Indexer REST and queue unix HTTP set `Server::http1_header_read_timeout` to 10 seconds. The clap 4 default for `--db-block-cache-mb` is 24. There is no `--allow-npubs` list flag. `--allow-npubs-file` stays.
+`rust-toolchain` is `1.98.1`. `Cargo.toml` is `edition = "2024"` and
+`rust-version = "1.98"` (the 1.98 series MSRV, not a leftover 1.98.0
+patch pin). The flake uses `pkgs.rust-bin.stable."1.98.1".default`.
+The rust-overlay lock is `26a71e661c47bd21a05d06fec749f3f7c75e9d12`
+after the 2026-09-19 `nix flake update`. rustc stays **1.98.1**.
+`hyper` is **1.11.1** (h2 **0.4.19**). Indexer REST and queue unix HTTP set `http1::Builder::header_read_timeout` to 10 seconds with `TokioTimer`. The clap 4 default for `--db-block-cache-mb` is 24. There is no `--allow-npubs` list flag. `--allow-npubs-file` stays.
 `.cargo/config.toml` still rewrites crates.io to Menhera 7-day. The 2026-08-31
-lock refresh pinned `nostr` **0.45.3**, `prometheus` 0.14.0 with default
+lock refresh pinned `prometheus` 0.14.0 with default
 features off, clap **4.6.6**, stderrlog **0.6.0**, and `serde-wincode`
 **0.1.2** / `wincode` **0.6.1**. `wincode` **0.6.1** is a direct
 `Cargo.toml` dependency because `src/util/bincode_util.rs` names
 `wincode::config`. `idna` 1.0.3 and `idna_adapter` 1.1.0 stayed.
-`rocksdb` stayed 0.24.0. NIP-98 uses `nostr::key::PublicKey` and
+The 2026-09-09 Menhera lock refresh pinned `nostr` **0.45.4**. Direct
+`rustls-pemfile` left the graph
+([RUSTSEC-2025-0134](https://rustsec.org/advisories/RUSTSEC-2025-0134),
+accessed: 2026-09-09). The 2026-09-19 Menhera `cargo update` pinned
+`nostr` **0.45.5** and `rustls` **0.23.44**. `rocksdb` stayed 0.24.0.
+`bitcoin` stayed **0.32.102**. Do not bump bitcoin to 0.33-beta. Do not
+bump rocksdb off 0.24. Those floors are standing constraints, not
+unfinished 1.98.1 work. NIP-98 uses `nostr::key::PublicKey` and
 `nostr::event::Event` (0.45 no longer re-exports those at the crate
 root), caps encoded header size before Base64, and signs test events
-with `EventBuilder::finalize`. `cargo audit -n` reports 0
-vulnerabilities and 0 warnings. Those rustsec rows are not leftover.
+with `EventBuilder::finalize`. Closed rustsec rows from the 2026-08-31
+wave are not leftover. The hyper 1 port and
+[RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
+(accessed: 2026-09-09) closed on the prior lock are not Open.
+2026-09-09 `just check-remote` on rustc **1.98.1**, ELF
+`NEEDED librocksdb`, and tracked flake sources are not Open.
+2026-09-19 `just check-remote` after the rest.rs fix is not Open.
+The live advisory row after this pass's audit is Open below.
 
 Authorization is two files. Pending queue is CSV `npub,email` with no status
 column (`src/queue.rs`, `tests/queue_csv.rs`). Approved allowlist is one npub
@@ -60,7 +91,7 @@ fail-closed. The wait is bounded at 3 seconds. That live inotify test is
 in the tree.
 That verifier caps the encoded `Authorization` payload before Base64
 allocates, then caps decoded JSON at 64 KiB (`MAX_NIP98_AUTH_EVENT_BYTES`,
-matching nostr 0.45.3 / RUSTSEC-2026-0229). Queue HTTP is the
+matching nostr 0.45.4 / RUSTSEC-2026-0229). Queue HTTP is the
 `splora-queue` binary. Import is `splora-import` with `approve`, `reject`,
 and `remove`. The indexer clap app has no `queue` subcommand. Queue disk
 writes serialize on a `Mutex`.
@@ -74,12 +105,12 @@ MWCK JSON lives in `src/mwck.rs`. `rest.rs` gates HTTP with the live
 allowlist, upgrades `GET /api/v1/ws`, and serves `POST /electrum`. Named
 unit tests cover the gate, the 101 upgrade *decision*, and JSON
 `track-addresses` buckets. `live_hyper_ws_101_handshake_allowlist` is a
-tiny hyper 0.14 server fixture (not a full indexer) for empty-allowlist
+tiny hyper 1 HTTP/1.1 server fixture (not a full indexer) for empty-allowlist
 401, listed-npub 101, and socket close after an allowlist reload drop.
 `http1_header_read_timeout_closes_incomplete_request_line` is a live
-hyper 0.14 fixture for the HTTP/1 header-read timeout.
+hyper 1 fixture for the HTTP/1 header-read timeout.
 `Allowlist::load` is already `Arc`; the fixture compares tungstenite http
-1 status as `u16` against hyper 0.14 401/101.
+1 status as `u16` against hyper 1 401/101.
 
 `MwckHub` holds a `Query` and fills subscribe snapshots on first
 `track-addresses` / `track-scriptpubkeys`. Empty arrays until a later
@@ -167,8 +198,9 @@ The five named `http_front` contracts are unchanged
 `tokio::time::sleep` so unix tests do not stall the current-thread
 runtime. Those tests were not rewritten. Named command
 `cargo test --offline --locked --lib http_front -- --test-threads=1`
-passed all five contracts (`ok. 5 passed`). That is not a crane build of
-`packages.splora-http` and is not `NEEDED librocksdb`. Sharing one
+passed all five contracts (`ok. 5 passed`). 2026-09-09
+`just check-remote` also built `packages.x86_64-linux.splora-http` and
+`checks.x86_64-linux.rocksdbMoldLink` (`NEEDED librocksdb`). Sharing one
 RocksDB LRU across indexer processes stays not Open.
 [FORK.md](FORK.md) section 5 records that this crate terminates TLS,
 HTTP/2, and HTTP/3 on `splora-http`. Do not say the edge lives only on
@@ -184,8 +216,8 @@ points at that file. Do not list `FORK.md` as Open.
 
 Named test `packaging_pins_rust_198_edition_2024_and_system_rocksdb`
 matches `useSystemRocksdb = true`. That pin landed with this wave. It is
-not leftover. It is not proof that the builder observed `NEEDED
-librocksdb`.
+not leftover. 2026-09-09 `rocksdbMoldLink` observed `NEEDED librocksdb`
+on the builder. That observation is not leftover.
 
 The indexer was not rewritten. `mempool/mempool` was not vendored.
 
@@ -199,107 +231,74 @@ unused in upstream CMake; this package no longer passes them.
 `(lib.cmakeBool "WITH_SYSTEM_LIBSECP256K1" true)`, and keeps
 `secp256k1` in `buildInputs`. `leveldb` is not in `buildInputs`. There
 is no honest CMake switch for system leveldb on v31.1; Core 31.1 still
-compiles the in-tarball leveldb subtree via `cmake/leveldb.cmake`.
+compiles the in-tarball leveldb subtree via `cmake/leveldb.cmake` into
+static `libleveldb.a`. Do not invent a CMake switch for `pkgs.leveldb`.
 Wallet is off, so no BDB.
+
+Bitcoin Core 31.1 `packages.x86_64-linux.bitcoind` on surmount-1
+produced `/nix/store/qwbm7zcnddd9kk7hlnqrjaqz0zknqda0-bitcoind-31.1`.
+`readelf -d` on
+`/nix/store/qwbm7zcnddd9kk7hlnqrjaqz0zknqda0-bitcoind-31.1/bin/bitcoind`
+shows:
+
+```
+ 0x0000000000000001 (NEEDED)             Shared library: [libsecp256k1.so.7]
+```
+
+That is shared nixpkgs secp256k1 0.8.0, not an in-tarball secp
+compile-in. Drv eval alone is no longer the last word for Core secp.
+There is no `NEEDED` libleveldb.
 
 ## Open
 
 ### Operator-owned gates
 
-The operator still owns `just check-local` (fmt, clippy, deny, audit).
-The crane Menhera DNS miss (`Could not resolve host:
-index.crates.menhera.org` on `splora-deps-3.4.0-dev` after vendor) is
-fixed in `flake.nix`. 2026-09-01 `just check-remote` run 3 after the
-include_str src union exited 0: `all checks passed!` Nix omitted
-aarch64-linux. This deny-hygiene wave ran `cargo check --lib` (exit 0),
-`cargo check --lib --features liquid` (exit 0), named `--lib` tests
-`new_index::mempool::tests` (exit 0), `cargo fmt --all --check` (exit
-0), and `cargo deny --offline --locked check --config cargo-deny.toml`
-(exit 0, no unmatched-source, license-not-encountered, or SPDX
-parse-error). Named unit tests are not a substitute for `just
-check-local`.
+`just check-local` (fmt, clippy, deny, audit) is the standing laptop
+recipe. It is not leftover of the rustc 1.98.1 remote proof. This
+session did not run `just check-local` as a whole. Do not treat that
+recipe as unproven 1.98.1 work. The crane Menhera DNS miss
+(`Could not resolve host: index.crates.menhera.org` on
+`splora-deps-3.4.0-dev` after vendor) is fixed in `flake.nix`.
 
-Nix flakes only see git-tracked files. `flake.nix` and `nix/module.nix`
-are already tracked, so dirty edits eval. These paths are still
-untracked (`git status --short` shows `??`; `git ls-files --others
---exclude-standard` names the files): `nix/bitcoind.nix`,
-`nix/elementsd.nix`,
-`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`,
-`src/bin/splora-http.rs`, and `src/http_front/mod.rs` (directory
-`src/http_front/`). Staging only the three Nix daemon paths does not put
-the HTTP front into the flake source copy. This re-run observed
-`nix eval --impure --raw .#packages.x86_64-linux.bitcoind.drvPath` fail
-with `error: path '/nix/store/...-source/nix/bitcoind.nix' does not
-exist` (flake copy omits untracked files). Cheap check `nixosTenUnits`
-still produced
-`/nix/store/mwvbq6sig760wqccwy52q1ma5g4g2wcs-splora-nixos-ten-units.drv`
-on `nix eval --impure --raw .#checks.x86_64-linux.nixosTenUnits.drvPath`
-(dummy `pkgs.hello`, no Core compile). Named assert
-`mutinynetStockCoreArgv` inside `nixosTenUnits` is still green on that
-eval. Packages `bitcoind` / `elementsd` and `packages.splora-http` stay
-invisible to a flake copy until the operator stages all of those
-untracked paths (HTTP front plus the two Nix daemon files and the secp
-patch). Agents do not stage them.
+Agents do not stage.
 
 ### Agent-doable leftover
 
-The 2026-08-31 Menhera lock refresh, nostr 0.45.3, prometheus 0.14.0
-without protobuf, clap 4.6.6, stderrlog 0.6.0, serde-wincode 0.1.2 with
-direct wincode 0.6.1 for the on-disk schema, NIP-98 header size cap
-before Base64, held `idna` 1.0.3 / `idna_adapter` 1.1.0 pins, `rocksdb`
-0.24.0, `cargo audit -n` with 0 remaining RUSTSEC, and
-`cargo deny --offline --locked check --config cargo-deny.toml` exit 0
-are in the tree. They are not leftover. Direct crate hygiene in this
-wave (base64 0.22, itertools 0.13, socket2 0.5, notify 8.2.0, mempool
-capped VecDeque) is also in the tree. This wave ran the named `--lib`
-tests (clap HTTP-wire help without an `--allow-npubs` list flag, HTTP/1
-header-read timeout, historical 56-byte `bincode_settings`, oversized
-NIP-98 caps, mempool recent-queue cap eviction). `just check-remote`
-run 3 on 2026-09-01 ran crate-wide nextest and passed. The operator
-still owns `just check-local`.
-
-The CSV two-file queue, unix-socket defaults, queue XOR bind, queue
-mutex, popular-scripts timer and isolated output dir, live hyper WS
-101 fixture, MWCK subscribe fill from `Query` on first track, REST
-503/504 on daemon-proxy paths, README CLI versus module, no nginx, the
-`splora-http` TLS front, [FORK.md](FORK.md) section 5, and the appliance
-units are already in this tree.
-
-`nixosFiveInstances` still requires the default queue unit to carry
-`--socket-file` `/run/splora/queue.sock` and to omit TCP `--bind`. That
-matches `nix/module.nix`. `nixosRemoteJsonrpcImport` requires one
-instance with `jsonrpcImport = true`, `daemonRpcAddr = "10.0.0.1:8332"`,
-`cookieFile = "/run/bitcoind/.cookie"`, `daemonDir = null`, and
-`startLocalDaemon = false`. ExecStart must contain `--jsonrpc-import`,
-`--daemon-rpc-addr`, and `--cookie-file`. ReadOnlyPaths must not list
-`/var/lib/bitcoind`. Cookie user/password pairs must not appear in argv
-or the module source. Operator still owns `nix flake check`. The cheap
-remote-JSON-RPC eval was observed green without a crane rebuild. That is
-not crate-wide `just check-remote`.
-
-Named flake check `rocksdbMoldLink` now inspects `NEEDED librocksdb`
-because `useSystemRocksdb` is true. It does not require mold in
-`.comment`. Mold stays off. clang or default ld. Never gcc `-fuse-ld=`
-plus a mold store path. That ELF `NEEDED librocksdb` line is still
-unproven until a builder runs that check. A laptop Wild-linked
-`librocksdb.so.10` ELF is not a crane proof.
+This pass's `cargo fetch --locked` exited 0. `cargo audit` exited 1 on
+production `rustls` **0.23.44** /
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-19): TLS 1.3 handshake messages incorrectly
+accepted across encryption level boundaries. Solution is >=0.23.45.
+rustls 0.23.45 is not on the Menhera 7-day index (the index shows
+through 0.23.44). Do not fetch crates.io to skip the wait. Do not
+`[advisories] ignore`. `cargo audit -D warnings` exited 1 on the same
+row. No extra warning, yanked, or unmaintained named crates.
+`cargo deny --offline --locked check --config cargo-deny.toml` exited
+0, but that is a stale advisory clone (HEAD 2026-08-31) that does not
+contain RUSTSEC-2026-0285. Deny green is not proof the rustls row is
+gone. bitcoin is **0.32.102**. rocksdb is **0.24.0**. nostr lock is
+**0.45.5**. [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
+(accessed: 2026-09-09) stays closed on the prior lock by hyper
+**1.11.1** and h2 **0.4.19**. That closed row is not Open leftover of
+the hyper 1 port.
 
 `nix/elementsd.nix` pins the unpacked GitHub archive hash
 `07p0zknrz74jyvxm04pa20y35kdarp9y0f5k99xz72psx9achkxv` for
 `ElementsProject/elements` tag `elements-23.3.3` (`nix-prefetch-url
---unpack`, 2026-09-02). That is not a compile proof.
+--unpack`, 2026-09-02). That is not a compile proof. 2026-09-09
+evaluated `packages.x86_64-linux.elementsd` to `elementsd-23.3.3.drv`.
+That eval is not ELF proof of system secp256k1.
 
-secp256k1 and leveldb: Bitcoin Core 31.1 CMake still vendors the
-leveldb subtree. `WITH_SYSTEM_SECP256K1` and `WITH_SYSTEM_LEVELDB` are
-unused cache variables (no `option()` in v31.1). This package no longer
-passes those names. `nix/bitcoind.nix` applies
-`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch` and passes
-`(lib.cmakeBool "WITH_SYSTEM_LIBSECP256K1" true)`, with `secp256k1`
-still in `buildInputs`. ELF `NEEDED libsecp256k1` still requires a Core
-compile. There is no honest CMake switch for `pkgs.leveldb` on Core
-31.1. Do not invent one. Elements 23.3.3 is autotools and also vendors
-secp256k1 and leveldb. System linking of secp256k1 is still unproven.
-That outcome is recorded, not a silent claim of system-only linking.
+Leveldb on Core 31.1 is still the in-tarball subtree compiled into
+static `libleveldb.a`. `readelf -d` on the named Core 31.1 `bitcoind`
+has no `NEEDED` for libleveldb. There is no honest CMake switch for
+`pkgs.leveldb` on Core 31.1. Do not invent one. Core shared secp is
+already proven: `NEEDED libsecp256k1.so.7` on
+`/nix/store/qwbm7zcnddd9kk7hlnqrjaqz0zknqda0-bitcoind-31.1/bin/bitcoind`.
+Elements 23.3.3 is autotools and still vendors secp256k1 and leveldb.
+System linking of secp256k1 on Elements remains unproven. That
+Elements outcome is recorded, not a silent claim of system-only
+linking.
 
 ### Sibling product paths still unfixed
 
@@ -336,50 +335,27 @@ would change P2P magic. Wallet stays off.
 
 ## Highest value next
 
-This review pass dropped `-signetblocktime=30` from `bitcoind-mutinynet`
-ExecStart. The unit still passes the unwrapped published challenge,
-`-addnode=45.79.52.207:38333`, and `-dnsseed=0`. Wallet stays off.
-Named flake assert `mutinynetStockCoreArgv` forbids `-signetblocktime`
-on mutinynet and on the other daemons. That assert is green on
-`nix eval --impure --raw .#checks.x86_64-linux.nixosTenUnits.drvPath`.
-Mutinynet's 30-second interval is a miner/network property. Stock Core
-31.1 has no `-signetblocktime`. This package does not produce a
-30-second-block outcome via argv.
+Wait for Menhera to serve rustls >=0.23.45, then lock update. Do not
+fetch crates.io to skip the wait. Do not `[advisories] ignore`. The
+ignore list stays empty. bitcoin is 0.32.102. rocksdb is 0.24.0. Do
+not bump bitcoin to 0.33-beta. Do not bump rocksdb off 0.24.
 
-This review pass also wired Gentoo `WITH_SYSTEM_LIBSECP256K1` into
-`nix/bitcoind.nix`: the derivation applies
-`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`, passes
-`(lib.cmakeBool "WITH_SYSTEM_LIBSECP256K1" true)`, keeps `secp256k1` in
-`buildInputs`, and dropped unused `WITH_SYSTEM_SECP256K1` /
-`WITH_SYSTEM_LEVELDB` plus `leveldb` from `buildInputs`. Unused Core
-31.1 names remain unused in upstream CMake. There is no honest CMake
-switch for system leveldb. Do not copy C into git. ELF
-`NEEDED libsecp256k1` still requires a Core compile. That link is
+2026-09-19 `just check-remote` after the rest.rs fix is already green.
+Command `just check-remote`, duration 149s, exit 0, `all checks
+passed!`, nextest 94/94. Named HTTP contracts passed (10s header-read
+timeout, WS 101, signet 307, daemon 503/504). That remote is not the
+next proof. The first run that day exited 1 on compile E0277. That
+miss is closed by the rest.rs fix. It is not Open. 2026-09-09
+`just check-remote` already observed `NEEDED librocksdb` and built
+`packages.splora-http` on rustc **1.98.1**. Those are not leftover.
+
+Core 31.1 already has ELF `NEEDED libsecp256k1.so.7` on
+`/nix/store/qwbm7zcnddd9kk7hlnqrjaqz0zknqda0-bitcoind-31.1/bin/bitcoind`.
+That is not the next proof. Leveldb stays in-tarball static
+`libleveldb.a`. There is no honest CMake switch for system leveldb.
+Do not invent one. Do not copy C into git. Elements 23.3.3 still
+vendors secp256k1 and leveldb. System linking on Elements remains
 unproven.
-
-This wave landed a product type fix in `src/http_front/mod.rs` so h3
-0.0.8 can typecheck, then upgrade-order and `wait_for_socket` so the
-five named contracts run. This re-run of
-`cargo test --offline --locked --lib http_front -- --test-threads=1`
-passed all five contracts (`ok. 5 passed; 0 failed`). `nixosTenUnits`
-eval is still green. Compiling `packages.splora-http` on the builder is
-still unproven. It is not how those five tests run. This re-run did not
-readelf a built ELF; `NEEDED librocksdb` is still unproven.
-
-The operator staging every still-untracked flake source is the unblock:
-`src/bin/splora-http.rs`, `src/http_front/` (`src/http_front/mod.rs`),
-`nix/bitcoind.nix`, `nix/elementsd.nix`, and
-`nix/patches/bitcoin-31.1-with-system-libsecp256k1.patch`. Staging only
-the three Nix files still omits the HTTP front from the flake source
-copy. Agents do not stage.
-
-Unproven builder proofs after that full stage: `just check-remote`
-observing `NEEDED librocksdb` (clang or default ld, no gcc+mold),
-compiling `packages.splora-http` (aws-lc-rs + cmake) once those HTTP
-front sources are tracked, and a Core compile that shows ELF `NEEDED
-libsecp256k1` after this wiring. String pins are not that link proof.
-This file does not claim `NEEDED librocksdb` without readelf. Do not
-invent a copy workaround.
 
 Do not re-open clap 4, wallet-on, MWCK, nginx, or RocksDB LRU-share.
 Sharing one RocksDB LRU across indexer processes is not Open. Do not

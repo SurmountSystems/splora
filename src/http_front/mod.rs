@@ -5,13 +5,19 @@
 //! `/block`. Keeps `/api/v1/ws`. Never connects to `*.electrum.sock`.
 //! `/signet/...` is 307 to `/mutinynet/...` and does not open a socket.
 
+use crate::http_types::{HttpRequest, HttpResponse, empty_body, full_body};
 use bytes::{Buf, Bytes};
 use clap::{Arg, Command};
+use http_body_util::{BodyExt, Full};
 use hyper::header::{HeaderValue, LOCATION};
+use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
-use hyper::{Body, HeaderMap, Method, Request, Response, StatusCode};
-use hyperlocal::UnixClientExt;
+use hyper::{HeaderMap, Method, Request, Response, StatusCode};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyperlocal::{UnixClientExt, UnixConnector};
 use rustls::ServerConfig;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -163,15 +169,13 @@ pub fn load_tls_pem(
     cert_pem: &[u8],
     key_pem: &[u8],
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), String> {
-    let certs = rustls_pemfile::certs(&mut &*cert_pem)
+    let certs = CertificateDer::pem_slice_iter(cert_pem)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("tls cert: {e}"))?;
     if certs.is_empty() {
         return Err("tls cert: no certificates".into());
     }
-    let key = rustls_pemfile::private_key(&mut &*key_pem)
-        .map_err(|e| format!("tls key: {e}"))?
-        .ok_or_else(|| "tls key: no private key".to_string())?;
+    let key = PrivateKeyDer::from_pem_slice(key_pem).map_err(|e| format!("tls key: {e}"))?;
     Ok((certs, key))
 }
 
@@ -281,20 +285,24 @@ async fn serve_tcp_tls(
             };
             let alpn = tls_stream.get_ref().1.alpn_protocol().map(|p| p.to_vec());
             let dir = Arc::clone(&socket_dir);
-            let svc = service_fn(move |req: Request<Body>| {
+            let svc = service_fn(move |req: HttpRequest| {
                 let dir = Arc::clone(&dir);
                 async move { Ok::<_, hyper::Error>(handle_front(req, dir.as_path()).await) }
             });
-            let mut http = hyper::server::conn::Http::new();
+            let io = TokioIo::new(tls_stream);
             match alpn.as_deref() {
                 Some(b"h2") => {
-                    http.http2_only(true);
+                    let _ = http2::Builder::new(TokioExecutor::new())
+                        .serve_connection(io, svc)
+                        .await;
                 }
                 _ => {
-                    http.http1_only(true);
+                    let _ = http1::Builder::new()
+                        .serve_connection(io, svc)
+                        .with_upgrades()
+                        .await;
                 }
             }
-            let _ = http.serve_connection(tls_stream, svc).with_upgrades().await;
         });
     }
 }
@@ -373,23 +381,16 @@ async fn handle_h3_resolved(
         let n = chunk.remaining();
         body.extend_from_slice(&chunk.copy_to_bytes(n));
     }
-    let method = Method::from_bytes(req.method().as_str().as_bytes()).unwrap_or(Method::GET);
+    let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(str::to_string);
-    let mut headers = HeaderMap::new();
-    for (k, v) in req.headers().iter() {
-        if let Ok(name) = hyper::header::HeaderName::from_bytes(k.as_str().as_bytes())
-            && let Ok(val) = HeaderValue::from_bytes(v.as_bytes())
-        {
-            headers.append(name, val);
-        }
-    }
+    let headers = req.headers().clone();
     let resp = dispatch(
         method,
         &path,
         query.as_deref(),
         headers,
-        Body::from(body),
+        Bytes::from(body),
         None,
         socket_dir.as_path(),
     )
@@ -399,9 +400,12 @@ async fn handle_h3_resolved(
     for (k, v) in resp.headers().iter() {
         builder = builder.header(k.as_str(), v.as_bytes());
     }
-    let out = hyper::body::to_bytes(resp.into_body())
+    let out = resp
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .to_bytes();
     let h3_resp = builder.body(()).map_err(|e| e.to_string())?;
     stream
         .send_response(h3_resp)
@@ -415,23 +419,36 @@ async fn handle_h3_resolved(
 }
 
 /// Route plus unix HTTP/1.1 proxy. Signet returns 307 without connecting.
-pub async fn handle_front(mut req: Request<Body>, socket_dir: &Path) -> Response<Body> {
+pub async fn handle_front<B>(mut req: Request<B>, socket_dir: &Path) -> HttpResponse
+where
+    B: hyper::body::Body<Data = Bytes> + Send,
+    B::Error: Send,
+{
     let path = req.uri().path().to_string();
     let query = req.uri().query().map(str::to_string);
     let method = req.method().clone();
-    // hyper 0.14 CanUpgrade is Request/Response only, not http::request::Parts.
+    // hyper 1 CanUpgrade is still Request/Response only, not http::request::Parts.
     let upgrade = if req.headers().get("upgrade").is_some() {
         Some(hyper::upgrade::on(&mut req))
     } else {
         None
     };
     let (parts, body) = req.into_parts();
+    let bytes = match body.collect().await {
+        Ok(c) => c.to_bytes(),
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(full_body("bad body"))
+                .unwrap_or_else(|_| Response::new(full_body("bad body")));
+        }
+    };
     dispatch(
         method,
         &path,
         query.as_deref(),
         parts.headers,
-        body,
+        bytes,
         upgrade,
         socket_dir,
     )
@@ -443,10 +460,10 @@ async fn dispatch(
     path: &str,
     query: Option<&str>,
     headers: HeaderMap,
-    body: Body,
+    body: Bytes,
     upgrade: Option<hyper::upgrade::OnUpgrade>,
     socket_dir: &Path,
-) -> Response<Body> {
+) -> HttpResponse {
     match route(path) {
         Route::Redirect307 { location } => {
             let location = match query {
@@ -456,13 +473,13 @@ async fn dispatch(
             Response::builder()
                 .status(StatusCode::TEMPORARY_REDIRECT)
                 .header(LOCATION, location)
-                .body(Body::empty())
-                .unwrap_or_else(|_| Response::new(Body::empty()))
+                .body(empty_body())
+                .unwrap_or_else(|_| Response::new(empty_body()))
         }
         Route::NotFound => Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(Body::from("not found"))
-            .unwrap_or_else(|_| Response::new(Body::from("not found"))),
+            .body(full_body("not found"))
+            .unwrap_or_else(|_| Response::new(full_body("not found"))),
         Route::Proxy {
             network,
             backend_path,
@@ -471,8 +488,8 @@ async fn dispatch(
             if is_electrum_socket(&socket) {
                 return Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from("electrum socket refused"))
-                    .unwrap_or_else(|_| Response::new(Body::empty()));
+                    .body(full_body("electrum socket refused"))
+                    .unwrap_or_else(|_| Response::new(empty_body()));
             }
             proxy_unix(
                 method,
@@ -494,9 +511,9 @@ async fn proxy_unix(
     backend_path: &str,
     query: Option<&str>,
     mut headers: HeaderMap,
-    body: Body,
+    body: Bytes,
     incoming_upgrade: Option<hyper::upgrade::OnUpgrade>,
-) -> Response<Body> {
+) -> HttpResponse {
     if !headers.contains_key("x-forwarded-proto") {
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
     }
@@ -509,23 +526,23 @@ async fn proxy_unix(
     for (k, v) in headers.iter() {
         builder = builder.header(k, v);
     }
-    let backend_req = match builder.body(body) {
+    let backend_req = match builder.body(Full::new(body)) {
         Ok(r) => r,
         Err(_) => {
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
-                .body(Body::from("bad request"))
-                .unwrap_or_else(|_| Response::new(Body::empty()));
+                .body(full_body("bad request"))
+                .unwrap_or_else(|_| Response::new(empty_body()));
         }
     };
-    let client = hyper::Client::unix();
+    let client: Client<UnixConnector, Full<Bytes>> = Client::unix();
     let mut resp = match client.request(backend_req).await {
         Ok(r) => r,
         Err(_) => {
             return Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Body::from("backend unavailable"))
-                .unwrap_or_else(|_| Response::new(Body::empty()));
+                .body(full_body("backend unavailable"))
+                .unwrap_or_else(|_| Response::new(empty_body()));
         }
     };
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS
@@ -533,25 +550,54 @@ async fn proxy_unix(
     {
         let server_up = hyper::upgrade::on(&mut resp);
         tokio::spawn(async move {
-            if let (Ok(mut c), Ok(mut s)) = (client_up.await, server_up.await) {
+            if let (Ok(c), Ok(s)) = (client_up.await, server_up.await) {
+                let mut c = TokioIo::new(c);
+                let mut s = TokioIo::new(s);
                 let _ = tokio::io::copy_bidirectional(&mut c, &mut s).await;
             }
         });
+        let status = resp.status();
+        let headers = std::mem::take(resp.headers_mut());
+        let mut out = Response::builder()
+            .status(status)
+            .body(empty_body())
+            .unwrap_or_else(|_| Response::new(empty_body()));
+        *out.headers_mut() = headers;
+        return out;
     }
-    resp
+    let status = resp.status();
+    let headers = std::mem::take(resp.headers_mut());
+    let bytes = match resp.into_body().collect().await {
+        Ok(c) => c.to_bytes(),
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(full_body("backend unavailable"))
+                .unwrap_or_else(|_| Response::new(empty_body()));
+        }
+    };
+    let mut out = Response::builder()
+        .status(status)
+        .body(full_body(bytes))
+        .unwrap_or_else(|_| Response::new(empty_body()));
+    *out.headers_mut() = headers;
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hyper::service::{make_service_fn, service_fn};
-    use hyperlocal::UnixServerExt;
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Empty};
+    use hyper::service::service_fn;
     use rustls::ClientConfig;
     use rustls::pki_types::ServerName;
+    use std::convert::Infallible;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
     use tokio::net::TcpStream;
+    use tokio::net::UnixListener;
     use tokio_rustls::TlsConnector;
 
     const TEST_CERT_PEM: &[u8] = b"-----BEGIN CERTIFICATE-----
@@ -582,28 +628,28 @@ Nt4lIHa63WwcYB/eIviuEZEtfw2yog40VqTyPWcY5SsHFMqlN/BoVyEw
         if socket.exists() {
             let _ = std::fs::remove_file(&socket);
         }
-        let make = make_service_fn(move |_| {
+        let listener = UnixListener::bind(&socket).expect("bind unix echo");
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(s) => s,
+                Err(_) => break,
+            };
             let hits = Arc::clone(&hits);
             let last_path = Arc::clone(&last_path);
-            async move {
-                Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
+            let io = TokioIo::new(stream);
+            tokio::spawn(async move {
+                let svc = service_fn(move |req: HttpRequest| {
                     let hits = Arc::clone(&hits);
                     let last_path = Arc::clone(&last_path);
                     async move {
                         hits.fetch_add(1, Ordering::SeqCst);
                         *last_path.lock().unwrap() = req.uri().path().to_string();
-                        Ok::<_, hyper::Error>(Response::new(Body::from(
-                            req.uri().path().to_string(),
-                        )))
+                        Ok::<_, Infallible>(Response::new(full_body(req.uri().path().to_string())))
                     }
-                }))
-            }
-        });
-        hyper::Server::bind_unix(&socket)
-            .expect("bind unix echo")
-            .serve(make)
-            .await
-            .ok();
+                });
+                let _ = http1::Builder::new().serve_connection(io, svc).await;
+            });
+        }
     }
 
     async fn wait_for_socket(path: &Path) {
@@ -617,8 +663,8 @@ Nt4lIHa63WwcYB/eIviuEZEtfw2yog40VqTyPWcY5SsHFMqlN/BoVyEw
         panic!("unix socket did not appear: {:?}", path);
     }
 
-    fn get(path: &str) -> Request<Body> {
-        Request::get(path).body(Body::empty()).unwrap()
+    fn get(path: &str) -> Request<Empty<Bytes>> {
+        Request::get(path).body(Empty::new()).unwrap()
     }
 
     /// Named contract: `/signet/api/tx/x` returns 307 Location `/mutinynet/api/tx/x`
@@ -660,7 +706,7 @@ Nt4lIHa63WwcYB/eIviuEZEtfw2yog40VqTyPWcY5SsHFMqlN/BoVyEw
 
         let resp = handle_front(get("/liquid/api/tx/x"), dir.path()).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body.as_ref(), b"/tx/x");
         assert_eq!(last.lock().unwrap().as_str(), "/tx/x");
         assert_eq!(hits.load(Ordering::SeqCst), 1);
@@ -684,7 +730,7 @@ Nt4lIHa63WwcYB/eIviuEZEtfw2yog40VqTyPWcY5SsHFMqlN/BoVyEw
 
         let resp = handle_front(get("/api/v1/ws"), dir.path()).await;
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body.as_ref(), b"/api/v1/ws");
         assert_eq!(last.lock().unwrap().as_str(), "/api/v1/ws");
         match route("/api/v1/ws") {
