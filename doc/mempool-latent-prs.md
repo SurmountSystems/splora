@@ -16,7 +16,7 @@ Stances are **take**, **already here**, or **skip**. Titles are not evidence. Co
 |------|----------|--------|
 | [#84](https://github.com/mempool/electrs/pull/84) `sendrawtransaction` maxfeerate 0 | `62823e6b9b3d3029cc26032cf86501a078f07982` | **already here** |
 | [#145](https://github.com/mempool/electrs/pull/145) history-row cap (title says 1000x) | `af82c5e2d75857b41d6e9fb5f037bd387e03ddc4` | **already here** (cap only; shared rayon pool already here) |
-| [#154](https://github.com/mempool/electrs/pull/154) 5s shutdown `process::exit(0)` | `2962b4e3f865fc294238333401268758efd6d11b` | **already here** (flush then watchdog, not upstream arm-first) |
+| [#154](https://github.com/mempool/electrs/pull/154) 5s shutdown `process::exit(0)` | `2962b4e3f865fc294238333401268758efd6d11b` | **already here** (flush then bounded Electrum join, not upstream arm-first) |
 | [#157](https://github.com/mempool/electrs/pull/157) PROXY into `ConnectionStream` | `8c6f8552ceb248747d72c2e8c07af2561983373b` | **skip** |
 | [#135](https://github.com/mempool/electrs/pull/135) `src/electrum/API.md` | `ba0c56b54703ec2e15ab3b81f2b690f89d5c870a` | **skip** (lying method list) |
 | [#133](https://github.com/mempool/electrs/pull/133) `start` logging (draft) | `12538c2ec15927e2ab7a510ca4cebac859ca5456` | **skip** |
@@ -24,10 +24,10 @@ Stances are **take**, **already here**, or **skip**. Titles are not evidence. Co
 | [#97](https://github.com/mempool/electrs/pull/97) `/utxo/recent` (draft) | `f730c43abc7088435456e9f049987450a151bc15` | **skip** |
 | [#83](https://github.com/mempool/electrs/pull/83) REST TTL flags | `ec12a5ef669d5e81158cb4f8922709c234b70f8b` | **skip** |
 | [#55](https://github.com/mempool/electrs/pull/55) log client IP | `0d12575047099ffd8f7518527ca09caa2d78c843` | **already here** (Electrum PROXY via crates.io `ppp`) / **skip** (REST XFF + git crate) |
-| [#47](https://github.com/mempool/electrs/pull/47) Liquid pegin sigops (draft) | `cc75f9eed307ea7ee82f05dbeeefbbf710309387` | **skip** (this tree special-cases pegin; undercount remains) |
+| [#47](https://github.com/mempool/electrs/pull/47) Liquid pegin sigops (draft) | `cc75f9eed307ea7ee82f05dbeeefbbf710309387` | **skip** the 2023 patch. **already here** for the undercount, via a current-types reconstruction |
 | `mononaut/page-sizes` (no PR) | `2dc61f50d41619ce99e4837451e7937836b2d0ad` | **skip** hard `MAX_HISTORY_TXS = 100`. **already here** for clamping unbounded `max_txs` to existing REST knobs. |
 
-Take-now product work from these patches is already in this tree. Do not cherry-pick the skip rows. Remaining hole: Liquid REST `sigops` on pegin transactions still counts legacy only. Hung Electrum join still delays stop because this tree arms the watchdog after join and flush.
+Take-now product work from these patches is already in this tree. Do not cherry-pick the skip rows. Liquid REST `sigops` on peg-in transactions counts sibling P2SH/witness plus Elements claim-script witness sigops. That is not a cherry-pick of #47. Hung Electrum join no longer delays the RocksDB flush: rest-stop, flush of the three column families, then a 5-second bounded join.
 
 Diff SHA-256 of the fetched `.diff` files (content, not git object ids):
 
@@ -113,11 +113,11 @@ Patch: `src/bin/electrs.rs` only, blob `1bb97daa9e59`. Upstream replaces `shutdo
 
 Upstream arms the watchdog **then** calls `rest_server.stop()`. Electrum join is still Drop of `electrum_server` after `break`. `process::exit(0)` skips every destructor, including RocksDB close and Electrum `RPC::drop` (`handle.join()`).
 
-This tree: `SHUTDOWN_WATCHDOG_TIMEOUT` is 5 seconds, poll 500 ms, thread name `shutdown-watchdog`. `spawn_shutdown_watchdog` still calls `process::exit(0)` and the comments name the destructor skip. Stop order is rest-stop, Electrum join, `flush_index_store` (`txstore_db`, `history_db`, `cache_db`), **then** arm the watchdog. That is flush then watchdog, because a 5-second hard exit must not skip a flush this indexer relies on.
+This tree: `SHUTDOWN_WATCHDOG_TIMEOUT` is 5 seconds, poll 500 ms, thread name `shutdown-watchdog`. `spawn_shutdown_watchdog` still calls `process::exit(0)` and the comments name the destructor skip. Stop order is rest-stop, `flush_index_store` (`txstore_db`, `history_db`, `cache_db`), bounded Electrum join with that same 5-second budget (`join_thread_within`), then the leftover-thread watchdog. A hung unix Electrum join cannot delay the flush. `process::exit(0)` on a stuck join runs only after that flush. This tree does not arm the watchdog before rest-stop.
 
-Named test: `shutdown_watchdog_armed_after_rest_stop_join_and_flush` in `src/bin/electrs.rs`.
+Named test: `shutdown_rest_stop_flush_three_cfs_then_bounded_electrum_join` in `src/bin/electrs.rs`. Helpers `join_thread_within_does_not_sleep_five_seconds_when_thread_finished` and `join_thread_within_times_out_without_sleeping_five_seconds_when_stuck` cover the bound without sleeping 5 seconds in CI.
 
-Remaining hole: because join runs before the watchdog is armed, a hung Electrum `JoinHandle` still delays systemd stop and never reaches flush or `process::exit(0)`. Upstream would kill that hang at 5 seconds and skip flush. This tree chose flush over killing a join that has not finished.
+The hang-before-flush hole is closed. Upstream would `process::exit(0)` after 5 seconds and skip flush. This tree flushes first, then bounds the join.
 
 ---
 
@@ -209,23 +209,13 @@ Skip evidence: git `proxy-protocol` is denied. Do not take old hyper headers, cl
 
 ## #47 WIP: Liquid sigops (draft)
 
-Stance: **skip** cherry-pick.
+Stance: **skip** cherry-pick. The undercount hole is **already here** as a current-types reconstruction.
 
-Patch: `src/util/transaction.rs` blob `8a4fa18f31d0`. For `input.is_pegin`, if `input.witness.pegin_witness.len() < 4` then `continue`; else take `scriptPubKey` from `pegin_witness[3]` and count witness/P2SH sigops against that script.
+Patch: `src/util/transaction.rs` blob `8a4fa18f31d0`. For `input.is_pegin`, if `input.witness.pegin_witness.len() < 4` then `continue`; else take `scriptPubKey` from `pegin_witness[3]` and count witness/P2SH sigops against that script. That patch uses `from_byte_iter` and still zips misaligned prevouts.
 
-This tree: `get_sigop_cost` returns early with legacy `* 4` only:
+This tree does not take that patch. `get_sigop_cost` returns early with legacy `* 4` only for coinbase. A peg-in input keeps the prevout vector aligned with a dummy sidechain output, skips P2SH (Elements: peg-in inputs are segwit-only), and counts witness sigops against the claim script at `pegin_witness[3]` when that stack has at least four items. rust-elements 0.26 still stores `claim_script` there. Sibling non-pegin inputs still count P2SH and witness. Named tests: `pegin_sigop_cost_tests` in `src/util/transaction.rs`.
 
-```
-        if tx.is_coinbase() || tx.input.iter().any(|input| input.is_pegin) {
-            return Ok(n_sigop_cost);
-        }
-```
-
-That is not the PR's pegin-witness walk. Witness and P2SH sigops are not counted for those transactions. That is a known undercount, not #47.
-
-Skip evidence: dirty 2023 draft versus current Elements `Witness` / `script_sig` types. Cherry-pick will not apply.
-
-Residual: if Liquid REST `sigops` on pegin must later match Elements, port a current-types witness walk. Do not take this patch as-is.
+Skip evidence: dirty 2023 draft versus current Elements `Witness` / `script_sig` types. Cherry-pick will not apply. The REST field now matches Elements `GetTransactionSigOpCost` without that cherry-pick.
 
 ---
 
@@ -261,7 +251,7 @@ These Surmount contracts stay. They are not reasons to merge the skip rows.
 
 - Electrum PROXY and `--electrum-haproxy-depth` via crates.io `ppp` 2.3.0. Depth 0 is production.
 - Shared rayon `THREAD_POOL` (the pool half of #145).
-- Pegin special-case in `get_sigop_cost` (legacy cost only). That is not #47's witness walk. Document the undercount; do not pretend pegin witness sigops are counted.
+- Peg-in REST `sigops` counts sibling P2SH/witness plus claim-script witness sigops. Coinbase still returns legacy cost only. That is not a cherry-pick of #47.
 - HTTP/1 header-read timeout 10 seconds (`HTTP1_HEADER_READ_TIMEOUT`).
 - hyper 1, clap 4, bitcoin 0.32.8, rocksdb 0.24.0, panic abort.
 
@@ -269,6 +259,5 @@ These Surmount contracts stay. They are not reasons to merge the skip rows.
 
 ## Remaining holes
 
-1. Liquid REST `sigops` on a transaction with any `is_pegin` input undercounts (legacy `* 4` only). Port a current-types walk later only if that REST field must match Elements. Do not take #47 as-is.
-2. Shutdown watchdog is armed after Electrum join and RocksDB flush. A hung Electrum join still delays process exit. Upstream #154 would `process::exit(0)` after 5 seconds and skip flush. This tree documents that destructor skip and refuses to skip flush.
-3. Do not merge the skip rows. Do not add cache prefix `R`. Do not shrink summary from 5000 to 100.
+1. Shutdown order is rest-stop, flush of the three column families, bounded Electrum join, leftover watchdog. Do not re-open that as a hang-before-watchdog hole. Do not copy upstream #154 arm-first, which would skip the flush.
+2. Do not merge the skip rows. Do not add cache prefix `R`. Do not shrink summary from 5000 to 100. Do not take #47 as-is. Peg-in REST `sigops` is already reconstructed in this tree.

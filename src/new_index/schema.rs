@@ -2352,7 +2352,7 @@ mod tests {
 
 #[cfg(test)]
 mod utxo_delta_tests {
-    use super::{apply_utxo_delta, SpendingInfo, TxHistoryInfo, TxHistoryKey, TxHistoryRow};
+    use super::{SpendingInfo, TxHistoryInfo, TxHistoryKey, TxHistoryRow, apply_utxo_delta};
     use crate::chain::{BlockHash, Value};
     use crate::errors::ErrorKind;
     use crate::util::BlockId;

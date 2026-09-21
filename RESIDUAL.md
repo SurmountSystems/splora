@@ -28,7 +28,12 @@ passed!`). nextest was 94/94. Named HTTP contracts passed (10s
 header-read timeout, WS 101, signet 307, daemon 503/504). The first
 `just check-remote` that day exited 1 on compile E0277 at
 `src/rest.rs`. That compile miss is closed by the rest.rs fix. It is
-not Open. There is no `test-remote` recipe. Nix omitted aarch64-linux.
+not Open. 2026-09-20 `just check-remote` (`nix flake check`) exited 0
+in 2 minutes 43 seconds (`all checks passed!`). It built
+`checks.x86_64-linux.splora`, `splora-liquid`, `splora-http`,
+`nextest`, and `rocksdbMoldLink` on surmount-1. Nix omitted
+aarch64-linux. That omit is not a fail. Flake check is not
+`cargo audit`. rustls 0.23.44 / RUSTSEC-2026-0285 stays Open below. There is no `test-remote` recipe. Nix omitted aarch64-linux.
 That omit is not a fail. `bitcoind` and
 `elementsd` evaluated. `packages.splora-http` built.
 `rocksdbMoldLink` observed `NEEDED librocksdb`. Previously untracked
@@ -66,10 +71,26 @@ The 2026-09-09 Menhera lock refresh pinned `nostr` **0.45.4**. Direct
 `rustls-pemfile` left the graph
 ([RUSTSEC-2025-0134](https://rustsec.org/advisories/RUSTSEC-2025-0134),
 accessed: 2026-09-09). The 2026-09-19 Menhera `cargo update` pinned
-`nostr` **0.45.5** and `rustls` **0.23.44**. `rocksdb` stayed 0.24.0.
-`bitcoin` stayed **0.32.102**. Do not bump bitcoin to 0.33-beta. Do not
-bump rocksdb off 0.24. Those floors are standing constraints, not
-unfinished 1.98.1 work. NIP-98 uses `nostr::key::PublicKey` and
+`nostr` **0.45.5** and `rustls` **0.23.44**. The 2026-09-21 Menhera
+`cargo update` (UTC) then locked `cc` **1.4.6**, `lru-slab` **0.1.3**,
+and `tinyvec` **1.13.3**, and dropped `tinyvec_macros`. `rustls` stayed
+**0.23.44**. `rocksdb` stayed 0.24.0. `bitcoin` stayed **0.32.102**.
+That lock refresh is not Open leftover. rustls 0.23.45 is still not on
+the Menhera 7-day index. That wait stays Open below. 2026-09-21
+`cargo fetch --locked` exited 0. 2026-09-20 `just check-local` ran
+the full laptop recipe: `cargo fmt --all --check` exited 0 after
+file-level rustfmt on `src/daemon.rs` and `src/new_index/schema.rs`;
+`cargo clippy --all -- -D warnings` exited 0 in 4 minutes 18 seconds
+with no warnings; `cargo deny --offline --locked check --config
+cargo-deny.toml` exited 0 (advisories ok, bans ok, licenses ok,
+sources ok). `cargo audit` exited 1 on
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-20). fmt, clippy, and deny are not Open.
+2026-09-20 `just check-remote` then exited 0 (`all checks passed!`).
+That remote gate is not Open. The rustls audit row is still Open
+because flake check does not run `cargo audit`. Do
+not bump bitcoin to 0.33-beta. Do not bump rocksdb off 0.24. Those
+floors are standing constraints, not unfinished 1.98.1 work. NIP-98 uses `nostr::key::PublicKey` and
 `nostr::event::Event` (0.45 no longer re-exports those at the crate
 root), caps encoded header size before Base64, and signs test events
 with `EventBuilder::finalize`. Closed rustsec rows from the 2026-08-31
@@ -229,12 +250,15 @@ maxfeerate is unchanged. That is Mempool #84 already here.
 keys stay `C{txid}{blockhash}`. There are no `R` keys. That is Mempool
 #145 already here for the cap.
 
-Shutdown order is rest-stop, Electrum join, RocksDB flush, then a
-5-second watchdog. Named test
-`shutdown_watchdog_armed_after_rest_stop_join_and_flush`. This tree did
-not arm the watchdog first, because that would skip the flush.
-`process::exit(0)` still skips destructors. That skip is documented.
-That is Mempool #154 already here with this order.
+Shutdown order is rest-stop, RocksDB flush of `txstore_db`,
+`history_db`, and `cache_db`, bounded Electrum join (5 seconds, poll
+500 ms), then the leftover-thread watchdog. Named test
+`shutdown_rest_stop_flush_three_cfs_then_bounded_electrum_join`. A hung
+unix Electrum join cannot delay that flush. `process::exit(0)` on a
+stuck join runs only after flush. This tree did not arm the watchdog
+before rest-stop, because that is upstream #154 and would skip the
+flush. `process::exit(0)` still skips remaining destructors. That skip
+is documented. That is Mempool #154 already here with flush-then-bounded-join.
 
 Unbounded query `max_txs` is `clamp_query_max_txs` with `min()` against
 the existing `rest_default_*` and `rest_max_*` knobs. Named test
@@ -243,6 +267,17 @@ Address summary default stays 5000. This tree did not take
 `MAX_HISTORY_TXS = 100`. That clamp is already here. Skip stances for
 the other parent pull requests live in the decision log. They are not
 Open leftover of this wave. Do not duplicate that table here.
+
+Liquid REST `sigops` on a peg-in transaction no longer returns early
+for the whole transaction. `get_sigop_cost` still returns legacy cost
+only for coinbase. A peg-in input has no sidechain prevout, so that
+input skips P2SH and counts witness sigops against the claim script at
+`pegin_witness[3]` when that stack has at least four items. Sibling
+inputs still count P2SH and witness. Named tests live in
+`src/util/transaction.rs` (`pegin_sigop_cost_tests`). Do not cherry-pick
+Mempool #47. Skip evidence for that dirty 2023 patch is in
+[doc/mempool-latent-prs.md](doc/mempool-latent-prs.md). This hole is
+closed.
 
 Named test `packaging_pins_rust_198_edition_2024_and_system_rocksdb`
 matches `useSystemRocksdb = true`. That pin landed with this wave. It is
@@ -294,29 +329,39 @@ There is no `NEEDED` libleveldb.
 ### Operator-owned gates
 
 `just check-local` (fmt, clippy, deny, audit) is the standing laptop
-recipe. It is not leftover of the rustc 1.98.1 remote proof. This
-session did not run `just check-local` as a whole. Do not treat that
-recipe as unproven 1.98.1 work. The crane Menhera DNS miss
-(`Could not resolve host: index.crates.menhera.org` on
-`splora-deps-3.4.0-dev` after vendor) is fixed in `flake.nix`.
+recipe. It is not leftover of the rustc 1.98.1 remote proof. 2026-09-20
+this pass ran that recipe as a whole. fmt, clippy, and deny exited 0.
+`cargo audit` exited 1 on rustls 0.23.44
+([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285),
+accessed: 2026-09-20). That audit row stays Open below. Do not list
+fmt, clippy, or deny as Open. 2026-09-20 `just check-remote` (`nix
+flake check`) also ran and exited 0 (`all checks passed!`). That
+remote recipe is not leftover. It is not deny or audit. The crane
+Menhera DNS miss (`Could not resolve host: index.crates.menhera.org`
+on `splora-deps-3.4.0-dev` after vendor) is fixed in `flake.nix`.
 
 Agents do not stage.
 
 ### Agent-doable leftover
 
-This pass's `cargo fetch --locked` exited 0. `cargo audit` exited 1 on
-production `rustls` **0.23.44** /
-[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
-(accessed: 2026-09-19): TLS 1.3 handshake messages incorrectly
-accepted across encryption level boundaries. Solution is >=0.23.45.
-rustls 0.23.45 is not on the Menhera 7-day index (the index shows
-through 0.23.44). Do not fetch crates.io to skip the wait. Do not
-`[advisories] ignore`. `cargo audit -D warnings` exited 1 on the same
-row. No extra warning, yanked, or unmaintained named crates.
-`cargo deny --offline --locked check --config cargo-deny.toml` exited
-0, but that is a stale advisory clone (HEAD 2026-08-31) that does not
-contain RUSTSEC-2026-0285. Deny green is not proof the rustls row is
-gone. bitcoin is **0.32.102**. rocksdb is **0.24.0**. nostr lock is
+The 2026-09-21 `cargo update` and `cargo fetch --locked` both exited 0
+on the Menhera 7-day index. Production `rustls` is still **0.23.44**.
+2026-09-20 `just check-local` then reconfirmed that audit row:
+`cargo audit` loaded 1251 advisories from `~/.cargo/advisory-db` and
+exited **1** on one production vulnerability. There is no second
+advisory row in that transcript. fmt, clippy, and deny on that same
+recipe exited 0. They are not Open.
+
+| Advisory | Crate | Version | Why it remains |
+|----------|-------|---------|----------------|
+| [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (accessed: 2026-09-20) | `rustls` | **0.23.44** | TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries. Solution is >=0.23.45. The Menhera 7-day sparse index (`https://index.crates.menhera.org/7d/ru/st/rustls`, Last-Modified Mon, 14 Sep 2026 15:11:20 GMT) still ends at rustls **0.23.44** (published 2026-09-07). Unique 0.23.x versions on that index are 0.23.0 through 0.23.44. There is no 0.23.45. `cargo update -p rustls --precise 0.23.45 --dry-run` exited 101 (`no matching package named rustls found` on `menhera-cooldown`). |
+
+Do not fetch crates.io to skip the wait. Do not `[advisories] ignore`.
+The ignore list stays empty. `cargo deny --offline --locked check
+--config cargo-deny.toml` exited **0** (advisories ok, bans ok,
+licenses ok, sources ok) on this same `just check-local` pass. Deny
+green is not proof the rustls row is gone. bitcoin is **0.32.102**.
+rocksdb is **0.24.0**. nostr lock is
 **0.45.5**. [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
 (accessed: 2026-09-09) stays closed on the prior lock by hyper
 **1.11.1** and h2 **0.4.19**. That closed row is not Open leftover of
@@ -373,24 +418,20 @@ that unwrapped challenge, `-addnode=45.79.52.207:38333`, and
 outcome via argv. Do not wrap the challenge on stock Core: wrapping
 would change P2P magic. Wallet stays off.
 
-Liquid REST `sigops` on a pegin transaction still counts legacy only.
-`get_sigop_cost` returns early when any input `is_pegin`. Witness and
-P2SH sigops are not counted for those transactions. That undercount is
-Open. Do not take Mempool #47 as-is. Skip evidence is in
-[doc/mempool-latent-prs.md](doc/mempool-latent-prs.md).
-
-A hung Electrum join still delays process stop. This tree arms the
-5-second shutdown watchdog after rest-stop, Electrum join, and RocksDB
-flush. A join that never finishes never reaches the watchdog. That hole
-is Open. Do not arm the watchdog first if that would skip the flush.
-The same decision log records that order choice.
-
 ## Highest value next
 
-Wait for Menhera to serve rustls >=0.23.45, then lock update. Do not
-fetch crates.io to skip the wait. Do not `[advisories] ignore`. The
-ignore list stays empty. bitcoin is 0.32.102. rocksdb is 0.24.0. Do
-not bump bitcoin to 0.33-beta. Do not bump rocksdb off 0.24.
+Wait for Menhera to serve rustls >=0.23.45, then lock update that crate.
+The 2026-09-21 blanket `cargo update` already ran and could not take
+0.23.45 because it is not on the 7-day index. 2026-09-20 `just
+check-local` and `cargo update -p rustls --precise 0.23.45 --dry-run`
+reconfirmed the same miss. Do not fetch crates.io to skip the wait. Do
+not `[advisories] ignore`. The ignore list stays empty. bitcoin is
+0.32.102. rocksdb is 0.24.0. Do not bump bitcoin to 0.33-beta. Do not
+bump rocksdb off 0.24. 2026-09-20 `just check-remote` after that lock
+exited 0 in 2 minutes 43 seconds (`all checks passed!`). That remote
+gate is not leftover. fmt, clippy, and deny on `just check-local` are
+already green. They are not the next proof. The next proof is still
+Menhera rustls >=0.23.45, then `cargo audit` green.
 
 2026-09-19 `just check-remote` after the rest.rs fix is already green.
 Command `just check-remote`, duration 149s, exit 0, `all checks
@@ -413,7 +454,8 @@ Do not re-open clap 4, wallet-on, MWCK, nginx, or RocksDB LRU-share.
 Sharing one RocksDB LRU across indexer processes is not Open. Do not
 put `pkgs.nixosTest` on `just check-remote`. e2e/QEMU stays off that
 gate. Do not re-open Mempool #84, the #145 history-row cap, the #154
-flush-then-watchdog order, or the unbounded `max_txs` clamp against
-existing REST knobs. Do not take `MAX_HISTORY_TXS = 100`. Skip rows
-stay skip. The two Open holes above are Liquid pegin `sigops` and a
-hung Electrum join before the watchdog.
+rest-stop then flush then bounded Electrum join order, or the unbounded
+`max_txs` clamp against existing REST knobs. Do not take
+`MAX_HISTORY_TXS = 100`. Skip rows stay skip. Liquid peg-in REST
+`sigops` is closed. The hung Electrum join before the watchdog is
+closed.

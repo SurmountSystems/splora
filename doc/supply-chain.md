@@ -231,19 +231,28 @@ Direct crate bumps that closed rustsec rows:
 
 ## Remaining rustsec rows
 
-This pass's `cargo fetch --locked` exited 0. `cargo audit` exited 1 on
-one production vulnerability. `cargo audit -D warnings` exited 1 on
-the same row. No extra warning, yanked, or unmaintained named crates.
-`cargo deny --offline --locked check --config cargo-deny.toml` exited
-0, but that is a stale advisory clone (HEAD 2026-08-31) that does not
-contain [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
-(accessed: 2026-09-19). Deny green is not proof the rustls row is
+The 2026-09-21 Menhera `cargo update` (UTC) locked `cc` **1.4.6**,
+`lru-slab` **0.1.3**, and `tinyvec` **1.13.3**, and dropped
+`tinyvec_macros`. `cargo fetch --locked` then exited 0. rustls stayed
+**0.23.44**. bitcoin stayed **0.32.102**. rocksdb stayed **0.24.0**.
+The same day's live `cargo audit` (advisory-db HEAD
+`d5c17953a895cf19e8d3ce66eaa42b6fcfe1fb16`, 2026-09-19, 1251
+advisories) exited **1**. `cargo audit --json` listed one
+vulnerability and an empty `warnings` map. `cargo audit -D warnings`
+exited 1 on that same row and did not print yanked, unmaintained,
+unsound, or notice warnings. `cargo deny --offline --locked check
+--config cargo-deny.toml` exited **0** on a stale advisory clone
+(`~/.cargo/advisory-dbs/advisory-db-3157b0e258782691`, HEAD
+`ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5`, 2026-08-31) that does not
+contain
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-20). Deny green is not proof the rustls row is
 gone. The ignore list stays empty. Do not fetch crates.io to skip the
-Menhera wait. bitcoin is **0.32.102**. rocksdb is **0.24.0**.
+Menhera wait.
 
 | Crate | Advisory | Why it remains |
 |-------|----------|----------------|
-| `rustls` **0.23.44** | [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (accessed: 2026-09-19) | Production. TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries. Solution is >=0.23.45. rustls 0.23.45 is not on the Menhera 7-day index (the index shows through 0.23.44). |
+| `rustls` **0.23.44** | [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (accessed: 2026-09-20) | Production. TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries. Solution is >=0.23.45. rustls 0.23.45 is not on the Menhera 7-day index (the index still ends at 0.23.44, published 2026-09-07). |
 
 On the prior lock after the hyper 1 port,
 [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
@@ -251,8 +260,9 @@ On the prior lock after the hyper 1 port,
 `>= 0.4.16`). That row is not leftover of rustc 1.98.1 or of the hyper
 1 port.
 
-Yanked crates: cargo-audit JSON had an empty `warnings` map (no yanked).
-cargo-deny `yanked = "deny"` reported no yanked rows.
+Yanked crates: cargo-audit JSON had an empty `warnings` map (no yanked,
+unmaintained, unsound, or notice). cargo-deny `yanked = "deny"`
+reported no yanked rows.
 
 `rustls-pemfile` **2.2.0** ([RUSTSEC-2025-0134](https://rustsec.org/advisories/RUSTSEC-2025-0134),
 accessed: 2026-09-09) left the graph. `splora-http` PEM load uses
@@ -337,10 +347,12 @@ the named check. A laptop `cargo` ELF is not a substitute either.
   101, signet 307, daemon 503/504). The first run that day exited 1 on
   compile E0277. That compile miss is closed by the rest.rs fix. It is
   not leftover. Nix omitted aarch64-linux. That omit is not a fail.
-  Laptop `cargo audit` is still red on
+  Laptop `cargo audit` on 2026-09-21 is still red on
   [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
-  (accessed: 2026-09-19). Deny `--offline` exit 0 is a stale advisory
-  clone, not a closed rustls row.
+  (accessed: 2026-09-20) because rustls is still **0.23.44**. The
+  2026-09-21 Menhera refresh did not take rustls 0.23.45 (not on the
+  7-day index). Deny `--offline` exit 0 is a stale advisory clone, not
+  a closed rustls row.
   [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
   (accessed: 2026-09-09) is closed on the prior lock. That closed row
   is not leftover. `just check-local` as a whole was not this

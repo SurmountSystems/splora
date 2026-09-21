@@ -9,6 +9,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Audit lock after hyper 1
     - L3 specialists (when spawned)
+  - L2 Check residual Open honesty
+    - L3 specialists (when spawned)
   - L2 Confirm flake paths memory
     - L3 specialists (when spawned)
   - L2 Confirm untracked residual paths
@@ -31,11 +33,17 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Dual residual honesty PR ports
     - L3 specialists (when spawned)
+  - L2 Electrum join shutdown order
+    - L3 specialists (when spawned)
   - L2 Explore latent mempool electrs PRs
+    - L3 specialists (when spawned)
+  - L2 Find Electrum shutdown L3
     - L3 specialists (when spawned)
   - L2 Finish remote tests residual
     - L3 specialists (when spawned)
   - L2 Fix Nix getExe eval warnings
+    - L3 specialists (when spawned)
+  - L2 Fix peg-in sigops count
     - L3 specialists (when spawned)
   - L2 Fix rest.rs graceful watch
     - L3 specialists (when spawned)
@@ -52,6 +60,10 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
   - L2 In-tree Nix node wiring
     - L3 specialists (when spawned)
   - L2 In-tree nixpkgs node pins
+    - L3 specialists (when spawned)
+  - L2 Inspect Electrum join shutdown
+    - L3 specialists (when spawned)
+  - L2 Inspect Liquid peg-in sigops
     - L3 specialists (when spawned)
   - L2 Inspect Mempool PR contracts
     - L3 specialists (when spawned)
@@ -93,7 +105,11 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Menhera cargo lock update
     - L3 specialists (when spawned)
+  - L2 Menhera cargo update
+    - L3 specialists (when spawned)
   - L2 Menhera cargo update and audit
+    - L3 specialists (when spawned)
+  - L2 Move closed residual paragraph
     - L3 specialists (when spawned)
   - L2 Mutinynet 30s blocks
     - L3 specialists (when spawned)
@@ -114,6 +130,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
   - L2 RESIDUAL.md dual honesty
     - L3 specialists (when spawned)
   - L2 Re-inspect Mutinynet argv fix
+    - L3 specialists (when spawned)
+  - L2 Re-read residual peg-in pin
     - L3 specialists (when spawned)
   - L2 Re-review residual honesty
     - L3 specialists (when spawned)
@@ -144,6 +162,10 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
   - L2 Review splora-http front
     - L3 specialists (when spawned)
   - L2 Rewrite Mempool PR decision log
+    - L3 specialists (when spawned)
+  - L2 Run and fix check-local
+    - L3 specialists (when spawned)
+  - L2 Run and fix check-remote
     - L3 specialists (when spawned)
   - L2 Rust 1.98.1 update coordinator
     - L3 specialists (when spawned)
@@ -189,6 +211,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Verify residual five paths
     - L3 specialists (when spawned)
+  - L2 Wait cargo-update report
+    - L3 specialists (when spawned)
   - L2 Wait or recover audit
     - L3 specialists (when spawned)
   - L2 Wait then splora check-remote
@@ -198,6 +222,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
   - L2 Wire HTTP front leftover
     - L3 specialists (when spawned)
   - L2 Wire system secp CMake
+    - L3 specialists (when spawned)
+  - L2 Write Electrum shutdown L3 report
     - L3 specialists (when spawned)
   - L2 Write implement memory JSON
     - L3 specialists (when spawned)
@@ -229,6 +255,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 [implementer] Crane src for include_str
     - L3 specialists (when spawned)
+  - L2 [implementer] Electrum join shutdown
+    - L3 specialists (when spawned)
   - L2 [implementer] Evicted mempool bodies
     - L3 specialists (when spawned)
   - L2 [implementer] Fix help flag test
@@ -254,6 +282,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
   - L2 [implementer] HTTP2 HTTP3 docs
     - L3 specialists (when spawned)
   - L2 [implementer] Hyper header timeout
+    - L3 specialists (when spawned)
+  - L2 [implementer] Liquid pegin sigops
     - L3 specialists (when spawned)
   - L2 [implementer] Live allowlist watch test
     - L3 specialists (when spawned)
@@ -313,13 +343,23 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 [implementer] cargo-deny hygiene
     - L3 specialists (when spawned)
+  - L2 [implementer] check-local then remote
+    - L3 specialists (when spawned)
+  - L2 [implementer] finish Electrum shutdown
+    - L3 specialists (when spawned)
   - L2 [implementer] finish leftover implement
+    - L3 specialists (when spawned)
+  - L2 [implementer] finish update audit remote
     - L3 specialists (when spawned)
   - L2 [implementer] http.sock edge docs
     - L3 specialists (when spawned)
   - L2 [implementer] just check-remote
     - L3 specialists (when spawned)
   - L2 [implementer] leftover update audit remote
+    - L3 specialists (when spawned)
+  - L2 [implementer] residual peg-in placement
+    - L3 specialists (when spawned)
+  - L2 [implementer] update audit check-remote
     - L3 specialists (when spawned)
   - L2 [implementer] wait TDD ports then remote
     - L3 specialists (when spawned)
@@ -383,7 +423,13 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 [reviewer] leftover implement review
     - L3 specialists (when spawned)
+  - L2 [reviewer] pegin and shutdown
+    - L3 specialists (when spawned)
+  - L2 [reviewer] residual placement re-review
+    - L3 specialists (when spawned)
   - L2 agent-trash tagged grok files
+    - L3 specialists (when spawned)
+  - L2 cargo audit and deny
     - L3 specialists (when spawned)
   - L2 combined impl summary residual retry
     - L3 specialists (when spawned)
@@ -399,9 +445,21 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 goal plan writer
     - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
   - L2 http_front named tests
     - L3 specialists (when spawned)
   - L2 http_front tests and residual
+    - L3 specialists (when spawned)
+  - L2 just check-remote flake
     - L3 specialists (when spawned)
   - L2 nix-bitcoin primary source status
     - L3 specialists (when spawned)
@@ -420,6 +478,7 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | --- | --- | --- | --- | --- | --- |
 | Audit and cargo deny | nested L2 session usage | L2 | 85779 | estimate | exited |
 | Audit lock after hyper 1 | nested L2 session usage | L2 | 58650 | estimate | exited |
+| Check residual Open honesty | nested L2 session usage | L2 | 82233 | estimate | exited |
 | Confirm flake paths memory | nested L2 session usage | L2 | 72553 | estimate | exited |
 | Confirm untracked residual paths | nested L2 session usage | L2 | 50624 | estimate | exited |
 | Delta inventory 154 and max_txs | nested L2 session usage | L2 | 101947 | estimate | exited |
@@ -431,9 +490,12 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Draft splora-http systemd unit | nested L2 session usage | L2 | 84217 | estimate | exited |
 | Drop signetblocktime from Core | nested L2 session usage | L2 | 58559 | estimate | exited |
 | Dual residual honesty PR ports | nested L2 session usage | L2 | 72841 | estimate | exited |
+| Electrum join shutdown order | nested L2 session usage | L2 | 127977 | estimate | exited |
 | Explore latent mempool electrs PRs | nested L2 session usage | L2 | 189388 | estimate | exited |
+| Find Electrum shutdown L3 | nested L2 session usage | L2 | 86796 | estimate | exited |
 | Finish remote tests residual | nested L2 session usage | L2 | 114088 | estimate | exited |
 | Fix Nix getExe eval warnings | nested L2 session usage | L2 | 103280 | estimate | exited |
+| Fix peg-in sigops count | nested L2 session usage | L2 | 170539 | estimate | exited |
 | Fix rest.rs graceful watch | nested L2 session usage | L2 | 92715 | estimate | exited |
 | HTTP front coordinator | nested L2 session usage | L2 | 52652 | estimate | exited |
 | Hyper 1 and secp proof | nested L2 session usage | L2 | 0 | estimate | exited |
@@ -442,6 +504,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Implement splora-http front | nested L2 session usage | L2 | 162640 | estimate | exited |
 | In-tree Nix node wiring | nested L2 session usage | L2 | 63951 | estimate | exited |
 | In-tree nixpkgs node pins | nested L2 session usage | L2 | 55610 | estimate | exited |
+| Inspect Electrum join shutdown | nested L2 session usage | L2 | 78320 | estimate | exited |
+| Inspect Liquid peg-in sigops | nested L2 session usage | L2 | 108959 | estimate | exited |
 | Inspect Mempool PR contracts | nested L2 session usage | L2 | 124917 | estimate | exited |
 | Inspect Mutinynet bitcoind slice | nested L2 session usage | L2 | 102462 | estimate | exited |
 | Inspect http_front implementer diffs | nested L2 session usage | L2 | 71333 | estimate | exited |
@@ -462,7 +526,9 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Memory snapshot briefing | nested L2 session usage | L2 | 41914 | estimate | exited |
 | Mempool eviction body cache | nested L2 session usage | L2 | 99048 | estimate | exited |
 | Menhera cargo lock update | nested L2 session usage | L2 | 58241 | estimate | exited |
+| Menhera cargo update | nested L2 session usage | L2 | 90442 | estimate | exited |
 | Menhera cargo update and audit | nested L2 session usage | L2 | 119576 | estimate | exited |
+| Move closed residual paragraph | nested L2 session usage | L2 | 65241 | estimate | exited |
 | Mutinynet 30s blocks | nested L2 session usage | L2 | 125574 | estimate | exited |
 | Nix appliance coordinator | nested L2 session usage | L2 | 114859 | estimate | exited |
 | Nix flake inputs update | nested L2 session usage | L2 | 62426 | estimate | exited |
@@ -473,6 +539,7 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | RESIDUAL.md dual honesty | nested L2 session usage | L2 | 69824 | estimate | exited |
 | RESIDUAL.md dual honesty | nested L2 session usage | L2 | 69557 | estimate | exited |
 | Re-inspect Mutinynet argv fix | nested L2 session usage | L2 | 72053 | estimate | exited |
+| Re-read residual peg-in pin | nested L2 session usage | L2 | 68476 | estimate | exited |
 | Re-review residual honesty | nested L2 session usage | L2 | 67220 | estimate | exited |
 | Re-run proofs residual | nested L2 session usage | L2 | 68175 | estimate | exited |
 | Record remote tests then test-remote | nested L2 session usage | L2 | 63540 | estimate | exited |
@@ -488,6 +555,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Review claimed Nix leftover | nested L2 session usage | L2 | 85424 | estimate | exited |
 | Review splora-http front | nested L2 session usage | L2 | 85330 | estimate | exited |
 | Rewrite Mempool PR decision log | nested L2 session usage | L2 | 146549 | estimate | exited |
+| Run and fix check-local | nested L2 session usage | L2 | 95203 | estimate | exited |
+| Run and fix check-remote | nested L2 session usage | L2 | 79292 | estimate | exited |
 | Rust 1.98.1 update coordinator | nested L2 session usage | L2 | 71065 | estimate | exited |
 | Score drafts update L2 report | nested L2 session usage | L2 | 118134 | estimate | exited |
 | Second splora check-remote | nested L2 session usage | L2 | 73754 | estimate | exited |
@@ -510,11 +579,13 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Verify confirmation-wave claims | nested L2 session usage | L2 | 112278 | estimate | exited |
 | Verify leftover implement contracts | nested L2 session usage | L2 | 88646 | estimate | exited |
 | Verify residual five paths | nested L2 session usage | L2 | 55663 | estimate | exited |
+| Wait cargo-update report | nested L2 session usage | L2 | 55878 | estimate | exited |
 | Wait or recover audit | nested L2 session usage | L2 | 54930 | estimate | exited |
 | Wait then splora check-remote | nested L2 session usage | L2 | 118756 | estimate | exited |
 | Wire Gentoo secp CMake | nested L2 session usage | L2 | 67528 | estimate | exited |
 | Wire HTTP front leftover | nested L2 session usage | L2 | 85396 | estimate | exited |
 | Wire system secp CMake | nested L2 session usage | L2 | 65943 | estimate | exited |
+| Write Electrum shutdown L3 report | nested L2 session usage | L2 | 82952 | estimate | exited |
 | Write implement memory JSON | nested L2 session usage | L2 | 41288 | estimate | exited |
 | Write memory JSON and update | nested L2 session usage | L2 | 41467 | estimate | exited |
 | [cleanup] Trash implement scratch | nested L2 session usage | L2 | 43700 | estimate | exited |
@@ -530,6 +601,7 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | [implementer] Confirm operator-gated gate | nested L2 session usage | L2 | 43918 | estimate | exited |
 | [implementer] Crane skip Menhera | nested L2 session usage | L2 | 75840 | estimate | exited |
 | [implementer] Crane src for include_str | nested L2 session usage | L2 | 96998 | estimate | exited |
+| [implementer] Electrum join shutdown | nested L2 session usage | L2 | 54203 | estimate | exited |
 | [implementer] Evicted mempool bodies | nested L2 session usage | L2 | 44336 | estimate | exited |
 | [implementer] Fix help flag test | nested L2 session usage | L2 | 52903 | estimate | exited |
 | [implementer] Fix leftover compile | nested L2 session usage | L2 | 92069 | estimate | exited |
@@ -543,6 +615,7 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | [implementer] Fix review issues | nested L2 session usage | L2 | 54165 | estimate | exited |
 | [implementer] HTTP2 HTTP3 docs | nested L2 session usage | L2 | 81725 | estimate | exited |
 | [implementer] Hyper header timeout | nested L2 session usage | L2 | 109785 | estimate | exited |
+| [implementer] Liquid pegin sigops | nested L2 session usage | L2 | 74568 | estimate | exited |
 | [implementer] Live allowlist watch test | nested L2 session usage | L2 | 68508 | estimate | exited |
 | [implementer] MWCK notify polish | nested L2 session usage | L2 | 108447 | estimate | exited |
 | [implementer] MWCK reorg replay | nested L2 session usage | L2 | 48815 | estimate | exited |
@@ -572,10 +645,15 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | [implementer] Write FORK.md | nested L2 session usage | L2 | 74769 | estimate | exited |
 | [implementer] Write residual file | nested L2 session usage | L2 | 63382 | estimate | exited |
 | [implementer] cargo-deny hygiene | nested L2 session usage | L2 | 124812 | estimate | exited |
+| [implementer] check-local then remote | nested L2 session usage | L2 | 69400 | estimate | exited |
+| [implementer] finish Electrum shutdown | nested L2 session usage | L2 | 76093 | estimate | exited |
 | [implementer] finish leftover implement | nested L2 session usage | L2 | 66277 | estimate | exited |
+| [implementer] finish update audit remote | nested L2 session usage | L2 | 84216 | estimate | exited |
 | [implementer] http.sock edge docs | nested L2 session usage | L2 | 67590 | estimate | exited |
 | [implementer] just check-remote | nested L2 session usage | L2 | 87769 | estimate | exited |
 | [implementer] leftover update audit remote | nested L2 session usage | L2 | 56691 | estimate | exited |
+| [implementer] residual peg-in placement | nested L2 session usage | L2 | 80978 | estimate | exited |
+| [implementer] update audit check-remote | nested L2 session usage | L2 | 54881 | estimate | exited |
 | [implementer] wait TDD ports then remote | nested L2 session usage | L2 | 107521 | estimate | exited |
 | [implementer] wait audit remote residual | nested L2 session usage | L2 | 101795 | estimate | exited |
 | [memory] Flush review patterns | nested L2 session usage | L2 | 39622 | estimate | exited |
@@ -607,7 +685,10 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | [reviewer] Review implementation | nested L2 session usage | L2 | 47755 | estimate | exited |
 | [reviewer] Review leftover slice | nested L2 session usage | L2 | 106593 | estimate | exited |
 | [reviewer] leftover implement review | nested L2 session usage | L2 | 57486 | estimate | exited |
+| [reviewer] pegin and shutdown | nested L2 session usage | L2 | 76887 | estimate | exited |
+| [reviewer] residual placement re-review | nested L2 session usage | L2 | 79226 | estimate | exited |
 | agent-trash tagged grok files | nested L2 session usage | L2 | 50509 | estimate | exited |
+| cargo audit and deny | nested L2 session usage | L2 | 99418 | estimate | exited |
 | combined impl summary residual retry | nested L2 session usage | L2 | 62975 | estimate | exited |
 | fix residual honesty and review | nested L2 session usage | L2 | 69322 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 96300 | estimate | exited |
@@ -615,8 +696,14 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | goal plan writer | nested L2 session usage | L2 | 98597 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 94661 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 98713 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 228827 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 228827 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 228827 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 228827 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 228827 | estimate | exited |
 | http_front named tests | nested L2 session usage | L2 | 157674 | estimate | exited |
 | http_front tests and residual | nested L2 session usage | L2 | 131440 | estimate | exited |
+| just check-remote flake | nested L2 session usage | L2 | 68968 | estimate | exited |
 | nix-bitcoin primary source status | nested L2 session usage | L2 | 156061 | estimate | exited |
 | nixosTenUnits and package evals | nested L2 session usage | L2 | 63855 | estimate | exited |
 | nixpkgs bitcoind elementsd versions | nested L2 session usage | L2 | 75136 | estimate | exited |

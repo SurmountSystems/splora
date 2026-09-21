@@ -128,7 +128,8 @@ pub(super) mod sigops {
     use elements::opcodes::All as Opcode;
     use std::collections::HashMap;
 
-    /// Get sigop count for transaction. prevout_map must have all the prevouts.
+    /// Get sigop count for transaction. prevout_map must have all the prevouts
+    /// except peg-in inputs, which have no sidechain prevout.
     pub fn transaction_sigop_count(
         tx: &Transaction,
         prevout_map: &HashMap<u32, &TxOut>,
@@ -136,13 +137,21 @@ pub(super) mod sigops {
         let input_count = tx.input.len();
         let mut prevouts = Vec::with_capacity(input_count);
 
-        #[cfg(not(feature = "liquid"))]
-        let is_coinbase_or_pegin = tx.is_coinbase();
+        // Peg-in inputs have no sidechain UTXO. Keep the vector aligned with
+        // `tx.input` so a peg-in does not skip witness/P2SH on the rest of the
+        // transaction. Elements still counts witness sigops against the claim
+        // script; that walk does not use this dummy.
         #[cfg(feature = "liquid")]
-        let is_coinbase_or_pegin = tx.is_coinbase() || tx.input.iter().any(|input| input.is_pegin);
+        let empty_pegin_prevout = TxOut::default();
 
-        if !is_coinbase_or_pegin {
+        // Coinbase has no prevouts. Peg-in is not coinbase.
+        if !tx.is_coinbase() {
             for idx in 0..input_count {
+                #[cfg(feature = "liquid")]
+                if tx.input[idx].is_pegin {
+                    prevouts.push(&empty_pegin_prevout);
+                    continue;
+                }
                 prevouts.push(
                     *prevout_map
                         .get(&(idx as u32))
@@ -151,7 +160,6 @@ pub(super) mod sigops {
             }
         }
 
-        // coinbase tx won't use prevouts so it can be empty.
         get_sigop_cost(tx, &prevouts, true, true)
     }
 
@@ -229,6 +237,12 @@ pub(super) mod sigops {
         }
         let mut n = 0;
         for (input, prevout) in tx.input.iter().zip(previous_outputs.iter()) {
+            // Elements: peg-in inputs are segwit-only. Do not count P2SH
+            // against a claim script.
+            #[cfg(feature = "liquid")]
+            if input.is_pegin {
+                continue;
+            }
             if prevout.script_pubkey.is_p2sh()
                 && let Some(Ok(script::Instruction::PushBytes(redeem))) =
                     input.script_sig.instructions().last()
@@ -274,18 +288,16 @@ pub(super) mod sigops {
 
         #[inline]
         fn count_with_prevout(
-            prevout: &TxOut,
+            script_pubkey: &script::Script,
             script_sig: &script::Script,
             witness: &Witness,
         ) -> usize {
             let mut n = 0;
 
             let script_owned;
-            let script: &script::Script = if prevout.script_pubkey.is_witness_program() {
-                &prevout.script_pubkey
-            } else if prevout.script_pubkey.is_p2sh()
-                && is_push_only(script_sig)
-                && !script_sig.is_empty()
+            let script: &script::Script = if script_pubkey.is_witness_program() {
+                script_pubkey
+            } else if script_pubkey.is_p2sh() && is_push_only(script_sig) && !script_sig.is_empty()
             {
                 #[cfg(not(feature = "liquid"))]
                 {
@@ -320,7 +332,20 @@ pub(super) mod sigops {
         }
 
         for (input, prevout) in tx.input.iter().zip(previous_outputs.iter()) {
-            n += count_with_prevout(prevout, &input.script_sig, &input.witness);
+            #[cfg(feature = "liquid")]
+            if input.is_pegin {
+                // Elements GetTransactionSigOpCost uses pegin_witness stack[3]
+                // (claim_script) as scriptPubKey for CountWitnessSigOps when
+                // the stack has at least four items. rust-elements 0.26 still
+                // stores that claim at pegin_witness[3].
+                if input.witness.pegin_witness.len() < 4 {
+                    continue;
+                }
+                let claim_script = script::Script::from(input.witness.pegin_witness[3].clone());
+                n += count_with_prevout(&claim_script, &input.script_sig, &input.witness);
+                continue;
+            }
+            n += count_with_prevout(&prevout.script_pubkey, &input.script_sig, &input.witness);
         }
         n
     }
@@ -333,12 +358,7 @@ pub(super) mod sigops {
         verify_witness: bool,
     ) -> Result<usize, script::Error> {
         let mut n_sigop_cost = get_legacy_sigop_count(tx) * 4;
-        #[cfg(not(feature = "liquid"))]
         if tx.is_coinbase() {
-            return Ok(n_sigop_cost);
-        }
-        #[cfg(feature = "liquid")]
-        if tx.is_coinbase() || tx.input.iter().any(|input| input.is_pegin) {
             return Ok(n_sigop_cost);
         }
         if tx.input.len() != previous_outputs.len() {
@@ -387,5 +407,173 @@ pub(super) mod sigops {
             }
             _ => 0,
         }
+    }
+}
+
+/// Liquid REST `sigops` is BIP141 cost: legacy and P2SH counts times 4, plus
+/// witness sigops. A peg-in input has no sidechain prevout, so it must not
+/// make the whole transaction skip those extra counts. Elements
+/// `GetTransactionSigOpCost` still walks sibling inputs and counts witness
+/// sigops against the peg-in claim script (`pegin_witness[3]`).
+#[cfg(all(test, feature = "liquid"))]
+mod pegin_sigop_cost_tests {
+    use super::sigops::transaction_sigop_count;
+    use crate::chain::{
+        OutPoint, Script, Transaction, TxIn, TxOut, Txid, Witness, hashes::Hash, opcodes,
+    };
+    use elements::{LockTime, Sequence};
+    use std::collections::HashMap;
+
+    fn p2wpkh_script_pubkey() -> Script {
+        let mut bytes = vec![0x00, 0x14];
+        bytes.extend_from_slice(&[0x11u8; 20]);
+        Script::from(bytes)
+    }
+
+    fn p2wsh_script_pubkey() -> Script {
+        let mut bytes = vec![0x00, 0x20];
+        bytes.extend_from_slice(&[0x22u8; 32]);
+        Script::from(bytes)
+    }
+
+    fn p2sh_script_pubkey() -> Script {
+        let mut bytes = vec![opcodes::all::OP_HASH160.into_u8(), 0x14];
+        bytes.extend_from_slice(&[0x33u8; 20]);
+        bytes.push(opcodes::all::OP_EQUAL.into_u8());
+        Script::from(bytes)
+    }
+
+    fn pegin_input(claim_script: Script, script_witness: Vec<Vec<u8>>) -> TxIn {
+        TxIn {
+            previous_output: OutPoint::new(Txid::from_byte_array([1u8; 32]), 0),
+            is_pegin: true,
+            script_sig: Script::new(),
+            sequence: Sequence::MAX,
+            asset_issuance: Default::default(),
+            witness: Witness {
+                amount_rangeproof: None,
+                inflation_keys_rangeproof: None,
+                script_witness,
+                pegin_witness: vec![Vec::new(), Vec::new(), Vec::new(), claim_script.to_bytes()],
+            },
+        }
+    }
+
+    fn spend_input(vout: u32, script_sig: Script, script_witness: Vec<Vec<u8>>) -> TxIn {
+        TxIn {
+            previous_output: OutPoint::new(Txid::from_byte_array([2u8; 32]), vout),
+            is_pegin: false,
+            script_sig,
+            sequence: Sequence::MAX,
+            asset_issuance: Default::default(),
+            witness: Witness {
+                amount_rangeproof: None,
+                inflation_keys_rangeproof: None,
+                script_witness,
+                pegin_witness: Vec::new(),
+            },
+        }
+    }
+
+    fn tx_from_inputs(input: Vec<TxIn>) -> Transaction {
+        Transaction {
+            version: 2,
+            lock_time: LockTime::from_consensus(0),
+            input,
+            output: Vec::new(),
+        }
+    }
+
+    fn prevout(script_pubkey: Script) -> TxOut {
+        TxOut {
+            script_pubkey,
+            ..TxOut::default()
+        }
+    }
+
+    /// Owed outcome: one peg-in input must not make `transaction_sigop_count`
+    /// return only legacy cost for the whole transaction. A sibling P2WPKH
+    /// spend still adds one BIP141 witness sigop.
+    #[test]
+    fn pegin_input_does_not_skip_witness_sigops_on_a_sibling_p2wpkh_spend() {
+        let pegin = pegin_input(Script::new(), Vec::new());
+        let spend = spend_input(1, Script::new(), vec![vec![0x00], vec![0x00; 33]]);
+        let tx = tx_from_inputs(vec![pegin, spend]);
+        let p2wpkh = prevout(p2wpkh_script_pubkey());
+        let mut prevouts = HashMap::new();
+        prevouts.insert(1, &p2wpkh);
+
+        let cost = transaction_sigop_count(&tx, &prevouts).expect("sigop cost");
+        assert_eq!(
+            cost, 1,
+            "a peg-in sibling must not drop the P2WPKH witness sigop"
+        );
+    }
+
+    /// Owed outcome: Elements counts witness sigops for a peg-in against the
+    /// claim script at `pegin_witness[3]`. A P2WPKH claim adds one.
+    #[test]
+    fn pegin_claim_script_p2wpkh_counts_one_witness_sigop_like_elements() {
+        let tx = tx_from_inputs(vec![pegin_input(p2wpkh_script_pubkey(), Vec::new())]);
+        let cost = transaction_sigop_count(&tx, &HashMap::new()).expect("sigop cost");
+        assert_eq!(cost, 1, "peg-in P2WPKH claim script is one witness sigop");
+    }
+
+    /// Owed outcome: a peg-in input must not skip P2SH sigops on other inputs.
+    /// The redeem is a single CHECKSIG, so P2SH adds 1 * 4. scriptSig only
+    /// pushes that redeem, so legacy does not see CHECKSIG as an opcode.
+    #[test]
+    fn pegin_input_does_not_skip_p2sh_sigops_on_a_sibling_p2sh_spend() {
+        let redeem = Script::from(vec![opcodes::all::OP_CHECKSIG.into_u8()]);
+        let mut script_sig = vec![redeem.len() as u8];
+        script_sig.extend_from_slice(redeem.as_bytes());
+        let pegin = pegin_input(Script::new(), Vec::new());
+        let spend = spend_input(1, Script::from(script_sig), Vec::new());
+        let tx = tx_from_inputs(vec![pegin, spend]);
+        let p2sh = prevout(p2sh_script_pubkey());
+        let mut prevouts = HashMap::new();
+        prevouts.insert(1, &p2sh);
+
+        let cost = transaction_sigop_count(&tx, &prevouts).expect("sigop cost");
+        assert_eq!(
+            cost, 4,
+            "a peg-in sibling must not drop P2SH sigops (P2SH cost 1 times 4)"
+        );
+    }
+
+    /// Owed outcome: Elements counts a P2WSH peg-in claim from the last
+    /// script-witness item. Accurate 1-of-1 CHECKMULTISIG is one sigop.
+    #[test]
+    fn pegin_p2wsh_claim_counts_accurate_multisig_in_script_witness() {
+        let witness_script = {
+            let mut bytes = vec![opcodes::all::OP_PUSHNUM_1.into_u8(), 33];
+            bytes.extend_from_slice(&[0x02u8; 33]);
+            bytes.push(opcodes::all::OP_PUSHNUM_1.into_u8());
+            bytes.push(opcodes::all::OP_CHECKMULTISIG.into_u8());
+            bytes
+        };
+        let tx = tx_from_inputs(vec![pegin_input(
+            p2wsh_script_pubkey(),
+            vec![vec![0x00], witness_script],
+        )]);
+        let cost = transaction_sigop_count(&tx, &HashMap::new()).expect("sigop cost");
+        assert_eq!(cost, 1, "peg-in P2WSH claim uses accurate witness sigops");
+    }
+
+    /// Owed outcome: coinbase still returns legacy cost only. A CHECKSIG in
+    /// the coinbase scriptSig is 1 * 4. Witness and P2SH walks do not run.
+    #[test]
+    fn coinbase_still_returns_legacy_sigop_cost_only() {
+        let coinbase = TxIn {
+            previous_output: OutPoint::null(),
+            is_pegin: false,
+            script_sig: Script::from(vec![opcodes::all::OP_CHECKSIG.into_u8()]),
+            sequence: Sequence::MAX,
+            asset_issuance: Default::default(),
+            witness: Witness::empty(),
+        };
+        let tx = tx_from_inputs(vec![coinbase]);
+        let cost = transaction_sigop_count(&tx, &HashMap::new()).expect("sigop cost");
+        assert_eq!(cost, 4, "coinbase sigop cost stays legacy times four");
     }
 }

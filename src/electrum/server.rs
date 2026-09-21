@@ -1389,16 +1389,24 @@ impl RPC {
     pub fn notify(&self) {
         self.notification.send(Notification::Periodic).unwrap();
     }
+
+    /// Signal Exit and take the RPC thread handle so the caller can join with a bound.
+    /// Drop will not join if this handle was taken.
+    pub fn stop_and_take_join_handle(&mut self) -> Option<thread::JoinHandle<()>> {
+        trace!("stop accepting new RPCs");
+        let _ = self.notification.send(Notification::Exit);
+        self.server.take()
+    }
 }
 
 impl Drop for RPC {
     fn drop(&mut self) {
-        trace!("stop accepting new RPCs");
-        self.notification.send(Notification::Exit).unwrap();
         if let Some(handle) = self.server.take() {
+            trace!("stop accepting new RPCs");
+            let _ = self.notification.send(Notification::Exit);
             handle.join().unwrap();
+            trace!("RPC server is stopped");
         }
-        trace!("RPC server is stopped");
         crate::util::with_spawned_threads(|threads| {
             trace!("Threads after dropping RPC: {:?}", threads);
         });

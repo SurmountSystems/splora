@@ -8,7 +8,8 @@ use error_chain::ChainedError;
 use serde_json::json;
 use std::process;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use electrs::{
     auth::Allowlist,
@@ -43,33 +44,76 @@ fn fetch_from(config: &Config, store: &Store) -> FetchFrom {
 }
 
 /// Mempool electrs#154 watchdog. `process::exit(0)` skips Drop, including
-/// RocksDB close/flush and Electrum join. This tree flushes after Electrum
-/// join today, so the watchdog is armed only after rest-stop, join, and flush.
+/// RocksDB close/flush and Electrum join. This tree stops REST, flushes the
+/// three RocksDB column families, then joins Electrum with this 5-second
+/// bound. A hung unix join cannot skip that flush. The leftover-thread
+/// watchdog is armed only after flush, and only if that join finished.
+/// Do not arm `process::exit` before rest-stop (upstream #154).
 const SHUTDOWN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_WATCHDOG_POLL: Duration = Duration::from_millis(500);
 const SHUTDOWN_WATCHDOG_THREAD: &str = "shutdown-watchdog";
 
+/// RocksDB handles flushed on shutdown, in this order. Flush is safe with
+/// concurrent Electrum readers.
+const INDEX_STORE_FLUSH_DBS: &[&str] = &["txstore_db", "history_db", "cache_db"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShutdownPhase {
     RestStop,
-    ElectrumJoin,
     Flush,
+    BoundedElectrumJoin,
     ArmWatchdog,
 }
 
 fn shutdown_phases() -> &'static [ShutdownPhase] {
     &[
         ShutdownPhase::RestStop,
-        ShutdownPhase::ElectrumJoin,
         ShutdownPhase::Flush,
+        ShutdownPhase::BoundedElectrumJoin,
         ShutdownPhase::ArmWatchdog,
     ]
 }
 
+fn electrum_join_timeout() -> Duration {
+    SHUTDOWN_WATCHDOG_TIMEOUT
+}
+
+fn electrum_join_poll() -> Duration {
+    SHUTDOWN_WATCHDOG_POLL
+}
+
 fn flush_index_store(store: &Store) {
-    store.txstore_db().flush();
-    store.history_db().flush();
-    store.cache_db().flush();
+    for db in INDEX_STORE_FLUSH_DBS {
+        match *db {
+            "txstore_db" => store.txstore_db().flush(),
+            "history_db" => store.history_db().flush(),
+            "cache_db" => store.cache_db().flush(),
+            _ => unreachable!("INDEX_STORE_FLUSH_DBS only names the three store dbs"),
+        }
+    }
+}
+
+/// Join `handle` for at most `timeout`, sleeping at most `poll` between
+/// finished checks. Returns true if the thread joined. On timeout a
+/// background joiner takes the handle so this caller can `process::exit`
+/// without blocking. A finished thread returns without sleeping
+/// `timeout`. A zero timeout checks once and does not sleep.
+fn join_thread_within(handle: thread::JoinHandle<()>, timeout: Duration, poll: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        if handle.is_finished() {
+            let _ = handle.join();
+            return true;
+        }
+        let elapsed = start.elapsed();
+        if elapsed >= timeout || poll.is_zero() {
+            electrs::util::spawn_thread("electrum-join-timeout", move || {
+                let _ = handle.join();
+            });
+            return false;
+        }
+        thread::sleep(poll.min(timeout - elapsed));
+    }
 }
 
 fn spawn_shutdown_watchdog() {
@@ -81,12 +125,13 @@ fn spawn_shutdown_watchdog() {
             electrs::util::with_spawned_threads(|threads| {
                 debug!("Threads during shutdown: {:?}", threads);
             });
-            std::thread::sleep(interval);
+            thread::sleep(interval);
             elapsed += interval;
         }
 
-        // Skips destructors (no Drop for Store/Electrum). Flush and Electrum
-        // join already ran; this only unsticks leftover threads.
+        // Skips remaining destructors. REST is stopped, the three CFs were
+        // flushed, and Electrum either joined or already force-exited.
+        // This only unsticks leftover threads.
         error!("graceful shutdown timed out after 5 seconds, forcing exit");
         process::exit(0);
     });
@@ -207,12 +252,23 @@ fn run_server(config: Arc<Config>) -> Result<()> {
                     ShutdownPhase::RestStop => {
                         rest_server.take().expect("REST handle").stop();
                     }
-                    ShutdownPhase::ElectrumJoin => {
-                        // Electrum RPC joins on Drop (Notification::Exit).
-                        drop(electrum_server.take());
-                    }
                     ShutdownPhase::Flush => {
                         flush_index_store(&store);
+                    }
+                    ShutdownPhase::BoundedElectrumJoin => {
+                        // Unix Electrum can hang in accept/join. Bound the wait
+                        // with the same 5s budget as the leftover watchdog.
+                        let mut rpc = electrum_server.take().expect("Electrum RPC");
+                        if let Some(handle) = rpc.stop_and_take_join_handle()
+                            && !join_thread_within(
+                                handle,
+                                electrum_join_timeout(),
+                                electrum_join_poll(),
+                            )
+                        {
+                            error!("Electrum join timed out after 5 seconds, forcing exit");
+                            process::exit(0);
+                        }
                     }
                     ShutdownPhase::ArmWatchdog => {
                         spawn_shutdown_watchdog();
@@ -287,47 +343,99 @@ fn run_server(config: Arc<Config>) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Shutdown phase order: REST stop, flush of the three column families,
+    /// bounded Electrum join (5s), leftover watchdog. `process::exit` on a
+    /// stuck join is allowed only after flush. Not mempool #154 arm-first.
     #[test]
-    fn shutdown_watchdog_armed_after_rest_stop_join_and_flush() {
+    fn shutdown_rest_stop_flush_three_cfs_then_bounded_electrum_join() {
         assert_eq!(SHUTDOWN_WATCHDOG_TIMEOUT, Duration::from_secs(5));
         assert_eq!(SHUTDOWN_WATCHDOG_POLL, Duration::from_millis(500));
         assert_eq!(SHUTDOWN_WATCHDOG_THREAD, "shutdown-watchdog");
+        assert_eq!(electrum_join_timeout(), SHUTDOWN_WATCHDOG_TIMEOUT);
+        assert_eq!(electrum_join_poll(), SHUTDOWN_WATCHDOG_POLL);
+        assert_eq!(
+            INDEX_STORE_FLUSH_DBS,
+            &["txstore_db", "history_db", "cache_db"]
+        );
 
         let phases = shutdown_phases();
+        assert_ne!(
+            phases.first().copied(),
+            Some(ShutdownPhase::ArmWatchdog),
+            "do not arm process::exit before rest-stop (mempool #154)"
+        );
+
         let rest = phases
             .iter()
             .position(|p| *p == ShutdownPhase::RestStop)
             .expect("rest-stop");
-        let join = phases
-            .iter()
-            .position(|p| *p == ShutdownPhase::ElectrumJoin)
-            .expect("electrum-join");
         let flush = phases
             .iter()
             .position(|p| *p == ShutdownPhase::Flush)
             .expect("flush");
+        let join = phases
+            .iter()
+            .position(|p| *p == ShutdownPhase::BoundedElectrumJoin)
+            .expect("bounded-electrum-join");
         let arm = phases
             .iter()
             .position(|p| *p == ShutdownPhase::ArmWatchdog)
             .expect("arm-watchdog");
 
-        assert!(rest < join, "stop order is rest-stop then join");
+        assert!(rest < flush, "stop REST before the RocksDB flush");
         assert!(
-            join < flush,
-            "RocksDB flush stays after Electrum join, as today"
+            flush < join,
+            "flush txstore, history, and cache before Electrum join"
         );
         assert!(
             flush < arm,
-            "watchdog (process::exit) is armed only after flush"
+            "watchdog process::exit is armed only after flush"
+        );
+        assert!(
+            join < arm,
+            "leftover watchdog runs after the bounded Electrum join"
         );
         assert_eq!(
             phases,
             &[
                 ShutdownPhase::RestStop,
-                ShutdownPhase::ElectrumJoin,
                 ShutdownPhase::Flush,
+                ShutdownPhase::BoundedElectrumJoin,
                 ShutdownPhase::ArmWatchdog,
             ]
+        );
+    }
+
+    #[test]
+    fn join_thread_within_does_not_sleep_five_seconds_when_thread_finished() {
+        let handle = thread::spawn(|| ());
+        while !handle.is_finished() {
+            thread::yield_now();
+        }
+        let start = Instant::now();
+        assert!(join_thread_within(
+            handle,
+            SHUTDOWN_WATCHDOG_TIMEOUT,
+            SHUTDOWN_WATCHDOG_POLL,
+        ));
+        assert!(
+            start.elapsed() < SHUTDOWN_WATCHDOG_TIMEOUT,
+            "finished join must not consume the 5s watchdog budget"
+        );
+    }
+
+    #[test]
+    fn join_thread_within_times_out_without_sleeping_five_seconds_when_stuck() {
+        let handle = thread::spawn(|| {
+            loop {
+                thread::park();
+            }
+        });
+        let start = Instant::now();
+        assert!(!join_thread_within(handle, Duration::ZERO, Duration::ZERO,));
+        assert!(
+            start.elapsed() < SHUTDOWN_WATCHDOG_TIMEOUT,
+            "stuck join bound must not sleep the 5s watchdog budget in CI"
         );
     }
 }

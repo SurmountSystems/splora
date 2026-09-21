@@ -904,7 +904,10 @@ mod tests {
         let arr = params.as_array().expect("sendrawtransaction params array");
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0], Value::String(txhex.to_string()));
-        assert!(arr[1].is_number(), "maxfeerate must be JSON numeric 0, not a string");
+        assert!(
+            arr[1].is_number(),
+            "maxfeerate must be JSON numeric 0, not a string"
+        );
         assert_eq!(arr[1], Value::Number(Number::from(0)));
         assert_ne!(arr[1], Value::String("0".to_string()));
     }
