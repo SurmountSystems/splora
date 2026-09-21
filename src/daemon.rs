@@ -26,6 +26,14 @@ use crate::util::HeaderList;
 
 use crate::errors::*;
 
+/// JSON-RPC params for bitcoind `sendrawtransaction`.
+/// Core `maxfeerate` default is 0.10 BTC/kvB; numeric 0 accepts any fee rate.
+/// See [sendrawtransaction (26.0.0)](https://bitcoincore.org/en/doc/26.0.0/rpc/rawtransactions/sendrawtransaction/)
+/// (accessed: 2026-09-20).
+fn sendrawtransaction_params(txhex: &str) -> Value {
+    json!([txhex, 0])
+}
+
 fn parse_hash<T>(value: &Value) -> Result<T>
 where
     T: FromStr,
@@ -707,7 +715,7 @@ impl Daemon {
     }
 
     pub fn broadcast_raw(&self, txhex: &str) -> Result<Txid> {
-        let txid = self.request_proxied("sendrawtransaction", json!([txhex]))?;
+        let txid = self.request_proxied("sendrawtransaction", sendrawtransaction_params(txhex))?;
         txid.as_str()
             .chain_err(|| "non-string txid")?
             .parse::<Txid>()
@@ -853,6 +861,7 @@ impl Daemon {
 mod tests {
     use super::classify_daemon_http_status;
     use crate::errors::{Error, ErrorKind};
+    use serde_json::{Number, Value};
     use std::collections::HashMap;
 
     #[test]
@@ -885,5 +894,18 @@ mod tests {
             }
             other => panic!("expected DaemonUnavailable, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn sendrawtransaction_params_are_hex_and_numeric_zero_maxfeerate() {
+        let txhex = "deadbeef";
+        let params = super::sendrawtransaction_params(txhex);
+        assert_eq!(params, json!([txhex, 0]));
+        let arr = params.as_array().expect("sendrawtransaction params array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0], Value::String(txhex.to_string()));
+        assert!(arr[1].is_number(), "maxfeerate must be JSON numeric 0, not a string");
+        assert_eq!(arr[1], Value::Number(Number::from(0)));
+        assert_ne!(arr[1], Value::String("0".to_string()));
     }
 }

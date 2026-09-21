@@ -42,6 +42,56 @@ fn fetch_from(config: &Config, store: &Store) -> FetchFrom {
     }
 }
 
+/// Mempool electrs#154 watchdog. `process::exit(0)` skips Drop, including
+/// RocksDB close/flush and Electrum join. This tree flushes after Electrum
+/// join today, so the watchdog is armed only after rest-stop, join, and flush.
+const SHUTDOWN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_WATCHDOG_POLL: Duration = Duration::from_millis(500);
+const SHUTDOWN_WATCHDOG_THREAD: &str = "shutdown-watchdog";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownPhase {
+    RestStop,
+    ElectrumJoin,
+    Flush,
+    ArmWatchdog,
+}
+
+fn shutdown_phases() -> &'static [ShutdownPhase] {
+    &[
+        ShutdownPhase::RestStop,
+        ShutdownPhase::ElectrumJoin,
+        ShutdownPhase::Flush,
+        ShutdownPhase::ArmWatchdog,
+    ]
+}
+
+fn flush_index_store(store: &Store) {
+    store.txstore_db().flush();
+    store.history_db().flush();
+    store.cache_db().flush();
+}
+
+fn spawn_shutdown_watchdog() {
+    let timeout = SHUTDOWN_WATCHDOG_TIMEOUT;
+    let interval = SHUTDOWN_WATCHDOG_POLL;
+    electrs::util::spawn_thread(SHUTDOWN_WATCHDOG_THREAD, move || {
+        let mut elapsed = Duration::ZERO;
+        while elapsed < timeout {
+            electrs::util::with_spawned_threads(|threads| {
+                debug!("Threads during shutdown: {:?}", threads);
+            });
+            std::thread::sleep(interval);
+            elapsed += interval;
+        }
+
+        // Skips destructors (no Drop for Store/Electrum). Flush and Electrum
+        // join already ran; this only unsticks leftover threads.
+        error!("graceful shutdown timed out after 5 seconds, forcing exit");
+        process::exit(0);
+    });
+}
+
 fn run_server(config: Arc<Config>) -> Result<()> {
     let signal = Waiter::start();
     let metrics = Metrics::new(config.monitoring_addr);
@@ -125,14 +175,18 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     let hub = MwckHub::new(Arc::clone(&query));
 
     // Queue HTTP is a separate binary. Do not put unauthenticated POST on the indexer.
-    let rest_server = rest::start(
+    let mut rest_server = Some(rest::start(
         Arc::clone(&config),
         Arc::clone(&query),
         &metrics,
         Arc::clone(&allow),
         Arc::clone(&hub),
-    );
-    let electrum_server = ElectrumRPC::start(Arc::clone(&config), Arc::clone(&query), &metrics);
+    ));
+    let mut electrum_server = Some(ElectrumRPC::start(
+        Arc::clone(&config),
+        Arc::clone(&query),
+        &metrics,
+    ));
 
     if let Some(ref precache_file) = config.precache_scripts {
         let precache_scripthashes = precache::scripthashes_from_file(precache_file.to_string())
@@ -148,21 +202,23 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         if let Err(err) = signal.wait(Duration::from_millis(config.main_loop_delay), true) {
             info!("stopping server: {}", err);
 
-            electrs::util::spawn_thread("shutdown-thread-checker", || {
-                let mut counter = 40;
-                let interval_ms = 500;
-
-                while counter > 0 {
-                    electrs::util::with_spawned_threads(|threads| {
-                        debug!("Threads during shutdown: {:?}", threads);
-                    });
-                    std::thread::sleep(std::time::Duration::from_millis(interval_ms));
-                    counter -= 1;
+            for phase in shutdown_phases() {
+                match phase {
+                    ShutdownPhase::RestStop => {
+                        rest_server.take().expect("REST handle").stop();
+                    }
+                    ShutdownPhase::ElectrumJoin => {
+                        // Electrum RPC joins on Drop (Notification::Exit).
+                        drop(electrum_server.take());
+                    }
+                    ShutdownPhase::Flush => {
+                        flush_index_store(&store);
+                    }
+                    ShutdownPhase::ArmWatchdog => {
+                        spawn_shutdown_watchdog();
+                    }
                 }
-            });
-
-            rest_server.stop();
-            // the electrum server is stopped when dropped
+            }
             break;
         }
 
@@ -218,10 +274,62 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         }
 
         // Update subscribed clients
-        electrum_server.notify();
+        electrum_server
+            .as_ref()
+            .expect("Electrum RPC still running")
+            .notify();
     }
     info!("server stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_watchdog_armed_after_rest_stop_join_and_flush() {
+        assert_eq!(SHUTDOWN_WATCHDOG_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(SHUTDOWN_WATCHDOG_POLL, Duration::from_millis(500));
+        assert_eq!(SHUTDOWN_WATCHDOG_THREAD, "shutdown-watchdog");
+
+        let phases = shutdown_phases();
+        let rest = phases
+            .iter()
+            .position(|p| *p == ShutdownPhase::RestStop)
+            .expect("rest-stop");
+        let join = phases
+            .iter()
+            .position(|p| *p == ShutdownPhase::ElectrumJoin)
+            .expect("electrum-join");
+        let flush = phases
+            .iter()
+            .position(|p| *p == ShutdownPhase::Flush)
+            .expect("flush");
+        let arm = phases
+            .iter()
+            .position(|p| *p == ShutdownPhase::ArmWatchdog)
+            .expect("arm-watchdog");
+
+        assert!(rest < join, "stop order is rest-stop then join");
+        assert!(
+            join < flush,
+            "RocksDB flush stays after Electrum join, as today"
+        );
+        assert!(
+            flush < arm,
+            "watchdog (process::exit) is armed only after flush"
+        );
+        assert_eq!(
+            phases,
+            &[
+                ShutdownPhase::RestStop,
+                ShutdownPhase::ElectrumJoin,
+                ShutdownPhase::Flush,
+                ShutdownPhase::ArmWatchdog,
+            ]
+        );
+    }
 }
 
 fn main() {

@@ -657,6 +657,19 @@ fn confirmed_after_txid<'a>(
     }
 }
 
+/// Parse `max_txs` and clamp it to the existing REST knob used as both default
+/// and ceiling. Missing or unparsable query values use `cap`. This is not a
+/// hard `MAX_HISTORY_TXS = 100`.
+fn clamp_query_max_txs(query_params: &HashMap<String, String>, cap: usize) -> usize {
+    cmp::min(
+        cap,
+        query_params
+            .get("max_txs")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(cap),
+    )
+}
+
 /// Prepare transactions to be serialized in a JSON response
 ///
 /// Any transactions with missing prevouts will be filtered out of the response, rather than returned with incorrect data.
@@ -1459,10 +1472,7 @@ fn handle_request(
             None,
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
-            let max_txs = query_params
-                .get("max_txs")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(config.rest_default_max_mempool_txs);
+            let max_txs = clamp_query_max_txs(&query_params, config.rest_default_max_mempool_txs);
             let after_txid = query_params
                 .get("after_txid")
                 .and_then(|s| s.parse::<Txid>().ok());
@@ -1561,10 +1571,7 @@ fn handle_request(
                 })
                 .collect();
 
-            let max_txs = query_params
-                .get("max_txs")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(config.rest_default_max_mempool_txs);
+            let max_txs = clamp_query_max_txs(&query_params, config.rest_default_max_mempool_txs);
             let after_txid = query_params
                 .get("after_txid")
                 .and_then(|s| s.parse::<Txid>().ok());
@@ -1649,10 +1656,8 @@ fn handle_request(
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
             let last_seen_txid = last_seen_txid.and_then(|txid| txid.parse::<Txid>().ok());
-            let max_txs = query_params
-                .get("max_txs")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(config.rest_default_chain_txs_per_page);
+            let max_txs =
+                clamp_query_max_txs(&query_params, config.rest_default_chain_txs_per_page);
 
             let mut txs = query
                 .chain()
@@ -1695,13 +1700,8 @@ fn handle_request(
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
             let last_seen_txid = last_seen_txid.and_then(|txid| txid.parse::<Txid>().ok());
-            let max_txs = cmp::min(
-                config.rest_default_max_address_summary_txs,
-                query_params
-                    .get("max_txs")
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(config.rest_default_max_address_summary_txs),
-            );
+            let max_txs =
+                clamp_query_max_txs(&query_params, config.rest_default_max_address_summary_txs);
 
             let last_seen_txid_location = if let Some(txid) = &last_seen_txid {
                 find_txid(txid, &query.mempool(), query.chain())
@@ -1776,13 +1776,8 @@ fn handle_request(
                 .collect();
 
             let last_seen_txid = last_seen_txid.and_then(|txid| txid.parse::<Txid>().ok());
-            let max_txs = cmp::min(
-                config.rest_default_max_address_summary_txs,
-                query_params
-                    .get("max_txs")
-                    .and_then(|s| s.parse::<usize>().ok())
-                    .unwrap_or(config.rest_default_max_address_summary_txs),
-            );
+            let max_txs =
+                clamp_query_max_txs(&query_params, config.rest_default_max_address_summary_txs);
 
             let last_seen_txid_location = if let Some(txid) = &last_seen_txid {
                 find_txid(txid, &query.mempool(), query.chain())
@@ -1827,10 +1822,7 @@ fn handle_request(
             None,
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
-            let max_txs = query_params
-                .get("max_txs")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(config.rest_default_max_mempool_txs);
+            let max_txs = clamp_query_max_txs(&query_params, config.rest_default_max_mempool_txs);
 
             let txs = query
                 .mempool()
@@ -2214,10 +2206,8 @@ fn handle_request(
         }
         (&Method::GET, Some(&"mempool"), Some(&"txids"), Some(&"page"), last_seen_txid, None) => {
             let last_seen_txid = last_seen_txid.and_then(|txid| txid.parse::<Txid>().ok());
-            let max_txs = query_params
-                .get("max_txs")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(config.rest_max_mempool_txid_page_size);
+            let max_txs =
+                clamp_query_max_txs(&query_params, config.rest_max_mempool_txid_page_size);
             json_response(
                 query.mempool().txids_page(max_txs, last_seen_txid),
                 TTL_SHORT,
@@ -2272,10 +2262,7 @@ fn handle_request(
             None,
         ) => {
             let last_seen_txid = last_seen_txid.and_then(|txid| txid.parse::<Txid>().ok());
-            let max_txs = query_params
-                .get("max_txs")
-                .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(config.rest_max_mempool_page_size);
+            let max_txs = clamp_query_max_txs(&query_params, config.rest_max_mempool_page_size);
             let txs = query
                 .mempool()
                 .txs_page(max_txs, last_seen_txid)
@@ -3309,6 +3296,36 @@ mod tests {
             Err(e) => panic!("unexpected read error: {}", e),
         }
         server.abort();
+    }
+
+    /// Named contract: query `max_txs` is `min()`'d against the existing REST
+    /// knobs (`rest_default_max_mempool_txs` 50, `rest_default_chain_txs_per_page`
+    /// 25, `rest_default_max_address_summary_txs` 5000,
+    /// `rest_max_mempool_page_size` 1000, `rest_max_mempool_txid_page_size`
+    /// 10000). A huge `max_txs` is clamped. Address summary default stays 5000.
+    /// This is not mononaut/page-sizes `MAX_HISTORY_TXS = 100`.
+    #[test]
+    fn huge_max_txs_is_clamped_to_rest_knobs_summary_default_stays_5000() {
+        let mut query_params = HashMap::new();
+        query_params.insert("max_txs".to_string(), "999999".to_string());
+
+        assert_eq!(super::clamp_query_max_txs(&query_params, 50), 50);
+        assert_eq!(super::clamp_query_max_txs(&query_params, 25), 25);
+        assert_eq!(super::clamp_query_max_txs(&query_params, 1000), 1000);
+        assert_eq!(super::clamp_query_max_txs(&query_params, 10000), 10000);
+
+        let summary_cap = 5000;
+        assert_eq!(super::clamp_query_max_txs(&query_params, summary_cap), 5000);
+        assert_ne!(super::clamp_query_max_txs(&query_params, summary_cap), 100);
+
+        let empty = HashMap::new();
+        assert_eq!(super::clamp_query_max_txs(&empty, summary_cap), 5000);
+
+        query_params.insert("max_txs".to_string(), "10".to_string());
+        assert_eq!(super::clamp_query_max_txs(&query_params, 50), 10);
+
+        query_params.insert("max_txs".to_string(), "aaa".to_string());
+        assert_eq!(super::clamp_query_max_txs(&query_params, 50), 50);
     }
 
     #[test]

@@ -2,15 +2,24 @@
 
 # Fork law for this tree
 
-This file is Surmount documentation. It is released under the Unlicense (`UNLICENSE` in this repository). It names every way this checkout diverges from upstream Mempool electrs, and from Blockstream `new-index` where we copied behavior without merging those trees. It is not a product changelog and not an invitation to open pull requests against those projects.
+This file is Surmount documentation. It is released under the Unlicense (`UNLICENSE` in this repository). It names every way this checkout diverges from upstream Mempool electrs, and from older Esplora/electrs behavior we copied without merging those trees. It is not a product changelog and not an invitation to open pull requests against those projects.
 
 Do not invent unshipped work here. If a behavior is not in this tree, it is not a fork difference yet.
 
 ## 1. Lineage
 
-The default git branch of this product is `mempool`. That branch is `mempool/electrs`. `mempool/electrs` is Blockstream/electrs `new-index`. Blockstream `new-index` is `romanz/electrs`.
+This tree is **SurmountSystems/splora**. It was forked from **Mempool electrs**. That is the git parent.
 
-This repository is not a new fork of romanz/electrs. Do not treat it as one. Do not open pull requests against romanz, Blockstream, or Mempool for Surmount-only work.
+Historical line (oldest first). This is ancestry. It is not a list of remotes to `git merge`:
+
+1. `romanz/electrs`
+2. Blockstream Esplora (`Blockstream/esplora` is the explorer. The electrs backend Mempool forked is `Blockstream/electrs`, often `new-index`.)
+3. `mempool/electrs` (`https://github.com/mempool/electrs`)
+4. `SurmountSystems/splora` (this repository)
+
+**Git parent for updates is step 3 only.** `git merge` / fast-forward into `surmount` means `https://github.com/mempool/electrs`. We did not fork Blockstream. We did not fork romanz. Never merge `Blockstream/electrs`, `Blockstream/esplora`, or `romanz/electrs` into this branch unless the operator names that remote in those words. Ported Esplora/electrs behavior in section 3 is copy. It is not a git parent.
+
+The local branch named `mempool` tracks Mempool electrs. Do not open pull requests against romanz, Blockstream, or Mempool for Surmount-only work.
 
 `Cargo.toml` still records `homepage` and `repository` as `https://github.com/mempool/electrs`. The crate name is `splora`. The library crate is still named `electrs`. The indexer source path is still `src/bin/electrs.rs`. The cargo bin name is `splora`.
 
@@ -85,3 +94,7 @@ The indexer was not rewritten. `mempool/mempool` was not vendored.
 When you ship a new Surmount behavior, add a bullet to this file in the same wave as the code. Put Blockstream ports in section 3 and say the trees were not merged. Put Surmount-only modules in section 4. If the change is a schema lock, put it in section 2 and keep [doc/schema.md](doc/schema.md) true. If the change is a CLI versus module number, update the README table and leave this file as a pointer. If the public HTTP edge contract changes, update section 5. Do not add HTTP/2 or HTTP/3 to the indexer unix sockets. Those stay HTTP/1.1. Public TLS, HTTP/2, and HTTP/3 stay on `splora-http`.
 
 Do not list planned-but-unshipped work as a divergence. Do not claim HTTP/2 and HTTP/3 do not terminate in this crate. They terminate on `splora-http`. 2026-09-09 `just check-remote` ran `rocksdbMoldLink` and observed `NEEDED librocksdb` on the builder. Mold stays off.
+
+## 9. Open Mempool electrs pull requests
+
+Git parent stays `https://github.com/mempool/electrs` (section 1). Take, already-here, and skip decisions for the open parent pull requests, plus branch `mononaut/page-sizes`, live in [doc/mempool-latent-prs.md](doc/mempool-latent-prs.md). That file is quoted from live GitHub diffs. It is not a merge list and not a Blockstream invitation.

@@ -995,33 +995,7 @@ impl ChainQuery {
                     .map(|b| (history, b))
             });
 
-        let mut utxos = init_utxos;
-        let mut processed_items = 0;
-        let mut lastblock = None;
-
-        for (history, blockid) in history_iter {
-            processed_items += 1;
-            lastblock = Some(blockid.hash);
-
-            match history.key.txinfo {
-                TxHistoryInfo::Funding(ref info) => {
-                    utxos.insert(history.get_funded_outpoint(), (blockid, info.value))
-                }
-                TxHistoryInfo::Spending(_) => utxos.remove(&history.get_funded_outpoint()),
-                #[cfg(feature = "liquid")]
-                TxHistoryInfo::Issuing(_)
-                | TxHistoryInfo::Burning(_)
-                | TxHistoryInfo::Pegin(_)
-                | TxHistoryInfo::Pegout(_) => unreachable!(),
-            };
-
-            // abort if the utxo set size excedees the limit at any point in time
-            if utxos.len() > limit {
-                bail!(ErrorKind::TooManyUtxos(limit))
-            }
-        }
-
-        Ok((utxos, lastblock, processed_items))
+        apply_utxo_delta(init_utxos, history_iter, limit)
     }
 
     pub fn stats(&self, scripthash: &[u8], flush: DBFlush) -> ScriptStats {
@@ -1359,6 +1333,52 @@ impl ChainQuery {
     pub fn asset_history_txids(&self, asset_id: &AssetId, limit: usize) -> Vec<(Txid, BlockId)> {
         self._history_txids(b'I', &asset_id.into_inner()[..], limit)
     }
+}
+
+fn apply_utxo_delta<I>(
+    init_utxos: UtxoMap,
+    history_iter: I,
+    limit: usize,
+) -> Result<(UtxoMap, Option<BlockHash>, usize)>
+where
+    I: IntoIterator<Item = (TxHistoryRow, BlockId)>,
+{
+    // If we need to iterate over 500 history entries to
+    // get one utxo then your address is too active and should be
+    // throttled.
+    // TODO: Think of better way to throttle.
+    // Live mempool/electrs PR 145 uses `limit * 500`, not the PR title's 1000x.
+    let tx_history_limit = limit * 500;
+    let mut utxos = init_utxos;
+    let mut processed_items = 0;
+    let mut lastblock = None;
+
+    for (history, blockid) in history_iter {
+        processed_items += 1;
+        lastblock = Some(blockid.hash);
+
+        match history.key.txinfo {
+            TxHistoryInfo::Funding(ref info) => {
+                utxos.insert(history.get_funded_outpoint(), (blockid, info.value))
+            }
+            TxHistoryInfo::Spending(_) => utxos.remove(&history.get_funded_outpoint()),
+            #[cfg(feature = "liquid")]
+            TxHistoryInfo::Issuing(_)
+            | TxHistoryInfo::Burning(_)
+            | TxHistoryInfo::Pegin(_)
+            | TxHistoryInfo::Pegout(_) => unreachable!(),
+        };
+
+        // abort if the utxo set size excedees the limit at any point in time
+        if utxos.len() > limit {
+            bail!(ErrorKind::TooManyUtxos(limit))
+        }
+        if processed_items > tx_history_limit {
+            bail!(ErrorKind::TooManyTxs(tx_history_limit))
+        }
+    }
+
+    Ok((utxos, lastblock, processed_items))
 }
 
 fn load_blockhashes(db: &DB, prefix: &[u8]) -> HashSet<BlockHash> {
@@ -2327,5 +2347,81 @@ mod tests {
                 0, 0, 5, 57
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod utxo_delta_tests {
+    use super::{apply_utxo_delta, SpendingInfo, TxHistoryInfo, TxHistoryKey, TxHistoryRow};
+    use crate::chain::{BlockHash, Value};
+    use crate::errors::ErrorKind;
+    use crate::util::BlockId;
+    use bitcoin::hashes::Hash;
+    use std::collections::HashMap;
+
+    // Live mempool/electrs PR 145 (https://github.com/mempool/electrs/pull/145.diff):
+    //   // If we need to iterate over 500 history entries to
+    //   // get one utxo then your address is too active and should be
+    //   // throttled.
+    //   // TODO: Think of better way to throttle.
+    //   let tx_history_limit = limit * 500;
+    // The PR title says 1000x. The patch uses 500: 500 history rows per allowed
+    // utxo, not 1000.
+    const HISTORY_ROWS_PER_UTXO: usize = 500;
+
+    fn dummy_blockid() -> BlockId {
+        BlockId {
+            height: 1,
+            hash: BlockHash::all_zeros(),
+            time: 0,
+        }
+    }
+
+    fn history_value() -> Value {
+        #[cfg(not(feature = "liquid"))]
+        {
+            0
+        }
+        #[cfg(feature = "liquid")]
+        {
+            Value::Explicit(0)
+        }
+    }
+
+    fn spending_row(n: u32) -> (TxHistoryRow, BlockId) {
+        (
+            TxHistoryRow {
+                key: TxHistoryKey {
+                    code: b'H',
+                    hash: [0; 32],
+                    confirmed_height: 1,
+                    tx_position: 0,
+                    txinfo: TxHistoryInfo::Spending(SpendingInfo {
+                        txid: [0; 32],
+                        vin: n,
+                        prev_txid: [0; 32],
+                        prev_vout: n,
+                        value: history_value(),
+                    }),
+                },
+            },
+            dummy_blockid(),
+        )
+    }
+
+    #[test]
+    fn utxo_delta_history_rows_over_limit_times_500_is_too_many_txs() {
+        let limit = 1;
+        let cap = limit * HISTORY_ROWS_PER_UTXO;
+        // Spending rows against an empty set never grow the utxo map, so
+        // TooManyUtxos cannot fire. Only a history-row cap can abort.
+        let rows: Vec<_> = (0..=cap as u32).map(spending_row).collect();
+        assert_eq!(rows.len(), cap + 1);
+
+        let err = apply_utxo_delta(HashMap::new(), rows, limit).unwrap_err();
+        match err.kind() {
+            ErrorKind::TooManyTxs(n) => assert_eq!(*n, cap),
+            other => panic!("expected TooManyTxs({cap}), got {other:?}"),
+        }
     }
 }

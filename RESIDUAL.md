@@ -212,7 +212,37 @@ one RocksDB LRU across indexer processes is not Open.
 Repo-root [FORK.md](FORK.md) names lineage, the Mempool schema lock,
 Blockstream ports that were copied without merging trees, Surmount-only
 modules, the appliance, and the HTTP/2 HTTP/3 split (section 5). README
-points at that file. Do not list `FORK.md` as Open.
+points at that file. Do not list `FORK.md` as Open. Section 9 points at
+[doc/mempool-latent-prs.md](doc/mempool-latent-prs.md) for the eleven
+open parent Mempool electrs pull requests plus branch
+`mononaut/page-sizes`. Lineage stays Mempool. This tree did not fork
+Blockstream. That decision log is in the tree. Do not re-open it.
+
+`sendrawtransaction` JSON is `[hex, 0]` via `sendrawtransaction_params`.
+Named test `sendrawtransaction_params_are_hex_and_numeric_zero_maxfeerate`
+covers numeric zero maxfeerate. `request_proxied` stays. Package submit
+maxfeerate is unchanged. That is Mempool #84 already here.
+
+`apply_utxo_delta` caps history rows at `limit * 500`. Named test
+`utxo_delta_history_rows_over_limit_times_500_is_too_many_txs` expects
+`TooManyTxs(500)`. Shared `THREAD_POOL` was not retaken. Confirmation
+keys stay `C{txid}{blockhash}`. There are no `R` keys. That is Mempool
+#145 already here for the cap.
+
+Shutdown order is rest-stop, Electrum join, RocksDB flush, then a
+5-second watchdog. Named test
+`shutdown_watchdog_armed_after_rest_stop_join_and_flush`. This tree did
+not arm the watchdog first, because that would skip the flush.
+`process::exit(0)` still skips destructors. That skip is documented.
+That is Mempool #154 already here with this order.
+
+Unbounded query `max_txs` is `clamp_query_max_txs` with `min()` against
+the existing `rest_default_*` and `rest_max_*` knobs. Named test
+`huge_max_txs_is_clamped_to_rest_knobs_summary_default_stays_5000`.
+Address summary default stays 5000. This tree did not take
+`MAX_HISTORY_TXS = 100`. That clamp is already here. Skip stances for
+the other parent pull requests live in the decision log. They are not
+Open leftover of this wave. Do not duplicate that table here.
 
 Named test `packaging_pins_rust_198_edition_2024_and_system_rocksdb`
 matches `useSystemRocksdb = true`. That pin landed with this wave. It is
@@ -343,6 +373,18 @@ that unwrapped challenge, `-addnode=45.79.52.207:38333`, and
 outcome via argv. Do not wrap the challenge on stock Core: wrapping
 would change P2P magic. Wallet stays off.
 
+Liquid REST `sigops` on a pegin transaction still counts legacy only.
+`get_sigop_cost` returns early when any input `is_pegin`. Witness and
+P2SH sigops are not counted for those transactions. That undercount is
+Open. Do not take Mempool #47 as-is. Skip evidence is in
+[doc/mempool-latent-prs.md](doc/mempool-latent-prs.md).
+
+A hung Electrum join still delays process stop. This tree arms the
+5-second shutdown watchdog after rest-stop, Electrum join, and RocksDB
+flush. A join that never finishes never reaches the watchdog. That hole
+is Open. Do not arm the watchdog first if that would skip the flush.
+The same decision log records that order choice.
+
 ## Highest value next
 
 Wait for Menhera to serve rustls >=0.23.45, then lock update. Do not
@@ -370,4 +412,8 @@ unproven.
 Do not re-open clap 4, wallet-on, MWCK, nginx, or RocksDB LRU-share.
 Sharing one RocksDB LRU across indexer processes is not Open. Do not
 put `pkgs.nixosTest` on `just check-remote`. e2e/QEMU stays off that
-gate.
+gate. Do not re-open Mempool #84, the #145 history-row cap, the #154
+flush-then-watchdog order, or the unbounded `max_txs` clamp against
+existing REST knobs. Do not take `MAX_HISTORY_TXS = 100`. Skip rows
+stay skip. The two Open holes above are Liquid pegin `sigops` and a
+hung Electrum join before the watchdog.
