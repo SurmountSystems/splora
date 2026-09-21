@@ -219,6 +219,16 @@ matches `useSystemRocksdb = true`. That pin landed with this wave. It is
 not leftover. 2026-09-09 `rocksdbMoldLink` observed `NEEDED librocksdb`
 on the builder. That observation is not leftover.
 
+Crane packages set `meta.mainProgram`. The bin is `splora` for both
+`splora` and `splora-liquid` (Cargo `--bin splora`; the liquid pname is
+not the binary name). The HTTP front bin is `splora-http`.
+`lib.getExe` on those derivations does not warn. Appliance `bitcoind`
+and `elementsd` also set `mainProgram`. Named flake check
+`getExeMainProgram` calls `lib.getExe` on those five packages.
+`nix/elementsd.nix` uses `stdenv.hostPlatform.isLinux`. This tree does
+not read `stdenv.isLinux` or `stdenv.isDarwin`. That Nix eval-warning
+slice is not Open.
+
 The indexer was not rewritten. `mempool/mempool` was not vendored.
 
 Bitcoin Core 31.1 is fetched from the bitcoincore.org tarball. This git

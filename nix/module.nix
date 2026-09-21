@@ -361,11 +361,14 @@ let
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" ] ++ optional inst.startLocalDaemon "${daemonUnitName inst.network}.service";
     wants = optional inst.startLocalDaemon "${daemonUnitName inst.network}.service";
+    unitConfig = optionalAttrs (inst.cookieFile != null && inst.daemonDir == null) {
+      ConditionPathExists = inst.cookieFile;
+    };
     serviceConfig = {
       Type = "simple";
       User = cfg.user;
       Group = cfg.group;
-      ExecStart = "${lib.getExe (instancePackage inst)} ${escapeShellArgs (indexerArgs name inst)}";
+      ExecStart = "${lib.getExe' (instancePackage inst) "splora"} ${escapeShellArgs (indexerArgs name inst)}";
       Environment = "RUST_BACKTRACE=1";
       Restart = "on-failure";
       RestartSec = 10;
@@ -377,9 +380,11 @@ let
       RuntimeDirectoryMode = "0750";
       RuntimeDirectoryPreserve = true;
       UMask = "0007";
-      # Bind the allowlist parent directory, not the file inode, so
-      # splora-import rename(tmp -> allow-npubs) is visible to inotify.
-      BindReadOnlyPaths = optional (inst.cookieFile != null) inst.cookieFile;
+      # Prefix BindReadOnlyPaths with '-' so a missing cookie file does
+      # not fail the unit at namespace setup (systemd 226/NAMESPACE).
+      # Remote JSON-RPC also skips start until the cookie exists so
+      # nixos-rebuild switch is not failed by a crash loop.
+      BindReadOnlyPaths = optional (inst.cookieFile != null) "-${inst.cookieFile}";
       # Do not pass --lightmode. Light mode stays off.
       NoNewPrivileges = true;
       PrivateTmp = true;

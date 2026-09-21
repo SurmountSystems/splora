@@ -29,6 +29,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Finish remote tests residual
     - L3 specialists (when spawned)
+  - L2 Fix Nix getExe eval warnings
+    - L3 specialists (when spawned)
   - L2 Fix rest.rs graceful watch
     - L3 specialists (when spawned)
   - L2 HTTP front coordinator
@@ -398,6 +400,7 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Draft splora-http systemd unit | nested L2 session usage | L2 | 84217 | estimate | exited |
 | Drop signetblocktime from Core | nested L2 session usage | L2 | 58559 | estimate | exited |
 | Finish remote tests residual | nested L2 session usage | L2 | 114088 | estimate | exited |
+| Fix Nix getExe eval warnings | nested L2 session usage | L2 | 103280 | estimate | exited |
 | Fix rest.rs graceful watch | nested L2 session usage | L2 | 92715 | estimate | exited |
 | HTTP front coordinator | nested L2 session usage | L2 | 52652 | estimate | exited |
 | Hyper 1 and secp proof | nested L2 session usage | L2 | 0 | estimate | exited |
@@ -526,10 +529,10 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | [implementer] Write FORK.md | nested L2 session usage | L2 | 74769 | estimate | exited |
 | [implementer] Write residual file | nested L2 session usage | L2 | 63382 | estimate | exited |
 | [implementer] cargo-deny hygiene | nested L2 session usage | L2 | 124812 | estimate | exited |
-| [implementer] finish leftover implement | nested L2 session usage | L2 | 66306 | estimate | exited |
+| [implementer] finish leftover implement | nested L2 session usage | L2 | 66277 | estimate | exited |
 | [implementer] http.sock edge docs | nested L2 session usage | L2 | 67590 | estimate | exited |
 | [implementer] just check-remote | nested L2 session usage | L2 | 87769 | estimate | exited |
-| [implementer] leftover update audit remote | nested L2 session usage | L2 | 57066 | estimate | exited |
+| [implementer] leftover update audit remote | nested L2 session usage | L2 | 56691 | estimate | exited |
 | [implementer] wait audit remote residual | nested L2 session usage | L2 | 101795 | estimate | exited |
 | [memory] Flush review patterns | nested L2 session usage | L2 | 39622 | estimate | exited |
 | [memory] Flush review patterns | nested L2 session usage | L2 | 44559 | estimate | exited |

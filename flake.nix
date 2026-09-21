@@ -123,6 +123,7 @@
               pname = "splora";
               cargoExtraArgs = "${commonArgs.cargoExtraArgs} --bin splora --bin popular-scripts --bin splora-import --bin splora-queue";
               doCheck = false;
+              meta.mainProgram = "splora";
             }
           );
 
@@ -134,6 +135,9 @@
               cargoExtraArgs = "${commonArgs.cargoExtraArgs} --features liquid --bin splora --bin popular-scripts --bin splora-import --bin splora-queue";
               doCheck = false;
               passthru.asset-registry = asset-registry;
+              # Cargo --bin splora; pname is splora-liquid. getExe must not
+              # guess the binary is named splora-liquid.
+              meta.mainProgram = "splora";
             }
           );
 
@@ -146,6 +150,7 @@
               pname = "splora-http";
               cargoExtraArgs = "${commonArgs.cargoExtraArgs} --bin splora-http";
               doCheck = false;
+              meta.mainProgram = "splora-http";
             }
           );
 
@@ -408,6 +413,19 @@
               pkgs.runCommand "splora-bundled-rocksdb" { } ''
                 echo "useSystemRocksdb is false; bundled rocksdb 0.24.0" > "$out"
               '';
+          # Named eval: lib.getExe on the real crane packages. Dummy
+          # hello packages in nixosTenUnits never hit this. splora-liquid
+          # installs Cargo --bin splora; without mainProgram, getExe
+          # would guess the pname and look for /bin/splora-liquid.
+          applianceBitcoind = pkgs.callPackage ./nix/bitcoind.nix { };
+          applianceElementsd = pkgs.callPackage ./nix/elementsd.nix { };
+          getExeMainProgram =
+            assert lib.getExe built.splora == "${built.splora}/bin/splora";
+            assert lib.getExe built.splora-liquid == "${built.splora-liquid}/bin/splora";
+            assert lib.getExe built.splora-http == "${built.splora-http}/bin/splora-http";
+            assert lib.getExe applianceBitcoind == "${applianceBitcoind}/bin/bitcoind";
+            assert lib.getExe applianceElementsd == "${applianceElementsd}/bin/elementsd";
+            pkgs.runCommand "splora-getexe-main-program" { } "echo ok > $out";
         in
         {
           splora = built.splora;
@@ -419,6 +437,7 @@
           inherit nixosQueueListenXorSocket;
           inherit nixosRemoteJsonrpcImport;
           inherit rocksdbMoldLink;
+          inherit getExeMainProgram;
         }
       );
 
