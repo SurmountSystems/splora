@@ -1,0 +1,14 @@
+[
+  {
+    "txid": "test-tx-1",
+    "wtxid": "test-wtxid-1",
+    "allowed": false,
+    "vsize": 141,
+    "fees": {
+      "base": 0.00001,
+      "effective-feerate": 1.0,
+      "effective-includes": ["test-tx-1"]
+    },
+    "reject-reason": "min relay fee not met"
+  }
+]

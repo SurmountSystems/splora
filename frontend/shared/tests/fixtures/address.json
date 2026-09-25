@@ -1,0 +1,17 @@
+{
+  "address": "xyz",
+  "chain_stats": {
+    "tx_count": 9,
+    "funded_txo_count": 6,
+    "spent_txo_count": 2,
+    "funded_txo_sum": 500000,
+    "spent_txo_sum": 100000
+  },
+  "mempool_stats": {
+    "tx_count": 3,
+    "funded_txo_count": 1,
+    "spent_txo_count": 0,
+    "funded_txo_sum": 2500,
+    "spent_txo_sum": 0
+  }
+}

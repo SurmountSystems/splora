@@ -1,0 +1,13 @@
+[
+  {
+    "txid": "utxo-tx-1",
+    "vout": 2,
+    "status": {
+      "confirmed": true,
+      "block_height": 100,
+      "block_hash": "block-id-1",
+      "block_time": 1600000000
+    },
+    "value": 42000
+  }
+]

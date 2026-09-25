@@ -1,0 +1,3 @@
+[submodule "ref/mempool"]
+	path = ref/mempool
+	url = https://github.com/mempool/mempool

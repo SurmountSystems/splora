@@ -1,0 +1,10 @@
+[workspace]
+
+[package]
+name = "splora-api"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Prefix table and NIP-98 kind 27235 header builder for the splora HTTP API"
+
+[dependencies]

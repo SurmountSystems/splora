@@ -33,7 +33,7 @@ in 2 minutes 43 seconds (`all checks passed!`). It built
 `checks.x86_64-linux.splora`, `splora-liquid`, `splora-http`,
 `nextest`, and `rocksdbMoldLink` on surmount-1. Nix omitted
 aarch64-linux. That omit is not a fail. Flake check is not
-`cargo audit`. rustls 0.23.44 / RUSTSEC-2026-0285 stays Open below. There is no `test-remote` recipe. Nix omitted aarch64-linux.
+`cargo audit`. The 2026-09-22 Menhera lock has rustls **0.23.45**, which closes [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (accessed: 2026-09-22). That advisory is not Open. There is no `test-remote` recipe. Nix omitted aarch64-linux.
 That omit is not a fail. `bitcoind` and
 `elementsd` evaluated. `packages.splora-http` built.
 `rocksdbMoldLink` observed `NEEDED librocksdb`. Previously untracked
@@ -73,24 +73,65 @@ The 2026-09-09 Menhera lock refresh pinned `nostr` **0.45.4**. Direct
 accessed: 2026-09-09). The 2026-09-19 Menhera `cargo update` pinned
 `nostr` **0.45.5** and `rustls` **0.23.44**. The 2026-09-21 Menhera
 `cargo update` (UTC) then locked `cc` **1.4.6**, `lru-slab` **0.1.3**,
-and `tinyvec` **1.13.3**, and dropped `tinyvec_macros`. `rustls` stayed
-**0.23.44**. `rocksdb` stayed 0.24.0. `bitcoin` stayed **0.32.102**.
-That lock refresh is not Open leftover. rustls 0.23.45 is still not on
-the Menhera 7-day index. That wait stays Open below. 2026-09-21
+and `tinyvec` **1.13.3**, and dropped `tinyvec_macros`. That day's
+lock had `rustls` **0.23.44**. `rocksdb` stayed 0.24.0
+(`librocksdb-sys` **0.17.3+10.4.2**). `bitcoin` stayed **0.32.102**.
+That 2026-09-21 lock refresh is not Open leftover. 2026-09-21
 `cargo fetch --locked` exited 0. 2026-09-20 `just check-local` ran
 the full laptop recipe: `cargo fmt --all --check` exited 0 after
 file-level rustfmt on `src/daemon.rs` and `src/new_index/schema.rs`;
 `cargo clippy --all -- -D warnings` exited 0 in 4 minutes 18 seconds
 with no warnings; `cargo deny --offline --locked check --config
 cargo-deny.toml` exited 0 (advisories ok, bans ok, licenses ok,
-sources ok). `cargo audit` exited 1 on
+sources ok). `cargo audit` that day exited 1 on
 [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
-(accessed: 2026-09-20). fmt, clippy, and deny are not Open.
-2026-09-20 `just check-remote` then exited 0 (`all checks passed!`).
-That remote gate is not Open. The rustls audit row is still Open
-because flake check does not run `cargo audit`. Do
-not bump bitcoin to 0.33-beta. Do not bump rocksdb off 0.24. Those
-floors are standing constraints, not unfinished 1.98.1 work. NIP-98 uses `nostr::key::PublicKey` and
+(accessed: 2026-09-22) while rustls was **0.23.44**. That audit result
+is history. On 2026-09-22 the Menhera 7-day index
+(`sparse+https://index.crates.menhera.org/7d/` via
+`replace-with = "menhera-cooldown"` in `.cargo/config.toml`) served
+rustls **0.23.45**. The lock update used that index. crates.io was
+not used to skip the 7-day wait. `cargo audit` did print `Updating
+crates.io index` as its own yanked-crate check. That line is not how
+the lock was resolved. Cargo.toml already allowed rustls `0.23`. No
+manifest edit. The locked checksum is
+`0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634`.
+The same wave also locked clap **4.6.7** (from 4.6.6), clap_builder
+**4.6.7** (from 4.6.6), clap_lex **1.1.1** (from 1.1.0), quinn
+**0.11.12** (from 0.11.11), and quinn-proto **0.11.18** (from
+0.11.17). bitcoin stayed **0.32.102**. rocksdb stayed **0.24.0**.
+`librocksdb-sys` stayed **0.17.3+10.4.2**. Do not take bitcoin 0.33.
+Do not take rocksdb 0.25.
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-22) is patched for rustls `>= 0.23.45`. `cargo
+audit` on 2026-09-22 loaded advisory-db HEAD
+`17af77682cecd2afa72b217ad7c6c30585d5003f`, scanned 312 crate
+dependencies, and printed no vulnerability. Exit 0. No audit rows
+remain. That advisory is not Open. Do not add an `[advisories]
+ignore`. The ignore list stays empty. `cargo deny --offline --locked
+check --config cargo-deny.toml` exited 0 (`advisories ok, bans ok,
+licenses ok, sources ok`). Its offline advisory clone is still HEAD
+`ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5` (2026-08-31) and does not
+contain RUSTSEC-2026-0285. Deny green is not the rustls proof. The
+proof is `cargo audit`. The deny database was not updated. `just
+check-local` (fmt, clippy `-D warnings`, deny, audit) exited 0 on
+2026-09-22. No Rust sources changed. Clippy finished in 11.58s after
+recompiling rustls 0.23.45 and quinn 0.11.12. fmt, clippy, deny, and
+audit on that recipe are not Open. 2026-09-20 `just check-remote`
+then exited 0 (`all checks passed!`). That earlier remote gate is not
+Open. It did not run `cargo audit`, and it is not a run of the
+2026-09-22 lock. On 2026-09-22, `just check-remote` (`nix flake check`)
+ran on this lock (rustls **0.23.45**, bitcoin **0.32.102**, rocksdb
+**0.24.0**). It exited 0. It started at 2026-09-22T08:04:46-06:00 and
+ended at 2026-09-22T08:09:38-06:00. Wall time was 292 seconds. Nix
+printed `all checks passed!` and warned that the check omitted
+aarch64-linux. The tail showed derivation `splora-nixpkgs-rocksdb-mold`
+building on `ssh-ng://nixbuilder@23.182.128.234`. Nix also warned that
+the git tree is dirty and that app `apps.x86_64-linux.popular-scripts`
+lacks attribute `meta`. Those warnings did not fail the check. No
+product source files changed. That recipe is not `cargo audit` and not
+`cargo deny`. It is not Open. Do not bump bitcoin to 0.33-beta. Do not bump rocksdb
+off 0.24. Those floors are standing constraints, not unfinished 1.98.1
+work. NIP-98 uses `nostr::key::PublicKey` and
 `nostr::event::Event` (0.45 no longer re-exports those at the crate
 root), caps encoded header size before Base64, and signs test events
 with `EventBuilder::finalize`. Closed rustsec rows from the 2026-08-31
@@ -100,7 +141,9 @@ wave are not leftover. The hyper 1 port and
 2026-09-09 `just check-remote` on rustc **1.98.1**, ELF
 `NEEDED librocksdb`, and tracked flake sources are not Open.
 2026-09-19 `just check-remote` after the rest.rs fix is not Open.
-The live advisory row after this pass's audit is Open below.
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-22) is closed by the rustls **0.23.45** lock. It is
+not Open.
 
 Authorization is two files. Pending queue is CSV `npub,email` with no status
 column (`src/queue.rs`, `tests/queue_csv.rs`). Approved allowlist is one npub
@@ -324,48 +367,86 @@ That is shared nixpkgs secp256k1 0.8.0, not an in-tarball secp
 compile-in. Drv eval alone is no longer the last word for Core secp.
 There is no `NEEDED` libleveldb.
 
+## Shared path crate called from both apps in tests
+
+The shared path crate `splora-frontend-shared` exists at `frontend/shared`. `cargo test --manifest-path frontend/shared/Cargo.toml` exited 0, with 15 tests. Evidence report: `/home/hunter/.agents/reports/frontend-shared.md`.
+
+The native dashboard now requests GET `/fee-estimates`, GET `/mempool`, GET `/blocks/tip/height`, and GET `/blocks/tip/hash` when it opens. The same open also requests GET `/blocks` and GET `/mempool/recent`. A block requests GET `/block/:hash/txids` and, when the start index is a multiple of 25, GET `/block/:hash/txs/:start_index`. A block still requests the unpaged GET `/block/:hash/txs`. `cargo test --manifest-path frontend/native/Cargo.toml` exited 0, with 34 library tests. The report is `/home/hunter/.agents/reports/native-remaining-paths.md`.
+
+The web client already called those shared paths. Its last `cargo test` exited 0. The report is `/home/hunter/.agents/reports/web-shared-gaps.md`. That command was `cargo test --manifest-path frontend/web/Cargo.toml`, with 23 explorer tests and 1 missing signer test. Trunk is not on PATH. There was no Trunk build. The report is `/home/hunter/.agents/reports/trunk-build.md`. Nobody served the Leptos page. Tests feed JSON. Those tests do not mean the web screen is done.
+
+There is no GPUI window pixel test. `cargo test` does not run `cx.open_window`. The report is `/home/hunter/.agents/reports/gpui-window-limit.md`. No GPUI window was opened. Tests feed JSON.
+
+The shared path crate exists and both apps call it in tests for the data routes the inventory classes as ship in v1. Tests feed JSON. Nobody served the Leptos page. No GPUI window was opened. That proof is only the crate and the JSON tests. It is not a served Leptos page and it is not an opened GPUI window. Views are being checked. The explorer is not finished. The screens are not done. Serving the Leptos page in a browser is still not done.
+
 ## Open
+
+### Explorer screens
+
+The explorer is not finished. The screens are not done. Views are being checked. Trunk is not on PATH. No GPUI window was opened. Mining, prices, lightning, and acceleration stay out.
+
+Explorer surfaces for mining, prices, lightning, acceleration, RBF, stale tips, statistics, named wallets, faucet, and liquid reserves are still out, because the indexer has no API for them. Layouts are not Mempool's. Those surfaces are leftovers, not work to start now. They are not the current job. The `--enable-mining-rest` switch already in this tree is not an explorer API for those surfaces. The mutinynet signet challenge hex recorded below is not an explorer faucet. There was no Trunk build. The report is `/home/hunter/.agents/reports/trunk-build.md`. There is no GPUI window pixel test. `cargo test` does not run `cx.open_window`. The report is `/home/hunter/.agents/reports/gpui-window-limit.md`. Nobody served the Leptos page. Tests feed JSON. Serving the Leptos page in a browser is still not done.
+
+### Shared crate gaps
+
+The native dashboard now requests GET `/fee-estimates`, GET `/mempool`, GET `/blocks/tip/height`, and GET `/blocks/tip/hash` when it opens. A block requests GET `/block/:hash/txids` and, when the start index is a multiple of 25, GET `/block/:hash/txs/:start_index`. The web client already called those shared paths. Those routes are not an open shared-crate gap.
 
 ### Operator-owned gates
 
 `just check-local` (fmt, clippy, deny, audit) is the standing laptop
-recipe. It is not leftover of the rustc 1.98.1 remote proof. 2026-09-20
-this pass ran that recipe as a whole. fmt, clippy, and deny exited 0.
-`cargo audit` exited 1 on rustls 0.23.44
-([RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285),
-accessed: 2026-09-20). That audit row stays Open below. Do not list
-fmt, clippy, or deny as Open. 2026-09-20 `just check-remote` (`nix
-flake check`) also ran and exited 0 (`all checks passed!`). That
-remote recipe is not leftover. It is not deny or audit. The crane
+recipe. It is not leftover of the rustc 1.98.1 remote proof. 2026-09-22
+`just check-local` exited 0. fmt, clippy `-D warnings`, deny, and
+`cargo audit` each exited 0. Clippy finished in 11.58s after
+recompiling rustls 0.23.45 and quinn 0.11.12. No Rust sources changed.
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-22) is closed by the rustls **0.23.45** lock. It is
+not Open. Do not list fmt, clippy, deny, or audit as Open. 2026-09-20
+`just check-remote` (`nix flake check`) exited 0 (`all checks
+passed!`). That earlier remote recipe is not leftover. It is not deny
+or audit, and it is not a run of the 2026-09-22 lock. On 2026-09-22,
+`just check-remote` (`nix flake check`) ran on this lock (rustls
+**0.23.45**, bitcoin **0.32.102**, rocksdb **0.24.0**). It exited 0.
+It started at 2026-09-22T08:04:46-06:00 and ended at
+2026-09-22T08:09:38-06:00. Wall time was 292 seconds. Nix printed `all
+checks passed!` and warned that the check omitted aarch64-linux. The
+tail showed derivation `splora-nixpkgs-rocksdb-mold` building on
+`ssh-ng://nixbuilder@23.182.128.234`. Nix also warned that the git tree
+is dirty and that app `apps.x86_64-linux.popular-scripts` lacks
+attribute `meta`. Those warnings did not fail the check. No product
+source files changed. That recipe is not `cargo audit` and not
+`cargo deny`. It is not leftover. The crane
 Menhera DNS miss (`Could not resolve host: index.crates.menhera.org`
 on `splora-deps-3.4.0-dev` after vendor) is fixed in `flake.nix`.
 
-Agents do not stage.
+Agents do not stage. The staged `ref/mempool` gitlink is unsigned until the Operator runs `git commit -S`. Agents do not commit.
 
 ### Agent-doable leftover
 
-The 2026-09-21 `cargo update` and `cargo fetch --locked` both exited 0
-on the Menhera 7-day index. Production `rustls` is still **0.23.44**.
-2026-09-20 `just check-local` then reconfirmed that audit row:
-`cargo audit` loaded 1251 advisories from `~/.cargo/advisory-db` and
-exited **1** on one production vulnerability. There is no second
-advisory row in that transcript. fmt, clippy, and deny on that same
-recipe exited 0. They are not Open.
-
-| Advisory | Crate | Version | Why it remains |
-|----------|-------|---------|----------------|
-| [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (accessed: 2026-09-20) | `rustls` | **0.23.44** | TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries. Solution is >=0.23.45. The Menhera 7-day sparse index (`https://index.crates.menhera.org/7d/ru/st/rustls`, Last-Modified Mon, 14 Sep 2026 15:11:20 GMT) still ends at rustls **0.23.44** (published 2026-09-07). Unique 0.23.x versions on that index are 0.23.0 through 0.23.44. There is no 0.23.45. `cargo update -p rustls --precise 0.23.45 --dry-run` exited 101 (`no matching package named rustls found` on `menhera-cooldown`). |
-
-Do not fetch crates.io to skip the wait. Do not `[advisories] ignore`.
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-22) is not leftover. The 2026-09-22 Menhera lock
+(`sparse+https://index.crates.menhera.org/7d/` via
+`replace-with = "menhera-cooldown"`) has rustls **0.23.45**. That
+version was on the Menhera 7-day index. The lock update used that
+index. crates.io was not used to skip the 7-day wait. `cargo audit`
+on 2026-09-22 loaded advisory-db HEAD
+`17af77682cecd2afa72b217ad7c6c30585d5003f`, scanned 312 crate
+dependencies, and printed no vulnerability. Exit 0. No audit rows
+remain. The advisory is patched for rustls `>= 0.23.45`. It was closed
+by the 0.23.45 lock, not by an ignore. Do not `[advisories] ignore`.
 The ignore list stays empty. `cargo deny --offline --locked check
---config cargo-deny.toml` exited **0** (advisories ok, bans ok,
-licenses ok, sources ok) on this same `just check-local` pass. Deny
-green is not proof the rustls row is gone. bitcoin is **0.32.102**.
-rocksdb is **0.24.0**. nostr lock is
-**0.45.5**. [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
+--config cargo-deny.toml` exited 0 (`advisories ok, bans ok, licenses
+ok, sources ok`). Its offline advisory clone is still HEAD
+`ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5` (2026-08-31) and does not
+contain RUSTSEC-2026-0285. Deny green is not the rustls proof. The
+proof is `cargo audit`. The deny database was not updated. bitcoin
+stays **0.32.102**. rocksdb stays **0.24.0** with `librocksdb-sys`
+**0.17.3+10.4.2**. Do not take bitcoin 0.33. Do not take rocksdb 0.25.
+nostr lock is **0.45.5**.
+[RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
 (accessed: 2026-09-09) stays closed on the prior lock by hyper
 **1.11.1** and h2 **0.4.19**. That closed row is not Open leftover of
-the hyper 1 port.
+the hyper 1 port. `just check-local` on 2026-09-22 exited 0. That
+recipe is not Open.
 
 `nix/elementsd.nix` pins the unpacked GitHub archive hash
 `07p0zknrz74jyvxm04pa20y35kdarp9y0f5k99xz72psx9achkxv` for
@@ -420,18 +501,37 @@ would change P2P magic. Wallet stays off.
 
 ## Highest value next
 
-Wait for Menhera to serve rustls >=0.23.45, then lock update that crate.
-The 2026-09-21 blanket `cargo update` already ran and could not take
-0.23.45 because it is not on the 7-day index. 2026-09-20 `just
-check-local` and `cargo update -p rustls --precise 0.23.45 --dry-run`
-reconfirmed the same miss. Do not fetch crates.io to skip the wait. Do
-not `[advisories] ignore`. The ignore list stays empty. bitcoin is
-0.32.102. rocksdb is 0.24.0. Do not bump bitcoin to 0.33-beta. Do not
-bump rocksdb off 0.24. 2026-09-20 `just check-remote` after that lock
-exited 0 in 2 minutes 43 seconds (`all checks passed!`). That remote
-gate is not leftover. fmt, clippy, and deny on `just check-local` are
-already green. They are not the next proof. The next proof is still
-Menhera rustls >=0.23.45, then `cargo audit` green.
+The explorer is not finished. The screens are not done. Views are being checked. Trunk is not on PATH. No GPUI window was opened. Mining, prices, lightning, and acceleration stay out. The highest-value next step is not mining. It is running Trunk on a machine that has Trunk, then running `trunk build` in `frontend/web`. The GPUI pixel check needs a display. If both user interfaces change, that work still uses two app coordinators, one web and one native. Do not assign both apps to one coordinator. Layouts are not Mempool's. Explorer surfaces for mining, prices, lightning, acceleration, RBF, stale tips, statistics, named wallets, faucet, and liquid reserves stay out until the indexer has an API for them. They are not the current job.
+
+The Menhera wait for rustls >=0.23.45 is done. The 2026-09-22 lock
+has rustls **0.23.45**. The locked checksum is
+`0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634`.
+The same wave locked clap **4.6.7**, clap_builder **4.6.7**, clap_lex
+**1.1.1**, quinn **0.11.12**, and quinn-proto **0.11.18**. Cargo.toml
+already allowed rustls `0.23`. No manifest edit. `cargo audit` on
+2026-09-22 exited 0. No audit rows remain.
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-22) is closed by that lock, not by an ignore. Do
+not `[advisories] ignore`. The ignore list stays empty. Do not fetch
+crates.io to skip the Menhera wait. bitcoin is **0.32.102**. rocksdb
+is **0.24.0** (`librocksdb-sys` **0.17.3+10.4.2**). Do not bump
+bitcoin to 0.33-beta. Do not bump rocksdb off 0.24. `just check-local`
+on 2026-09-22 exited 0 (fmt, clippy `-D warnings`, deny, and audit).
+No Rust sources changed. That recipe is not the next proof. The
+2026-09-20 `just check-remote` exit 0 is an earlier gate. It is not
+leftover, and it is not a run of the 2026-09-22 lock. On 2026-09-22,
+`just check-remote` (`nix flake check`) ran on this lock (rustls
+**0.23.45**, bitcoin **0.32.102**, rocksdb **0.24.0**). It exited 0.
+It started at 2026-09-22T08:04:46-06:00 and ended at
+2026-09-22T08:09:38-06:00. Wall time was 292 seconds. Nix printed `all
+checks passed!` and warned that the check omitted aarch64-linux. The
+tail showed derivation `splora-nixpkgs-rocksdb-mold` building on
+`ssh-ng://nixbuilder@23.182.128.234`. Nix also warned that the git tree
+is dirty and that app `apps.x86_64-linux.popular-scripts` lacks
+attribute `meta`. Those warnings did not fail the check. No product
+source files changed. That recipe is not `cargo audit` and not
+`cargo deny`. It exited 0 on 2026-09-22 and is not leftover. It is not
+the next proof.
 
 2026-09-19 `just check-remote` after the rest.rs fix is already green.
 Command `just check-remote`, duration 149s, exit 0, `all checks

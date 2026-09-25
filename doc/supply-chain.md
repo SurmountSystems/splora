@@ -224,35 +224,63 @@ Direct crate bumps that closed rustsec rows:
   `atty` ([RUSTSEC-2021-0139](https://rustsec.org/advisories/RUSTSEC-2021-0139),
   [RUSTSEC-2024-0375](https://rustsec.org/advisories/RUSTSEC-2024-0375),
   [RUSTSEC-2021-0145](https://rustsec.org/advisories/RUSTSEC-2021-0145),
-  accessed: 2026-08-31). Do not re-add clap 2.
+  accessed: 2026-08-31). Do not re-add clap 2. The 2026-09-22 Menhera
+  lock moved clap to **4.6.7**, clap_builder to **4.6.7**, and clap_lex
+  to **1.1.1**. Those patches did not re-add clap 2.
 
 `bitcoin` floated to **0.32.102**. That pulls `hex_lit` under SPDX **MITNFA**
 (MIT plus no-false-attribs). That identifier is on the cargo-deny allow list.
 
-## Remaining rustsec rows
+## Rustsec status
 
 The 2026-09-21 Menhera `cargo update` (UTC) locked `cc` **1.4.6**,
 `lru-slab` **0.1.3**, and `tinyvec` **1.13.3**, and dropped
-`tinyvec_macros`. `cargo fetch --locked` then exited 0. rustls stayed
-**0.23.44**. bitcoin stayed **0.32.102**. rocksdb stayed **0.24.0**.
-The same day's live `cargo audit` (advisory-db HEAD
+`tinyvec_macros`. `cargo fetch --locked` then exited 0. That day's
+lock had rustls **0.23.44**. bitcoin stayed **0.32.102**. rocksdb
+stayed **0.24.0** and `librocksdb-sys` stayed **0.17.3+10.4.2**. The
+same day's live `cargo audit` (advisory-db HEAD
 `d5c17953a895cf19e8d3ce66eaa42b6fcfe1fb16`, 2026-09-19, 1251
 advisories) exited **1**. `cargo audit --json` listed one
 vulnerability and an empty `warnings` map. `cargo audit -D warnings`
 exited 1 on that same row and did not print yanked, unmaintained,
-unsound, or notice warnings. `cargo deny --offline --locked check
---config cargo-deny.toml` exited **0** on a stale advisory clone
-(`~/.cargo/advisory-dbs/advisory-db-3157b0e258782691`, HEAD
-`ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5`, 2026-08-31) that does not
-contain
-[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
-(accessed: 2026-09-20). Deny green is not proof the rustls row is
-gone. The ignore list stays empty. Do not fetch crates.io to skip the
-Menhera wait.
+unsound, or notice warnings. That 2026-09-21 audit result is history.
+It is not the current lock.
 
-| Crate | Advisory | Why it remains |
-|-------|----------|----------------|
-| `rustls` **0.23.44** | [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) (accessed: 2026-09-20) | Production. TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries. Solution is >=0.23.45. rustls 0.23.45 is not on the Menhera 7-day index (the index still ends at 0.23.44, published 2026-09-07). |
+On 2026-09-22 a Menhera `cargo update` locked rustls **0.23.45**.
+`.cargo/config.toml` sets `replace-with = "menhera-cooldown"` and the
+Menhera index is `sparse+https://index.crates.menhera.org/7d/`. The
+lock update used that index. crates.io was not used to skip the 7-day
+wait. `cargo audit` did print `Updating crates.io index` as its own
+yanked-crate check. That line is not how the lock was resolved.
+Cargo.toml already allowed rustls `0.23`. No manifest edit. The locked
+checksum is
+`0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634`.
+The same wave also moved clap **4.6.6** to **4.6.7**, clap_builder
+**4.6.6** to **4.6.7**, clap_lex **1.1.0** to **1.1.1**, quinn
+**0.11.11** to **0.11.12**, and quinn-proto **0.11.17** to **0.11.18**.
+Those are patch updates. bitcoin stayed **0.32.102**. Do not take
+bitcoin 0.33. rocksdb stayed **0.24.0**. `librocksdb-sys` stayed
+**0.17.3+10.4.2**. Do not take rocksdb 0.25.
+
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-22) covers TLS 1.3 handshake messages accepted
+across encryption levels. It is patched for rustls `>= 0.23.45`. It
+is not an open leftover. `cargo audit` on 2026-09-22 loaded
+advisory-db HEAD `17af77682cecd2afa72b217ad7c6c30585d5003f`, scanned
+312 crate dependencies, and printed no vulnerability. Exit 0. No audit
+rows remain. The ignore list stays empty. Do not add an ignore for
+that advisory. Do not fetch crates.io to skip the Menhera wait.
+
+`cargo deny --offline --locked check --config cargo-deny.toml` exited
+**0** (`advisories ok, bans ok, licenses ok, sources ok`). Its offline
+advisory clone (`~/.cargo/advisory-dbs/advisory-db-3157b0e258782691`,
+HEAD `ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5`, 2026-08-31) does not
+contain RUSTSEC-2026-0285. Deny green is not the rustls proof. The
+proof is `cargo audit`. The deny database was not updated.
+
+`just check-local` (fmt, clippy `-D warnings`, deny, audit) exited 0
+on 2026-09-22. No Rust sources changed. Clippy finished in 11.58s
+after recompiling rustls 0.23.45 and quinn 0.11.12.
 
 On the prior lock after the hyper 1 port,
 [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
@@ -347,12 +375,27 @@ the named check. A laptop `cargo` ELF is not a substitute either.
   101, signet 307, daemon 503/504). The first run that day exited 1 on
   compile E0277. That compile miss is closed by the rest.rs fix. It is
   not leftover. Nix omitted aarch64-linux. That omit is not a fail.
-  Laptop `cargo audit` on 2026-09-21 is still red on
+  The 2026-09-21 laptop `cargo audit` exited 1 on
   [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
-  (accessed: 2026-09-20) because rustls is still **0.23.44**. The
-  2026-09-21 Menhera refresh did not take rustls 0.23.45 (not on the
-  7-day index). Deny `--offline` exit 0 is a stale advisory clone, not
-  a closed rustls row.
+  (accessed: 2026-09-22) while rustls was **0.23.44**. That result is
+  history. On 2026-09-22 the Menhera lock moved rustls to **0.23.45**
+  and `cargo audit` exited 0. No audit rows remain. `just check-local`
+  on 2026-09-22 exited 0. On 2026-09-22, `just check-remote` (`nix flake
+  check`) ran on this lock (rustls **0.23.45**, bitcoin **0.32.102**,
+  rocksdb **0.24.0**). It exited 0. It started at
+  2026-09-22T08:04:46-06:00 and ended at 2026-09-22T08:09:38-06:00. Wall
+  time was 292 seconds. Nix printed `all checks passed!` and warned
+  that the check omitted aarch64-linux. The tail showed derivation
+  `splora-nixpkgs-rocksdb-mold` building on
+  `ssh-ng://nixbuilder@23.182.128.234`. Nix also warned that the git
+  tree is dirty and that app `apps.x86_64-linux.popular-scripts` lacks
+  attribute `meta`. Those warnings did not fail the check. No product
+  source files changed. That recipe is not `cargo audit` and not
+  `cargo deny`. It is not leftover. Deny `--offline` still uses
+  advisory-db HEAD
+  `ba9db2a77a6a0fe93bc63a3d9b730e08b145aff5` (2026-08-31), which does
+  not contain RUSTSEC-2026-0285. Deny green is not the rustls proof.
+  The proof is `cargo audit`. The deny database was not updated.
   [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
   (accessed: 2026-09-09) is closed on the prior lock. That closed row
   is not leftover. `just check-local` as a whole was not this

@@ -1,0 +1,16 @@
+[
+  {
+    "txid": "addr-tx-1",
+    "version": 2,
+    "locktime": 0,
+    "vin": [],
+    "vout": [],
+    "size": 90,
+    "weight": 360,
+    "sigops": 0,
+    "fee": 111,
+    "status": {
+      "confirmed": false
+    }
+  }
+]

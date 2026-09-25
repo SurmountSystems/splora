@@ -1,0 +1,17 @@
+[
+  {
+    "id": "block-id-1",
+    "height": 100,
+    "version": 536870912,
+    "timestamp": 1600000000,
+    "tx_count": 12,
+    "size": 1500,
+    "weight": 4000,
+    "merkle_root": "merkle-root-1",
+    "previousblockhash": "prev-block-1",
+    "mediantime": 1599990000,
+    "nonce": 7,
+    "bits": 386604799,
+    "difficulty": 1.0
+  }
+]

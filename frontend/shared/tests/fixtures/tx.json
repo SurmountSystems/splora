@@ -1,0 +1,17 @@
+{
+  "txid": "tx-1",
+  "version": 2,
+  "locktime": 0,
+  "vin": [],
+  "vout": [],
+  "size": 180,
+  "weight": 720,
+  "sigops": 1,
+  "fee": 4500,
+  "status": {
+    "confirmed": true,
+    "block_height": 100,
+    "block_hash": "block-id-1",
+    "block_time": 1600000000
+  }
+}
