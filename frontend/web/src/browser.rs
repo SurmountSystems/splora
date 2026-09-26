@@ -184,6 +184,9 @@ async fn signed_fetch(
     let response: web_sys::Response = response_val
         .dyn_into()
         .map_err(|_| ClientError::RejectedEvent)?;
+    if !response.ok() {
+        return Err(ClientError::RejectedEvent);
+    }
     let text_promise = response.text().map_err(|_| ClientError::RejectedEvent)?;
     let text: JsValue = JsFuture::from(text_promise)
         .await

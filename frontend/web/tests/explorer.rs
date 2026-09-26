@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use splora_api::{Network, signet_is_backend};
-use splora_frontend_shared::{FeeEstimate, parse_block, parse_tx};
+use splora_frontend_shared::{parse_block, parse_tx};
 use splora_web::{
     ACCENT, BACKGROUND, ClientError, Nip98Signer, TEXT, UnsignedNip98, address_fields_text,
     address_path, address_requests, address_txs_path, block_fields_text, block_load_plan,
@@ -177,24 +177,116 @@ fn parses_block_tx_and_plain_tip() {
     let height = parse_blocks_tip_height(" 10 ").expect("tip height");
     assert_eq!(height, "10");
     assert_eq!(height.parse::<u64>().expect("height number"), 10);
-    let fees = parse_fee_estimates(r#"{"2":4.5,"1":8}"#).expect("fees");
+    let fees: splora_frontend_shared::wire::FeeEstimates =
+        parse_fee_estimates(r#"{"2":4.5,"1":8}"#).expect("fees");
+    let targets: Vec<u16> = fees.0.keys().copied().collect();
+    assert_eq!(targets, vec![1, 2]);
+    assert_eq!(fees.0.get(&1).copied(), Some(8.0));
+    assert_eq!(fees.0.get(&2).copied(), Some(4.5));
+}
+
+/// Screen parsers must return the shared wire types. A private lookalike
+/// struct does not match these function types, so this test does not compile
+/// if one of those parsers is put back.
+#[test]
+fn screen_parsers_return_shared_wire_structs() {
+    use splora_frontend_shared::ParseError;
+    use splora_frontend_shared::wire::{
+        AddressStats, Block, BroadcastResult, FeeEstimates, MempoolSummary, RecentTransaction,
+        TestTxResult, Transaction, Utxo,
+    };
+
+    let parse_block: fn(&str) -> Result<Block, ParseError> = splora_web::parse_block_json;
+    let parse_blocks: fn(&str) -> Result<Vec<Block>, ParseError> = splora_web::parse_blocks_json;
+    let parse_tx: fn(&str) -> Result<Transaction, ParseError> = splora_web::parse_transaction_json;
+    let parse_txs: fn(&str) -> Result<Vec<Transaction>, ParseError> =
+        splora_web::parse_transactions_json;
+    let parse_address: fn(&str) -> Result<AddressStats, ParseError> =
+        splora_web::parse_address_stats_json;
+    let parse_utxos: fn(&str) -> Result<Vec<Utxo>, ParseError> = splora_web::parse_utxos_json;
+    let parse_recent: fn(&str) -> Result<Vec<RecentTransaction>, ParseError> =
+        splora_web::parse_recent_transactions_json;
+    let parse_mempool: fn(&str) -> Result<MempoolSummary, ParseError> =
+        splora_web::parse_mempool_summary_json;
+    let parse_fees: fn(&str) -> Result<FeeEstimates, ParseError> = splora_web::parse_fee_estimates;
+    let parse_broadcast: fn(&str) -> Result<BroadcastResult, ParseError> =
+        splora_web::parse_broadcast_result_json;
+    let parse_test_txs: fn(&str) -> Result<Vec<TestTxResult>, ParseError> =
+        splora_web::parse_test_tx_results_json;
+
+    let block = parse_block(include_str!("../../shared/tests/fixtures/block.json")).expect("block");
+    assert_eq!(block.height, 100);
+    assert_eq!(block.merkle_root, "merkle-root-1");
+    assert_eq!(block.previous_block_hash.as_deref(), Some("prev-block-1"));
+
+    let blocks =
+        parse_blocks(include_str!("../../shared/tests/fixtures/blocks.json")).expect("blocks");
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].height, 100);
+    assert_eq!(blocks[0].id, block.id);
+
+    let tx = parse_tx(include_str!("../../shared/tests/fixtures/tx.json")).expect("transaction");
+    assert_eq!(tx.version, 2);
+    assert_eq!(tx.sigops, 1);
+    let status = tx.status.expect("status");
+    assert!(status.confirmed);
+    assert_eq!(status.block_height, Some(100));
+
+    let txs = parse_txs(include_str!("../../shared/tests/fixtures/tx.json")).expect_err("one tx");
+    let _ = txs;
+    let txs = parse_txs(&format!(
+        "[{}]",
+        include_str!("../../shared/tests/fixtures/tx.json")
+    ))
+    .expect("transactions");
+    assert_eq!(txs[0].status.as_ref().unwrap().block_height, Some(100));
+
+    let stats =
+        parse_address(include_str!("../../shared/tests/fixtures/address.json")).expect("address");
+    assert_eq!(stats.address.as_deref(), Some("xyz"));
+    assert_eq!(stats.chain_stats.funded_txo_sum, 500_000);
+    assert_eq!(stats.mempool_stats.tx_count, 3);
+
+    let utxos = parse_utxos(include_str!(
+        "../../shared/tests/fixtures/address_utxos.json"
+    ))
+    .expect("utxo");
+    assert!(utxos[0].status.confirmed);
+    assert_eq!(utxos[0].value, 42_000);
+
+    let recent = parse_recent(include_str!(
+        "../../shared/tests/fixtures/mempool_recent.json"
+    ))
+    .expect("recent");
+    assert_eq!(recent[0].txid, "recent-tx-1");
+    assert_eq!(recent[0].vsize, 141);
+
+    let summary = parse_mempool(
+        r#"{"count":2,"vsize":300,"total_fee":1500,"fee_histogram":[[10.5,200],[1,100]]}"#,
+    )
+    .expect("mempool");
+    assert_eq!(summary.count, 2);
+    assert_eq!(summary.total_fee, 1500);
+    assert_eq!(summary.fee_histogram, vec![(10.5, 200), (1.0, 100)]);
+
+    let estimates = parse_fees(r#"{"6":5,"1":12.5,"144":1}"#).expect("fees");
+    assert_eq!(estimates.0.get(&1).copied(), Some(12.5));
+    assert_eq!(estimates.0.get(&6).copied(), Some(5.0));
+    assert_eq!(estimates.0.get(&144).copied(), Some(1.0));
+
+    let broadcast = parse_broadcast(r#"{"txid":"broadcast-txid-1"}"#).expect("broadcast");
+    assert_eq!(broadcast.txid, "broadcast-txid-1");
+
+    let tested =
+        parse_test_txs(include_str!("../../shared/tests/fixtures/test_tx.json")).expect("test tx");
     assert_eq!(
-        fees,
-        vec![
-            FeeEstimate {
-                target: "1".to_string(),
-                rate: "8".to_string(),
-            },
-            FeeEstimate {
-                target: "2".to_string(),
-                rate: "4.5".to_string(),
-            },
-        ]
+        tested[0].reject_reason.as_deref(),
+        Some("min relay fee not met")
     );
-    assert_eq!(fees[0].target.parse::<u32>().expect("target"), 1);
-    assert_eq!(fees[0].rate.parse::<f64>().expect("rate"), 8.0);
-    assert_eq!(fees[1].target.parse::<u32>().expect("target"), 2);
-    assert_eq!(fees[1].rate.parse::<f64>().expect("rate"), 4.5);
+    let allowed = parse_test_txs(r#"[{"txid":"ok-tx","wtxid":"ok-wtxid","allowed":true}]"#)
+        .expect("optional reject-reason");
+    assert_eq!(allowed[0].allowed, Some(true));
+    assert_eq!(allowed[0].reject_reason, None);
 }
 
 #[test]
@@ -508,7 +600,7 @@ fn assert_electrs_gets(calls: &[splora_web::IndexerRequest]) {
 
 fn blocks_json() -> String {
     format!(
-        r#"[{{"id":"{BLOCK_HASH}","height":842001,"timestamp":1700000000,"tx_count":17,"size":1234,"weight":5678,"previousblockhash":"{BLOCK_PREV}"}},{{"id":"{BLOCK_PREV}","height":842000,"timestamp":1699990000,"tx_count":3,"size":100,"weight":400,"previousblockhash":"{TXID_A}"}}]"#
+        r#"[{{"id":"{BLOCK_HASH}","height":842001,"version":1,"timestamp":1700000000,"tx_count":17,"size":1234,"weight":5678,"merkle_root":"merkle","previousblockhash":"{BLOCK_PREV}","mediantime":1,"nonce":1,"bits":1,"difficulty":1}},{{"id":"{BLOCK_PREV}","height":842000,"version":1,"timestamp":1699990000,"tx_count":3,"size":100,"weight":400,"merkle_root":"merkle","previousblockhash":"{TXID_A}","mediantime":1,"nonce":1,"bits":1,"difficulty":1}}]"#
     )
 }
 
@@ -518,13 +610,13 @@ fn recent_json() -> String {
 
 fn block_json() -> String {
     format!(
-        r#"{{"id":"{BLOCK_HASH}","height":842001,"timestamp":1700000000,"tx_count":17,"size":1234,"weight":5678,"previousblockhash":"{BLOCK_PREV}"}}"#
+        r#"{{"id":"{BLOCK_HASH}","height":842001,"version":1,"timestamp":1700000000,"tx_count":17,"size":1234,"weight":5678,"merkle_root":"merkle","previousblockhash":"{BLOCK_PREV}","mediantime":1,"nonce":1,"bits":1,"difficulty":1}}"#
     )
 }
 
 fn txs_json() -> String {
     format!(
-        r#"[{{"txid":"{TXID_B}","fee":9,"size":200,"weight":800,"status":{{"confirmed":true,"block_height":842001,"block_hash":"{BLOCK_HASH}"}}}}]"#
+        r#"[{{"txid":"{TXID_B}","version":1,"locktime":0,"vin":[],"vout":[],"size":200,"weight":800,"sigops":0,"fee":9,"status":{{"confirmed":true,"block_height":842001,"block_hash":"{BLOCK_HASH}"}}}}]"#
     )
 }
 
@@ -627,7 +719,7 @@ fn transaction_page_loads_tx_and_renders_fields() {
     assert_eq!(electrs_paths(&calls), vec![format!("/tx/{TXID_A}")]);
     assert_electrs_gets(&calls);
     let body = format!(
-        r#"{{"txid":"{TXID_A}","version":2,"locktime":0,"size":111,"weight":444,"fee":9,"status":{{"confirmed":false}}}}"#
+        r#"{{"txid":"{TXID_A}","version":2,"locktime":0,"vin":[],"vout":[],"size":111,"weight":444,"sigops":0,"fee":9,"status":{{"confirmed":false}}}}"#
     );
     let text = transaction_fields_text(&body);
     assert!(
@@ -660,7 +752,7 @@ fn address_page_loads_stats_txs_utxo_and_renders_fields() {
     assert_electrs_gets(&calls);
     let stats = r#"{"address":"bc1qexample","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0}}"#;
     let txs = format!(
-        r#"[{{"txid":"{TXID_A}","fee":7,"size":50,"weight":200,"status":{{"confirmed":false}}}}]"#
+        r#"[{{"txid":"{TXID_A}","version":1,"locktime":0,"vin":[],"vout":[],"size":50,"weight":200,"sigops":0,"fee":7,"status":{{"confirmed":false}}}}]"#
     );
     let utxo = format!(
         r#"[{{"txid":"{TXID_B}","vout":1,"value":42000,"status":{{"confirmed":true,"block_height":842001}}}}]"#
@@ -694,14 +786,19 @@ fn multi_address_loads_each_address_and_renders_fields() {
     let calls = multi_address_screen_requests(&["bc1qone".to_string(), "bc1qtwo".to_string()]);
     assert_eq!(
         electrs_paths(&calls),
-        vec!["/address/bc1qone", "/address/bc1qtwo"]
+        vec![
+            "/address/bc1qone",
+            "/address/bc1qone/utxo",
+            "/address/bc1qtwo",
+            "/address/bc1qtwo/utxo",
+        ]
     );
     assert_electrs_gets(&calls);
     assert!(calls.iter().all(|call| !call.path.ends_with("/txs")));
-    assert!(calls.iter().all(|call| !call.path.ends_with("/utxo")));
+    assert!(calls.iter().any(|call| call.path.ends_with("/utxo")));
     assert!(calls.iter().all(|call| !call.path.contains("/wallet/")));
-    let one = r#"{"address":"bc1qone","chain_stats":{"tx_count":2,"funded_txo_sum":5000},"mempool_stats":{"tx_count":0}}"#;
-    let two = r#"{"address":"bc1qtwo","chain_stats":{"tx_count":1,"funded_txo_sum":77},"mempool_stats":{"tx_count":0}}"#;
+    let one = r#"{"address":"bc1qone","chain_stats":{"tx_count":2,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":5000,"spent_txo_sum":0},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+    let two = r#"{"address":"bc1qtwo","chain_stats":{"tx_count":1,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":77,"spent_txo_sum":0},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
     let text = multi_address_fields_text(&[
         ("/address/bc1qone".to_string(), one.to_string()),
         ("/address/bc1qtwo".to_string(), two.to_string()),
@@ -715,6 +812,24 @@ fn multi_address_loads_each_address_and_renders_fields() {
     assert!(src.contains("multi_address_screen_requests"));
     assert!(src.contains("multi_address_fields_text"));
     assert!(src.contains("entered_addresses"));
+}
+
+#[test]
+fn multi_address_renders_each_utxo_value() {
+    let one = r#"{"address":"bc1qone","chain_stats":{"tx_count":2,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":5000,"spent_txo_sum":0},"mempool_stats":{"tx_count":1,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+    let utxo = format!(
+        r#"[{{"txid":"{TXID_B}","vout":1,"value":8675309,"status":{{"confirmed":true}}}},{{"txid":"{TXID_A}","vout":0,"value":424242,"status":{{"confirmed":false}}}}]"#
+    );
+    let text = multi_address_fields_text(&[
+        ("/address/bc1qone".to_string(), one.to_string()),
+        ("/address/bc1qone/utxo".to_string(), utxo),
+    ]);
+    assert!(text.contains("8675309"), "{text}");
+    assert!(text.contains("424242"), "{text}");
+    assert!(text.contains("address bc1qone"), "{text}");
+    assert!(text.contains("chain_tx_count 2"), "{text}");
+    assert!(text.contains("funded_txo_sum 5000"), "{text}");
+    assert!(text.contains("mempool_tx_count 1"), "{text}");
 }
 
 #[test]
@@ -931,7 +1046,7 @@ fn view_guard_transaction_keeps_tx_path_and_fields() {
     assert_view_slice("TransactionPage", "AddressPage");
     assert_view_calls("TransactionPage", &["tx_path(", "transaction_fields_text("]);
     let body = format!(
-        r#"{{"txid":"{TXID_A}","version":2,"locktime":0,"size":111,"weight":444,"fee":9,"status":{{"confirmed":true,"block_height":842001}}}}"#
+        r#"{{"txid":"{TXID_A}","version":2,"locktime":0,"vin":[],"vout":[],"size":111,"weight":444,"sigops":0,"fee":9,"status":{{"confirmed":true,"block_height":842001}}}}"#
     );
     let text = transaction_fields_text(&body);
     assert_rendered(&text, &format!("txid {TXID_A} confirmed true"));
@@ -955,7 +1070,7 @@ fn view_guard_address_keeps_stats_txs_utxo_fields() {
     );
     let stats = r#"{"address":"bc1qexample","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0}}"#;
     let txs = format!(
-        r#"[{{"txid":"{TXID_A}","fee":7,"size":50,"weight":200,"status":{{"confirmed":true,"block_height":842001}}}}]"#
+        r#"[{{"txid":"{TXID_A}","version":1,"locktime":0,"vin":[],"vout":[],"size":50,"weight":200,"sigops":0,"fee":7,"status":{{"confirmed":true,"block_height":842001}}}}]"#
     );
     let utxo = format!(
         r#"[{{"txid":"{TXID_B}","vout":1,"value":42000,"status":{{"confirmed":true,"block_height":842001}}}}]"#
@@ -988,8 +1103,8 @@ fn view_guard_multi_address_keeps_address_path_and_fields() {
             "entered_addresses(",
         ],
     );
-    let one = r#"{"address":"bc1qone","chain_stats":{"tx_count":2,"funded_txo_sum":5000},"mempool_stats":{"tx_count":0}}"#;
-    let two = r#"{"address":"bc1qtwo","chain_stats":{"tx_count":1,"funded_txo_sum":77},"mempool_stats":{"tx_count":0}}"#;
+    let one = r#"{"address":"bc1qone","chain_stats":{"tx_count":2,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":5000,"spent_txo_sum":0},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+    let two = r#"{"address":"bc1qtwo","chain_stats":{"tx_count":1,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":77,"spent_txo_sum":0},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
     let text = multi_address_fields_text(&[
         ("/address/bc1qone".to_string(), one.to_string()),
         ("/address/bc1qtwo".to_string(), two.to_string()),
@@ -1136,4 +1251,277 @@ fn view_guard_docs_keeps_compiled_copy() {
         );
         assert!(!code_has_call(body, ".want("), "{name} opens a websocket");
     }
+}
+
+fn collect_omitted(screen: &str, text: &str, fields: &[&str], omitted: &mut Vec<String>) {
+    for field in fields {
+        if !text.contains(field) {
+            omitted.push(format!("{screen} omitted {field}"));
+        }
+    }
+}
+
+/// Each ship-in-v1 view has to show the named indexer fields its shared wire
+/// struct actually carries. A missing label fails this test.
+#[test]
+fn ship_in_v1_views_render_readable_indexer_fields() {
+    let block = include_str!("../../shared/tests/fixtures/block.json");
+    let blocks = include_str!("../../shared/tests/fixtures/blocks.json");
+    let recent = include_str!("../../shared/tests/fixtures/mempool_recent.json");
+    let tx = include_str!("../../shared/tests/fixtures/tx.json");
+    let block_txs = include_str!("../../shared/tests/fixtures/block_txs.json");
+    let address = include_str!("../../shared/tests/fixtures/address.json");
+    let address_txs = include_str!("../../shared/tests/fixtures/address_txs.json");
+    let utxos = include_str!("../../shared/tests/fixtures/address_utxos.json");
+    let tested = include_str!("../../shared/tests/fixtures/test_tx.json");
+    let mut omitted = Vec::new();
+
+    let dashboard = dashboard_fields_text(blocks, recent);
+    collect_omitted(
+        "dashboard",
+        &dashboard,
+        &[
+            "height 100",
+            "hash block-id-1",
+            "tx_count 12",
+            "timestamp 1600000000",
+            "median_time 1599990000",
+            "txid recent-tx-1",
+            "fee 800",
+            "value 99000",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "dashboard view",
+        view_fn_body("Dashboard"),
+        &[
+            "dashboard_fields_text(",
+            "dashboard_tip_fees_text(",
+            "mempool_summary_text(",
+            "fee_estimates_path(",
+            "mempool_path(",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "dashboard fee estimates",
+        view_fn_body("dashboard_tip_fees_text"),
+        &["fee target", "rate "],
+        &mut omitted,
+    );
+    collect_omitted(
+        "dashboard mempool count",
+        view_fn_body("mempool_summary_text"),
+        &["mempool count"],
+        &mut omitted,
+    );
+
+    let blocks_text = blocks_list_fields_text(blocks);
+    collect_omitted(
+        "blocks",
+        &blocks_text,
+        &[
+            "height 100",
+            "hash block-id-1",
+            "tx_count 12",
+            "timestamp 1600000000",
+            "median_time 1599990000",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "blocks view",
+        view_fn_body("BlocksPage"),
+        &["blocks_list_fields_text("],
+        &mut omitted,
+    );
+
+    let block_text = block_fields_text(block, block_txs);
+    collect_omitted(
+        "block",
+        &block_text,
+        &[
+            "height 100",
+            "hash block-id-1",
+            "tx_count 12",
+            "timestamp 1600000000",
+            "median_time 1599990000",
+            "txid block-tx-1",
+            "fee 3000",
+            "block_hash block-id-1",
+            "block_time 1600000000",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "block view",
+        view_fn_body("BlockPage"),
+        &["block_fields_text("],
+        &mut omitted,
+    );
+
+    let tx_text = transaction_fields_text(tx);
+    collect_omitted(
+        "transaction",
+        &tx_text,
+        &[
+            "txid tx-1",
+            "fee 4500",
+            "block_height 100",
+            "block_hash block-id-1",
+            "block_time 1600000000",
+        ],
+        &mut omitted,
+    );
+    let tx_with_address = r#"{
+        "txid":"tx-addr",
+        "version":2,
+        "locktime":0,
+        "vin":[{
+            "txid":"prev",
+            "vout":0,
+            "prevout":{
+                "scriptpubkey":"0014aa",
+                "scriptpubkey_asm":"OP_0",
+                "scriptpubkey_type":"v0_p2wpkh",
+                "scriptpubkey_address":"bc1qinput",
+                "value":610677
+            },
+            "scriptsig":"",
+            "scriptsig_asm":"",
+            "is_coinbase":false,
+            "sequence":4294967295
+        }],
+        "vout":[{
+            "scriptpubkey":"76a914bb88ac",
+            "scriptpubkey_asm":"OP_DUP",
+            "scriptpubkey_type":"p2pkh",
+            "scriptpubkey_address":"bc1qperson",
+            "value":344697
+        }],
+        "size":224,
+        "weight":572,
+        "sigops":1,
+        "fee":584,
+        "status":{"confirmed":true,"block_height":800000,"block_hash":"block-id-1","block_time":1600000000}
+    }"#;
+    let tx_address_text = transaction_fields_text(tx_with_address);
+    collect_omitted(
+        "transaction",
+        &tx_address_text,
+        &[
+            "address bc1qinput",
+            "value 610677",
+            "address bc1qperson",
+            "value 344697",
+            "fee 584",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "transaction view",
+        view_fn_body("TransactionPage"),
+        &["transaction_fields_text("],
+        &mut omitted,
+    );
+
+    let address_text = address_fields_text(address, address_txs, utxos);
+    collect_omitted(
+        "address",
+        &address_text,
+        &[
+            "address xyz",
+            "chain_tx_count 9",
+            "funded_txo_sum 500000",
+            "mempool_tx_count 3",
+            "mempool_funded_txo_sum 2500",
+            "txid addr-tx-1",
+            "fee 111",
+            "utxo utxo-tx-1",
+            "value 42000",
+            "block_height 100",
+            "block_hash block-id-1",
+            "block_time 1600000000",
+        ],
+        &mut omitted,
+    );
+    let scripthash = r#"{"scripthash":"abcd","chain_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":10,"spent_txo_sum":0},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+    collect_omitted(
+        "address",
+        &address_fields_text(scripthash, "", ""),
+        &["scripthash abcd", "funded_txo_sum 10"],
+        &mut omitted,
+    );
+    collect_omitted(
+        "address view",
+        view_fn_body("AddressPage"),
+        &["address_fields_text("],
+        &mut omitted,
+    );
+
+    let multi = multi_address_fields_text(&[
+        ("/address/xyz".to_string(), address.to_string()),
+        ("/address/abcd".to_string(), scripthash.to_string()),
+    ]);
+    collect_omitted(
+        "multi-address",
+        &multi,
+        &[
+            "address xyz",
+            "funded_txo_sum 500000",
+            "mempool_tx_count 3",
+            "mempool_funded_txo_sum 2500",
+            "scripthash abcd",
+            "funded_txo_sum 10",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "multi-address view",
+        view_fn_body("MultiAddressPage"),
+        &["multi_address_fields_text("],
+        &mut omitted,
+    );
+
+    let broadcast = broadcast_fields_text(r#"{"txid":"broadcast-txid-1"}"#);
+    collect_omitted(
+        "broadcast",
+        &broadcast,
+        &["txid broadcast-txid-1"],
+        &mut omitted,
+    );
+    collect_omitted(
+        "broadcast view",
+        view_fn_body("BroadcastPage"),
+        &["broadcast_fields_text"],
+        &mut omitted,
+    );
+
+    let test_text = test_transactions_fields_text(tested);
+    collect_omitted(
+        "test transactions",
+        &test_text,
+        &[
+            "txid test-tx-1",
+            "allowed false",
+            "fee base 0.00001",
+            "effective-feerate 1",
+            "effective-includes test-tx-1",
+            "reject-reason min relay fee not met",
+        ],
+        &mut omitted,
+    );
+    collect_omitted(
+        "test transactions view",
+        view_fn_body("TestTransactionsPage"),
+        &["test_transactions_fields_text"],
+        &mut omitted,
+    );
+
+    assert!(
+        omitted.is_empty(),
+        "views omitted readable indexer fields:\n{}",
+        omitted.join("\n")
+    );
 }

@@ -2,13 +2,10 @@
 
 use splora_api::{Network, api_prefix, api_root};
 use splora_frontend_shared::{
-    Block, Tx, address_path, address_txs_path, address_utxo_path, block_height_path, block_path,
-    block_txids_path, block_txs_path, block_txs_start_index_path, blocks_path,
+    BlockRow, TxRow, address_path, address_txs_path, address_utxo_path, block_height_path,
+    block_path, block_txids_path, block_txs_path, block_txs_start_index_path, blocks_path,
     blocks_start_height_path, broadcast_path, fee_estimates_path, mempool_path,
-    mempool_recent_path, parse_address, parse_address_txs, parse_address_utxos, parse_block,
-    parse_block_height, parse_block_txids, parse_block_txs, parse_blocks, parse_broadcast,
-    parse_fee_estimates, parse_mempool, parse_mempool_recent, parse_test_txs, parse_tx,
-    test_txs_path, tx_path,
+    mempool_recent_path, parse_block_height, parse_block_txids, test_txs_path, tx_path,
 };
 
 use crate::api::{ClientError, ClientRequest, ExplorerClient, ExplorerGet, ExplorerPost};
@@ -178,6 +175,7 @@ pub struct Dashboard {
     pub tip_height: String,
     pub tip_hash: String,
     lines: String,
+    rows: Vec<String>,
 }
 
 impl Dashboard {
@@ -186,6 +184,7 @@ impl Dashboard {
             tip_height: String::new(),
             tip_hash: String::new(),
             lines: String::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -256,6 +255,9 @@ impl Dashboard {
         let recent_lines = render_recent(&recent_body)?;
         let fee_lines = render_fee_estimates(&fees_body)?;
         let summary_lines = render_mempool_summary(&summary_body)?;
+        let mut rows = block_row_lines(&blocks_body)?;
+        rows.extend(recent_row_lines(&recent_body)?);
+        self.rows = rows;
         self.lines = format!("{block_lines}\n{recent_lines}\n{fee_lines}\n{summary_lines}");
         Ok(())
     }
@@ -282,6 +284,7 @@ pub struct BlockScreen {
     /// Empty means the block screen does not call the paged txs route.
     pub start_index: String,
     pub body: String,
+    rows: Vec<String>,
 }
 
 impl BlockScreen {
@@ -290,6 +293,7 @@ impl BlockScreen {
             query: String::new(),
             start_index: String::new(),
             body: String::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -301,6 +305,7 @@ impl BlockScreen {
     /// A numeric start index that is a multiple of 25 also GETs `/block/:hash/txs/:start_index`.
     /// All-digit id: GET `/block-height/:height`, then those hash routes.
     pub fn load<G: ExplorerGet>(&mut self, client: &ExplorerClient<G>) -> Result<(), ClientError> {
+        self.rows.clear();
         let mut lines = Vec::new();
         let hash = if is_numeric_id(&self.query) {
             let height: u64 = self.query.parse().map_err(|_| ClientError::BadPath)?;
@@ -310,10 +315,13 @@ impl BlockScreen {
                 return Err(ClientError::BadPath);
             }
             let hash = parse_block_height(&body).map_err(http_parse)?;
+            lines.push(format!("block-height {} hash {hash}", self.query));
             if !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                // Shared block-height text is not always hex. Keep the field on screen.
+                self.body = lines.join("\n");
+                self.rows.clear();
                 return Err(ClientError::Http("block height hash".into()));
             }
-            lines.push(format!("block-height {} hash {hash}", self.query));
             hash
         } else if self.query.is_empty() || self.query.contains('/') {
             return Err(ClientError::BadPath);
@@ -326,12 +334,14 @@ impl BlockScreen {
             return Err(ClientError::BadPath);
         }
         lines.push(render_block_value(&block_body)?);
+        let mut rows = vec![one_block_row(&block_body)?];
         let txs_route = block_txs_path(&hash);
         let (txs_request, txs_body) = client.get_path(&txs_route)?;
         if txs_request.method != "GET" || txs_request.path != txs_route {
             return Err(ClientError::BadPath);
         }
         let txs = render_tx_list(&txs_body)?;
+        rows.extend(transaction_row_lines(&txs_body)?);
         if !txs.is_empty() {
             lines.push(txs);
         }
@@ -358,10 +368,12 @@ impl BlockScreen {
                 return Err(ClientError::BadPath);
             }
             let page = render_tx_list(&page_body)?;
+            rows.extend(transaction_row_lines(&page_body)?);
             if !page.is_empty() {
                 lines.push(page);
             }
         }
+        self.rows = rows;
         self.body = lines.join("\n");
         Ok(())
     }
@@ -386,6 +398,7 @@ impl Default for BlockScreen {
 pub struct BlocksScreen {
     pub start_height: String,
     pub body: String,
+    rows: Vec<String>,
 }
 
 impl BlocksScreen {
@@ -412,6 +425,7 @@ impl BlocksScreen {
             return Err(ClientError::BadPath);
         }
         self.body = render_block_list(&body)?;
+        self.rows = block_row_lines(&body)?;
         Ok(())
     }
 
@@ -425,6 +439,7 @@ impl BlocksScreen {
 pub struct TxScreen {
     pub txid: String,
     pub body: String,
+    rows: Vec<String>,
 }
 
 impl TxScreen {
@@ -432,6 +447,7 @@ impl TxScreen {
         Self {
             txid: String::new(),
             body: String::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -449,6 +465,7 @@ impl TxScreen {
             return Err(ClientError::BadPath);
         }
         self.body = render_one_tx(&body)?;
+        self.rows = vec![one_transaction_row(&body)?];
         Ok(())
     }
 
@@ -472,6 +489,7 @@ impl Default for TxScreen {
 pub struct AddressScreen {
     pub address: String,
     pub body: String,
+    rows: Vec<String>,
 }
 
 impl AddressScreen {
@@ -479,6 +497,7 @@ impl AddressScreen {
         Self {
             address: String::new(),
             body: String::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -507,14 +526,18 @@ impl AddressScreen {
             return Err(ClientError::BadPath);
         }
         let mut lines = vec![render_address_stats(&stats_body)?];
+        let mut rows = vec![address_funded_row(&stats_body)?];
         let txs = render_address_txs(&txs_body)?;
+        rows.extend(transaction_row_lines(&txs_body)?);
         if !txs.is_empty() {
             lines.push(txs);
         }
         let utxos = render_utxos(&utxo_body)?;
+        rows.extend(utxo_value_rows(&utxo_body)?);
         if !utxos.is_empty() {
             lines.push(utxos);
         }
+        self.rows = rows;
         self.body = lines.join("\n");
         Ok(())
     }
@@ -534,16 +557,18 @@ impl Default for AddressScreen {
     }
 }
 
-/// Recent mempool entries.
+/// Mempool backlog and recent entries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MempoolScreen {
     pub body: String,
+    rows: Vec<String>,
 }
 
 impl MempoolScreen {
     pub fn new() -> Self {
         Self {
             body: String::new(),
+            rows: Vec::new(),
         }
     }
 
@@ -551,13 +576,22 @@ impl MempoolScreen {
         format!("mempool: {}", self.body)
     }
 
+    /// GET `/mempool` and GET `/mempool/recent`.
     pub fn load<G: ExplorerGet>(&mut self, client: &ExplorerClient<G>) -> Result<(), ClientError> {
-        let path = mempool_recent_path();
-        let (request, body) = client.get_path(path)?;
-        if request.method != "GET" || request.path != path {
+        let summary_route = mempool_path();
+        let (summary, summary_body) = client.get_path(summary_route)?;
+        if summary.method != "GET" || summary.path != summary_route {
             return Err(ClientError::BadPath);
         }
-        self.body = render_recent(&body)?;
+        let recent_route = mempool_recent_path();
+        let (recent, recent_body) = client.get_path(recent_route)?;
+        if recent.method != "GET" || recent.path != recent_route {
+            return Err(ClientError::BadPath);
+        }
+        let summary_lines = render_mempool_summary(&summary_body)?;
+        let recent_lines = render_recent(&recent_body)?;
+        self.rows = recent_row_lines(&recent_body)?;
+        self.body = format!("{summary_lines}\n{recent_lines}");
         Ok(())
     }
 
@@ -584,13 +618,15 @@ pub fn split_addresses(input: &str) -> Vec<&str> {
         .collect()
 }
 
-/// One `GET /address/:script` per entered address. No batch endpoint.
+/// One `GET /address/:script` and one `GET /address/:script/utxo` per entered address.
+/// No batch endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MultiAddressScreen {
     pub input: String,
     pub bodies: Vec<String>,
     pub requests: Vec<ClientRequest>,
     field_lines: String,
+    rows: Vec<String>,
 }
 
 impl MultiAddressScreen {
@@ -622,9 +658,10 @@ impl MultiAddressScreen {
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let mut bodies = Vec::with_capacity(entered.len());
-        let mut requests = Vec::with_capacity(entered.len());
-        let mut field_lines = Vec::with_capacity(entered.len());
+        let mut bodies = Vec::with_capacity(entered.len() * 2);
+        let mut requests = Vec::with_capacity(entered.len() * 2);
+        let mut field_lines = Vec::with_capacity(entered.len() * 2);
+        let mut rows = Vec::new();
         for address in &entered {
             let (request, body) = client.fetch_address(address)?;
             let expected = address_path(address);
@@ -632,14 +669,35 @@ impl MultiAddressScreen {
                 return Err(ClientError::BadPath);
             }
             match render_address_stats(&body) {
-                Ok(line) => field_lines.push(line),
+                Ok(line) => {
+                    field_lines.push(line);
+                    rows.push(address_funded_row(&body)?);
+                }
                 Err(_) => field_lines.push(body.clone()),
             }
+            let utxo_path = address_utxo_path(address);
+            let (utxo_request, utxo_body) = client.get_path(&utxo_path)?;
+            if utxo_request.method != "GET" || utxo_request.path != utxo_path {
+                return Err(ClientError::BadPath);
+            }
+            let utxos = render_utxos(&utxo_body)?;
+            rows.extend(utxo_value_rows(&utxo_body)?);
+            if !utxos.is_empty() {
+                let labeled = utxos
+                    .lines()
+                    .map(|line| format!("address {address} {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                field_lines.push(labeled);
+            }
             requests.push(request);
+            requests.push(utxo_request);
             bodies.push(body);
+            bodies.push(utxo_body);
         }
         self.requests = requests;
         self.bodies = bodies;
+        self.rows = rows;
         self.field_lines = field_lines.join("\n");
         Ok(())
     }
@@ -696,10 +754,7 @@ impl BroadcastScreen {
             .is_some_and(|request| request.method == "POST" && request.path == broadcast_path())
             && !self.result.is_empty()
         {
-            match parse_broadcast(&self.result) {
-                Ok(txid) => format!("broadcast txid {txid}"),
-                Err(_) => self.summary(),
-            }
+            render_broadcast_result(&self.result).unwrap_or_else(|_| self.summary())
         } else {
             self.summary()
         }
@@ -816,7 +871,7 @@ const PRIVACY: &str = "\
 The first screen shows your public npub and has no private-key field. \
 The nostr secret is not typed into that popup. \
 Address, block, transaction, and mempool views send only the lookup you asked for to the indexer. \
-A multi-address lookup sends one address request per address you enter. \
+A multi-address lookup sends one address request and one UTXO request per address you enter. \
 Broadcast sends the raw transaction hex you entered. \
 Test transactions send the raw transaction hex list you entered. \
 Terms, privacy, trademark, and docs are local text in this app. \
@@ -839,6 +894,7 @@ A transaction is a GET of /tx/ and then the transaction id. \
 An address is a GET of /address/ and then the script or address. \
 Recent mempool entries are a GET of /mempool/recent. \
 Multi-address reads each entered address with its own GET of /address/ and then that address. \
+It also reads each address UTXO list with GET /address/ and then that address and /utxo. \
 It does not use a batch endpoint. \
 Broadcast is a POST of /tx. The body is the raw transaction hex, as text. \
 Test transactions are a POST of /txs/test. \
@@ -979,21 +1035,40 @@ fn is_numeric_id(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn render_block_line(block: &Block) -> String {
+fn yes_no(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
+}
+
+fn height_text(height: Option<u64>) -> String {
+    height.map(|value| value.to_string()).unwrap_or_default()
+}
+
+/// Decimal text for a JSON number. Whole values stay integers (`3`, not `3.0`).
+fn plain_number(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
+fn render_block_line(block: &splora_frontend_shared::wire::Block) -> String {
     format!(
-        "block hash {} height {} tx_count {} timestamp {} size {} weight {} previous_hash {}",
+        "block hash {} height {} tx_count {} timestamp {} size {} weight {} previous_hash {} median_time {}",
         block.id,
         block.height,
         block.tx_count,
         block.timestamp,
         block.size,
         block.weight,
-        block.previous_hash
+        block.previous_block_hash.as_deref().unwrap_or(""),
+        block.median_time
     )
 }
 
 fn render_block_list(body: &str) -> Result<String, ClientError> {
-    let rows = parse_blocks(body).map_err(http_parse)?;
+    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Block>>(body)
+        .map_err(http_parse)?;
     if rows.is_empty() {
         return Ok("blocks:".to_string());
     }
@@ -1005,12 +1080,93 @@ fn render_block_list(body: &str) -> Result<String, ClientError> {
 }
 
 fn render_block_value(body: &str) -> Result<String, ClientError> {
-    let block = parse_block(body).map_err(http_parse)?;
+    let block =
+        serde_json::from_str::<splora_frontend_shared::wire::Block>(body).map_err(http_parse)?;
     Ok(render_block_line(&block))
 }
 
+/// One row per block. Height, hash (`BlockRow.id`), tx count, and time.
+/// Not the flat field sentence.
+fn paint_block_row(row: &BlockRow) -> String {
+    format!(
+        "row block height {} hash {} tx_count {} time {}",
+        row.height, row.id, row.tx_count, row.timestamp
+    )
+}
+
+fn paint_tx_row(row: &TxRow) -> String {
+    format!("row tx txid {} fee {}", row.txid, row.fee)
+}
+
+fn block_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
+    let blocks = serde_json::from_str::<Vec<splora_frontend_shared::wire::Block>>(body)
+        .map_err(http_parse)?;
+    Ok(blocks
+        .into_iter()
+        .map(|block| paint_block_row(&BlockRow::from(block)))
+        .collect())
+}
+
+fn one_block_row(body: &str) -> Result<String, ClientError> {
+    let block =
+        serde_json::from_str::<splora_frontend_shared::wire::Block>(body).map_err(http_parse)?;
+    Ok(paint_block_row(&BlockRow::from(block)))
+}
+
+/// Recent mempool entries carry txid and fee. They have no block height.
+fn tx_row_from_recent(tx: splora_frontend_shared::wire::RecentTransaction) -> TxRow {
+    TxRow {
+        txid: tx.txid,
+        fee: tx.fee,
+        block_height: None,
+    }
+}
+
+fn recent_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
+    let txs = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(body)
+        .map_err(http_parse)?;
+    Ok(txs
+        .into_iter()
+        .map(|tx| paint_tx_row(&tx_row_from_recent(tx)))
+        .collect())
+}
+
+fn transaction_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
+    let txs = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
+        .map_err(http_parse)?;
+    Ok(txs
+        .into_iter()
+        .map(|tx| paint_tx_row(&TxRow::from(tx)))
+        .collect())
+}
+
+fn one_transaction_row(body: &str) -> Result<String, ClientError> {
+    let tx = serde_json::from_str::<splora_frontend_shared::wire::Transaction>(body)
+        .map_err(http_parse)?;
+    Ok(paint_tx_row(&TxRow::from(tx)))
+}
+
+fn utxo_value_rows(body: &str) -> Result<Vec<String>, ClientError> {
+    let utxos =
+        serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body).map_err(http_parse)?;
+    Ok(utxos
+        .iter()
+        .map(|utxo| format!("row utxo value {}", utxo.value))
+        .collect())
+}
+
+fn address_funded_row(body: &str) -> Result<String, ClientError> {
+    let stats = serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body)
+        .map_err(http_parse)?;
+    Ok(format!(
+        "row address funded_sum {}",
+        stats.chain_stats.funded_txo_sum
+    ))
+}
+
 fn render_recent(body: &str) -> Result<String, ClientError> {
-    let rows = parse_mempool_recent(body).map_err(http_parse)?;
+    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(body)
+        .map_err(http_parse)?;
     if rows.is_empty() {
         return Ok("recent:".to_string());
     }
@@ -1027,25 +1183,31 @@ fn render_recent(body: &str) -> Result<String, ClientError> {
 }
 
 fn render_fee_estimates(body: &str) -> Result<String, ClientError> {
-    let rows = parse_fee_estimates(body).map_err(http_parse)?;
-    if rows.is_empty() {
+    let estimates = serde_json::from_str::<splora_frontend_shared::wire::FeeEstimates>(body)
+        .map_err(http_parse)?;
+    if estimates.0.is_empty() {
         return Ok("fee:".to_string());
     }
-    Ok(rows
+    Ok(estimates
+        .0
         .iter()
-        .map(|row| format!("fee target {} rate {}", row.target, row.rate))
+        .map(|(target, rate)| format!("fee target {target} rate {}", plain_number(*rate)))
         .collect::<Vec<_>>()
         .join("\n"))
 }
 
 fn render_mempool_summary(body: &str) -> Result<String, ClientError> {
-    let stats = parse_mempool(body).map_err(http_parse)?;
+    let stats = serde_json::from_str::<splora_frontend_shared::wire::MempoolSummary>(body)
+        .map_err(http_parse)?;
     let mut lines = vec![format!(
         "mempool count {} vsize {} total_fee {}",
         stats.count, stats.vsize, stats.total_fee
     )];
     for (rate, vsize) in stats.fee_histogram {
-        lines.push(format!("fee_histogram {rate} {vsize}"));
+        lines.push(format!(
+            "fee_histogram {} {vsize}",
+            plain_number(f64::from(rate))
+        ));
     }
     Ok(lines.join("\n"))
 }
@@ -1062,15 +1224,63 @@ fn render_txids(body: &str) -> Result<String, ClientError> {
         .join("\n"))
 }
 
-fn render_tx_row(tx: &Tx) -> String {
-    format!(
-        "tx txid {} fee {} confirmed {} block_height {} size {} weight {}",
-        tx.txid, tx.fee, tx.confirmed, tx.block_height, tx.size, tx.weight
-    )
+fn tx_confirmed_and_height(
+    tx: &splora_frontend_shared::wire::Transaction,
+) -> (&'static str, String) {
+    match tx.status.as_ref() {
+        Some(status) => (yes_no(status.confirmed), height_text(status.block_height)),
+        None => ("false", String::new()),
+    }
+}
+
+fn block_hash_and_time(status: Option<&splora_frontend_shared::wire::TxStatus>) -> String {
+    match status {
+        Some(status) => format!(
+            " block_hash {} block_time {}",
+            status.block_hash.as_deref().unwrap_or(""),
+            status
+                .block_time
+                .map(|time| time.to_string())
+                .unwrap_or_default()
+        ),
+        None => " block_hash  block_time ".to_string(),
+    }
+}
+
+fn render_tx_parties(tx: &splora_frontend_shared::wire::Transaction) -> Vec<String> {
+    let mut lines = Vec::new();
+    for input in &tx.vin {
+        if let Some(prevout) = &input.prevout {
+            let address = prevout.script_pubkey_address.as_deref().unwrap_or("");
+            lines.push(format!("input address {address} value {}", prevout.value));
+        }
+    }
+    for output in &tx.vout {
+        let address = output.script_pubkey_address.as_deref().unwrap_or("");
+        lines.push(format!("output address {address} value {}", output.value));
+    }
+    lines
+}
+
+fn render_tx_row(tx: &splora_frontend_shared::wire::Transaction) -> String {
+    let (confirmed, block_height) = tx_confirmed_and_height(tx);
+    let mut lines = vec![format!(
+        "tx txid {} fee {} confirmed {} block_height {} size {} weight {}{}",
+        tx.txid,
+        tx.fee,
+        confirmed,
+        block_height,
+        tx.size,
+        tx.weight,
+        block_hash_and_time(tx.status.as_ref())
+    )];
+    lines.extend(render_tx_parties(tx));
+    lines.join("\n")
 }
 
 fn render_tx_list(body: &str) -> Result<String, ClientError> {
-    let rows = parse_block_txs(body).map_err(http_parse)?;
+    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
+        .map_err(http_parse)?;
     if rows.is_empty() {
         return Ok(String::new());
     }
@@ -1082,58 +1292,118 @@ fn render_tx_list(body: &str) -> Result<String, ClientError> {
 }
 
 fn render_one_tx(body: &str) -> Result<String, ClientError> {
-    let tx = parse_tx(body).map_err(http_parse)?;
+    let tx = serde_json::from_str::<splora_frontend_shared::wire::Transaction>(body)
+        .map_err(http_parse)?;
     Ok(render_tx_row(&tx))
 }
 
 fn render_address_stats(body: &str) -> Result<String, ClientError> {
-    let stats = parse_address(body).map_err(http_parse)?;
+    let stats = serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body)
+        .map_err(http_parse)?;
+    let address = stats
+        .address
+        .as_deref()
+        .or(stats.scripthash.as_deref())
+        .unwrap_or("");
     Ok(format!(
-        "address {} chain_tx_count {} funded_sum {} mempool_tx_count {}",
-        stats.address, stats.chain_tx_count, stats.funded_sum, stats.mempool_tx_count
+        "address {} chain_tx_count {} funded_sum {} mempool_tx_count {} mempool_funded_sum {}",
+        address,
+        stats.chain_stats.tx_count,
+        stats.chain_stats.funded_txo_sum,
+        stats.mempool_stats.tx_count,
+        stats.mempool_stats.funded_txo_sum
     ))
 }
 
 fn render_address_txs(body: &str) -> Result<String, ClientError> {
-    let rows = parse_address_txs(body).map_err(http_parse)?;
+    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
+        .map_err(http_parse)?;
     Ok(rows
         .iter()
         .map(|tx| {
-            format!(
-                "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}",
-                tx.txid, tx.confirmed, tx.block_height, tx.fee, tx.size, tx.weight
-            )
+            let (confirmed, block_height) = tx_confirmed_and_height(tx);
+            let mut lines = vec![format!(
+                "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}{}",
+                tx.txid,
+                confirmed,
+                block_height,
+                tx.fee,
+                tx.size,
+                tx.weight,
+                block_hash_and_time(tx.status.as_ref())
+            )];
+            lines.extend(render_tx_parties(tx));
+            lines.join("\n")
         })
         .collect::<Vec<_>>()
         .join("\n"))
 }
 
 fn render_utxos(body: &str) -> Result<String, ClientError> {
-    let rows = parse_address_utxos(body).map_err(http_parse)?;
+    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body)
+        .map_err(http_parse)?;
     Ok(rows
         .iter()
         .map(|utxo| {
             format!(
-                "utxo txid {} vout {} value {} confirmed {}",
-                utxo.txid, utxo.vout, utxo.value, utxo.confirmed
+                "utxo txid {} vout {} value {} confirmed {} block_height {}{}",
+                utxo.txid,
+                utxo.vout,
+                utxo.value,
+                yes_no(utxo.status.confirmed),
+                height_text(utxo.status.block_height),
+                block_hash_and_time(Some(&utxo.status))
             )
         })
         .collect::<Vec<_>>()
         .join("\n"))
 }
 
+fn render_broadcast_result(body: &str) -> Result<String, ClientError> {
+    let trimmed = body.trim();
+    if let Ok(result) =
+        serde_json::from_str::<splora_frontend_shared::wire::BroadcastResult>(trimmed)
+    {
+        if !result.txid.is_empty() {
+            return Ok(format!("broadcast txid {}", result.txid));
+        }
+    }
+    // POST /tx returns the txid as text/plain. A JSON object uses BroadcastResult above.
+    if trimmed.is_empty() || trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return Err(ClientError::Http("broadcast result was empty".into()));
+    }
+    Ok(format!("broadcast txid {trimmed}"))
+}
+
 fn render_test_accept(body: &str) -> Result<String, ClientError> {
-    let rows = parse_test_txs(body).map_err(http_parse)?;
+    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::TestTxResult>>(body)
+        .map_err(http_parse)?;
     if rows.is_empty() {
         return Ok("test:".to_string());
     }
     Ok(rows
         .iter()
         .map(|row| {
-            let mut line = format!("test txid {} allowed {}", row.txid, row.allowed);
-            if !row.reject_reason.is_empty() {
+            let allowed = match row.allowed {
+                Some(true) => "true",
+                Some(false) => "false",
+                None => "",
+            };
+            let mut line = format!("test txid {} allowed {allowed}", row.txid);
+            if let Some(reason) = row
+                .reject_reason
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+            {
                 line.push_str(" reject-reason ");
-                line.push_str(&row.reject_reason);
+                line.push_str(reason);
+            }
+            if let Some(fees) = &row.fees {
+                line.push_str(&format!(
+                    " fee {} effective_feerate {}",
+                    plain_number(fees.base),
+                    plain_number(fees.effective_feerate)
+                ));
             }
             line
         })
@@ -1338,6 +1608,35 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             Screen::Popup => String::new(),
         }
     }
+
+    /// One row per block or transaction on the active screen, plus address funded
+    /// sums and each utxo value. Empty on screens that do not list those.
+    pub fn painted_rows(&self) -> Vec<String> {
+        match self.screen {
+            Screen::Dashboard => self.dashboard.rows.clone(),
+            Screen::Blocks => self.blocks.rows.clone(),
+            Screen::Block => self.block.rows.clone(),
+            Screen::Tx => self.tx.rows.clone(),
+            Screen::Address => self.address.rows.clone(),
+            Screen::Mempool => self.mempool.rows.clone(),
+            Screen::MultiAddress => self.multi_address.rows.clone(),
+            Screen::Broadcast
+            | Screen::TestTransactions
+            | Screen::Popup
+            | Screen::Terms
+            | Screen::Privacy
+            | Screen::Trademark
+            | Screen::Docs
+            | Screen::Faq
+            | Screen::ApiRest
+            | Screen::ApiWebsocket => Vec::new(),
+        }
+    }
+}
+
+/// Rows `Shell::render` paints, one element per block, transaction, or utxo value.
+pub fn painted_rows<G: ExplorerGet + ExplorerPost>(host: &ScreenHost<G>) -> Vec<String> {
+    host.painted_rows()
 }
 
 /// Text `Shell::render` passes to `.child` for the screen body.
@@ -1353,6 +1652,7 @@ pub fn painted_shell_text<G: ExplorerGet + ExplorerPost>(
             format!("query: {}", host.query_text()),
             host.rendered(),
         ];
+        lines.extend(host.painted_rows());
         if !host.notice.is_empty() {
             lines.push(host.notice.clone());
         }
@@ -1508,7 +1808,11 @@ mod tests {
 
         fn get_request(&self, request: &crate::api::ClientRequest) -> Result<String, ClientError> {
             self.gets.borrow_mut().push(request.url.clone());
-            Ok(format!("body {}", request.path))
+            if request.path.ends_with("/utxo") {
+                Ok("[]".to_string())
+            } else {
+                Ok(format!("body {}", request.path))
+            }
         }
     }
 
@@ -1560,19 +1864,28 @@ mod tests {
         screen.input = "addrA, addrB\naddrC".to_string();
         assert_eq!(screen.entered(), vec!["addrA", "addrB", "addrC"]);
         screen.load(&client).expect("load");
-        assert_eq!(screen.requests.len(), 3);
-        assert_eq!(rec.gets.borrow().len(), 3);
+        assert_eq!(screen.requests.len(), 6);
+        assert_eq!(rec.gets.borrow().len(), 6);
         assert!(rec.posts.borrow().is_empty());
         for (index, address) in ["addrA", "addrB", "addrC"].iter().enumerate() {
-            let request = &screen.requests[index];
+            let request = &screen.requests[index * 2];
             assert_eq!(request.method, "GET");
             assert_eq!(request.path, format!("/address/{address}"));
             assert_eq!(
                 request.url,
                 format!("https://splora.surmount.systems/api/address/{address}")
             );
-            assert_eq!(rec.gets.borrow()[index], request.url);
+            assert_eq!(rec.gets.borrow()[index * 2], request.url);
             assert_url_allowed(&request.url);
+            let utxo = &screen.requests[index * 2 + 1];
+            assert_eq!(utxo.method, "GET");
+            assert_eq!(utxo.path, format!("/address/{address}/utxo"));
+            assert_eq!(
+                utxo.url,
+                format!("https://splora.surmount.systems/api/address/{address}/utxo")
+            );
+            assert_eq!(rec.gets.borrow()[index * 2 + 1], utxo.url);
+            assert_url_allowed(&utxo.url);
         }
         assert!(!screen.summary().contains("package"));
     }
@@ -1764,6 +2077,10 @@ mod tests {
     const ADDRESS_UTXO_JSON: &str = r#"[{"txid":"utxotx444","vout":1,"status":{"confirmed":true,"block_height":10},"value":5000}]"#;
     const ADDR_A_JSON: &str = r#"{"address":"addrA","chain_stats":{"tx_count":2,"funded_txo_count":2,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
     const ADDR_B_JSON: &str = r#"{"address":"addrB","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":40,"spent_txo_sum":5},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+    const ADDR_A_UTXO_JSON: &str =
+        r#"[{"txid":"utxoa","vout":0,"status":{"confirmed":true,"block_height":11},"value":4242}]"#;
+    const ADDR_B_UTXO_JSON: &str =
+        r#"[{"txid":"utxob","vout":2,"status":{"confirmed":false},"value":9090}]"#;
     const TEST_TX_JSON: &str =
         r#"[{"txid":"testtxid666","wtxid":"wwww","allowed":true,"vsize":80,"reject-reason":""}]"#;
 
@@ -2157,13 +2474,26 @@ mod tests {
             BTreeMap::from([
                 ("/address/addrA".to_string(), ADDR_A_JSON.to_string()),
                 ("/address/addrB".to_string(), ADDR_B_JSON.to_string()),
+                (
+                    "/address/addrA/utxo".to_string(),
+                    ADDR_A_UTXO_JSON.to_string(),
+                ),
+                (
+                    "/address/addrB/utxo".to_string(),
+                    ADDR_B_UTXO_JSON.to_string(),
+                ),
             ]),
         );
         host.multi_address.input = "addrA, addrB".to_string();
         host.activate(Screen::MultiAddress).expect("multi");
         assert_eq!(
             rec.get_paths(),
-            vec!["/address/addrA".to_string(), "/address/addrB".to_string()]
+            vec![
+                "/address/addrA".to_string(),
+                "/address/addrA/utxo".to_string(),
+                "/address/addrB".to_string(),
+                "/address/addrB/utxo".to_string(),
+            ]
         );
         assert!(rec.post_paths().is_empty());
         assert!(rec.get_paths().iter().all(|path| !path.contains(',')));
@@ -2176,6 +2506,8 @@ mod tests {
                 "address addrB chain_tx_count 4",
                 "address addrA chain_tx_count 2 funded_sum 20 mempool_tx_count 0",
                 "address addrB chain_tx_count 4 funded_sum 40 mempool_tx_count 0",
+                "address addrA utxo txid utxoa vout 0 value 4242",
+                "address addrB utxo txid utxob vout 2 value 9090",
             ],
         );
     }
@@ -2438,29 +2770,43 @@ mod tests {
     fn painted_mempool_shows_recent_tx() {
         let (mut host, rec) = host_with(
             Network::Mainnet,
-            BTreeMap::from([(
-                splora_frontend_shared::mempool_recent_path().to_string(),
-                RECENT_JSON.to_string(),
-            )]),
+            BTreeMap::from([
+                (
+                    splora_frontend_shared::mempool_path().to_string(),
+                    r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[2,100]]}"#
+                        .to_string(),
+                ),
+                (
+                    splora_frontend_shared::mempool_recent_path().to_string(),
+                    RECENT_JSON.to_string(),
+                ),
+            ]),
         );
         host.activate(Screen::Mempool).expect("mempool");
         assert_eq!(
             rec.get_paths(),
-            vec![splora_frontend_shared::mempool_recent_path().to_string()]
+            vec![
+                splora_frontend_shared::mempool_path().to_string(),
+                splora_frontend_shared::mempool_recent_path().to_string(),
+            ]
         );
         assert!(rec.post_paths().is_empty());
         assert_paths_allowed(&rec.get_paths());
         assert_painted_screen(&host, "mempool");
         assert_view(
             &host,
-            &["recent txid txidrecent222 fee 321 vsize 111 value 999"],
+            &[
+                "mempool count 4 vsize 500 total_fee 90",
+                "fee_histogram 2 100",
+                "recent txid txidrecent222 fee 321 vsize 111 value 999",
+            ],
         );
         assert_no_banned_products(&painted_of(&host));
     }
 
     #[test]
     fn painted_test_transactions_show_reject_reason() {
-        let body = r#"[{"txid":"rejectedtxid888","allowed":false,"reject-reason":"dust"}]"#;
+        let body = r#"[{"txid":"rejectedtxid888","wtxid":"rejectedwtxid888","allowed":false,"reject-reason":"dust"}]"#;
         let (mut host, rec) = host_with(
             Network::Testnet3,
             BTreeMap::from([(
@@ -2556,5 +2902,638 @@ mod tests {
             "api/websocket",
             "The socket is not a substitute for the REST reads on the REST page.",
         );
+    }
+
+    fn production_screens_source() -> &'static str {
+        let text = include_str!("screens.rs");
+        let marker = "#[cfg(test)]\nmod tests {";
+        let end = text.find(marker).expect("screens tests module");
+        &text[..end]
+    }
+
+    fn serde_from_str_types(source: &str) -> Vec<String> {
+        let needle = concat!("serde_json::", "from_str::<");
+        let mut types = Vec::new();
+        let mut rest = source;
+        while let Some(pos) = rest.find(needle) {
+            rest = &rest[pos + needle.len()..];
+            let mut depth = 1usize;
+            let mut end = None;
+            for (index, ch) in rest.char_indices() {
+                if ch == '<' {
+                    depth += 1;
+                } else if ch == '>' {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(index);
+                        break;
+                    }
+                }
+            }
+            let end = end.expect("turbofish close");
+            types.push(rest[..end].split_whitespace().collect::<String>());
+            rest = &rest[end + 1..];
+        }
+        types
+    }
+
+    #[test]
+    fn v1_ship_json_screens_use_shared_structs_not_private_ones() {
+        let parses = serde_from_str_types(production_screens_source());
+        let required = [
+            ("block", "splora_frontend_shared::wire::Block"),
+            ("transaction", "splora_frontend_shared::wire::Transaction"),
+            (
+                "address stats",
+                "splora_frontend_shared::wire::AddressStats",
+            ),
+            ("utxo", "splora_frontend_shared::wire::Utxo"),
+            (
+                "recent transaction",
+                "splora_frontend_shared::wire::RecentTransaction",
+            ),
+            (
+                "mempool summary",
+                "splora_frontend_shared::wire::MempoolSummary",
+            ),
+            (
+                "fee estimates",
+                "splora_frontend_shared::wire::FeeEstimates",
+            ),
+            (
+                "broadcast result",
+                "splora_frontend_shared::wire::BroadcastResult",
+            ),
+            (
+                "test-tx result",
+                "splora_frontend_shared::wire::TestTxResult",
+            ),
+        ];
+        for (screen, shared) in required {
+            assert!(
+                parses.iter().any(|ty| ty.contains(shared)),
+                "{screen} must deserialize with {shared}, parsed types were {parses:?}"
+            );
+        }
+        for ty in &parses {
+            assert!(
+                ty.contains("splora_frontend_shared::wire::"),
+                "ship-in-v1 screen parsed with a private struct: {ty}"
+            );
+        }
+        assert!(
+            parses.iter().any(|ty| ty.contains("wire::TestTxResult")),
+            "test-tx result must use the shared struct so reject-reason stays optional"
+        );
+    }
+
+    /// Block and transaction list rows are `BlockRow` and `TxRow` from the shared
+    /// crate. A private row struct in this module does not count.
+    fn builds_shared_row(source: &str, name: &str) -> bool {
+        if source.contains(&format!("struct {name}")) {
+            return false;
+        }
+        let qualified = format!("splora_frontend_shared::{name}");
+        let in_use_group = source
+            .find("use splora_frontend_shared::{")
+            .and_then(|start| {
+                let rest = &source[start..];
+                rest.find("};").map(|end| &rest[..end])
+            })
+            .is_some_and(|group| {
+                group
+                    .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                    .any(|token| token == name)
+            });
+        let names_shared_type = source.contains(&qualified)
+            || source.contains(&format!("splora_frontend_shared::rows::{name}"))
+            || in_use_group;
+        if !names_shared_type {
+            return false;
+        }
+        source.contains(&format!("{qualified}::from"))
+            || source.contains(&format!("{qualified} {{"))
+            || source.contains(&format!("{name}::from"))
+            || source.contains(&format!("{name} {{"))
+    }
+
+    #[test]
+    fn screen_module_builds_block_and_tx_rows_with_shared_types() {
+        let source = production_screens_source();
+        assert!(
+            builds_shared_row(source, "BlockRow"),
+            "screen module does not use BlockRow from splora_frontend_shared"
+        );
+        assert!(
+            builds_shared_row(source, "TxRow"),
+            "screen module does not use TxRow from splora_frontend_shared"
+        );
+    }
+
+    fn dashboard_bodies() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/blocks/tip/height".to_string(), "100".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/blocks".to_string(), BLOCKS_JSON.to_string()),
+            ("/mempool/recent".to_string(), RECENT_JSON.to_string()),
+            (
+                "/fee-estimates".to_string(),
+                r#"{"2":1.1,"6":3}"#.to_string(),
+            ),
+            (
+                "/mempool".to_string(),
+                r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[2,100]]}"#.to_string(),
+            ),
+        ])
+    }
+
+    const RICH_TX_JSON: &str = r#"{
+        "txid":"txidabc",
+        "version":2,
+        "locktime":0,
+        "vin":[{
+            "txid":"prev",
+            "vout":0,
+            "prevout":{
+                "scriptpubkey":"0014aa",
+                "scriptpubkey_asm":"OP_0",
+                "scriptpubkey_type":"v0_p2wpkh",
+                "scriptpubkey_address":"bc1qinput",
+                "value":610677
+            },
+            "scriptsig":"",
+            "scriptsig_asm":"",
+            "is_coinbase":false,
+            "sequence":4294967295
+        }],
+        "vout":[{
+            "scriptpubkey":"0014bb",
+            "scriptpubkey_asm":"OP_0",
+            "scriptpubkey_type":"v0_p2wpkh",
+            "scriptpubkey_address":"bc1qoutput",
+            "value":344697
+        }],
+        "size":120,
+        "weight":480,
+        "sigops":1,
+        "fee":10,
+        "status":{"confirmed":true,"block_height":800000,"block_hash":"block-id-1","block_time":1600000000}
+    }"#;
+
+    #[test]
+    fn indexer_field_dashboard_paints_median_time() {
+        let (mut host, _) = host_with(Network::Mainnet, dashboard_bodies());
+        host.activate(Screen::Dashboard).expect("dashboard");
+        assert_painted_screen(&host, "dashboard");
+        assert_view(&host, &["median_time 1700000000", "timestamp 1700000000"]);
+        assert_no_banned_products(&painted_of(&host));
+    }
+
+    #[test]
+    fn indexer_field_blocks_paints_median_time() {
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/blocks".to_string(), BLOCKS_JSON.to_string())]),
+        );
+        host.activate(Screen::Blocks).expect("blocks");
+        assert_painted_screen(&host, "blocks");
+        assert_view(
+            &host,
+            &[
+                "block hash abc123def456 height 800000 tx_count 2",
+                "timestamp 1700000000",
+                "median_time 1700000000",
+            ],
+        );
+    }
+
+    #[test]
+    fn indexer_field_block_paints_tx_hash_time_and_address() {
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{BLOCK_HASH}"), BLOCK_JSON.to_string()),
+                (
+                    format!("/block/{BLOCK_HASH}/txs"),
+                    format!("[{RICH_TX_JSON}]"),
+                ),
+                (
+                    format!("/block/{BLOCK_HASH}/txids"),
+                    r#"["txidabc"]"#.to_string(),
+                ),
+            ]),
+        );
+        host.block.query = BLOCK_HASH.to_string();
+        host.activate(Screen::Block).expect("block");
+        assert_painted_screen(&host, "block");
+        assert_view(
+            &host,
+            &[
+                "median_time 1700000000",
+                "tx txid txidabc fee 10",
+                "block_hash block-id-1",
+                "block_time 1600000000",
+                "input address bc1qinput value 610677",
+                "output address bc1qoutput value 344697",
+            ],
+        );
+        assert_no_banned_products(&painted_of(&host));
+    }
+
+    #[test]
+    fn indexer_field_transaction_paints_hash_time_and_address() {
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/tx/txidabc".to_string(), RICH_TX_JSON.to_string())]),
+        );
+        host.tx.txid = "txidabc".to_string();
+        host.activate(Screen::Tx).expect("tx");
+        assert_painted_screen(&host, "tx");
+        assert_view(
+            &host,
+            &[
+                "tx txid txidabc fee 10 confirmed true block_height 800000",
+                "block_hash block-id-1",
+                "block_time 1600000000",
+                "input address bc1qinput value 610677",
+                "output address bc1qoutput value 344697",
+            ],
+        );
+        assert_no_banned_products(&painted_of(&host));
+    }
+
+    #[test]
+    fn indexer_field_address_paints_utxo_and_funded_sum() {
+        let script = "DDogAddress111";
+        let stats = r#"{"address":"DDogAddress111","chain_stats":{"tx_count":7,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":9000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":3,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":2500,"spent_txo_sum":0}}"#;
+        let txs = format!("[{RICH_TX_JSON}]");
+        let utxo = r#"[{"txid":"utxotx444","vout":1,"status":{"confirmed":true,"block_height":10,"block_hash":"block-id-1","block_time":1600000000},"value":5000}]"#;
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{script}"), stats.to_string()),
+                (format!("/address/{script}/txs"), txs),
+                (format!("/address/{script}/utxo"), utxo.to_string()),
+            ]),
+        );
+        host.address.address = script.to_string();
+        host.activate(Screen::Address).expect("address");
+        assert_painted_screen(&host, "address");
+        assert_view(
+            &host,
+            &[
+                "address DDogAddress111 chain_tx_count 7 funded_sum 9000 mempool_tx_count 3",
+                "mempool_funded_sum 2500",
+                "address tx txid txidabc",
+                "fee 10",
+                "block_hash block-id-1",
+                "block_time 1600000000",
+                "output address bc1qoutput value 344697",
+                "utxo txid utxotx444 vout 1 value 5000 confirmed true",
+                "block_height 10",
+                "block_hash block-id-1",
+                "block_time 1600000000",
+            ],
+        );
+        assert_no_banned_products(&painted_of(&host));
+    }
+
+    #[test]
+    fn indexer_field_multi_address_paints_mempool_funded_sum() {
+        let stats = r#"{"address":"addrA","chain_stats":{"tx_count":2,"funded_txo_count":2,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":2500,"spent_txo_sum":0}}"#;
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/address/addrA".to_string(), stats.to_string()),
+                (
+                    "/address/addrA/utxo".to_string(),
+                    ADDR_A_UTXO_JSON.to_string(),
+                ),
+            ]),
+        );
+        host.multi_address.input = "addrA".to_string();
+        host.activate(Screen::MultiAddress).expect("multi");
+        assert_eq!(
+            rec.get_paths(),
+            vec![
+                "/address/addrA".to_string(),
+                "/address/addrA/utxo".to_string(),
+            ]
+        );
+        assert_painted_screen(&host, "addresses");
+        assert_view(
+            &host,
+            &[
+                "address addrA chain_tx_count 2 funded_sum 20 mempool_tx_count 1",
+                "mempool_funded_sum 2500",
+                "address addrA utxo txid utxoa vout 0 value 4242",
+            ],
+        );
+    }
+
+    #[test]
+    fn indexer_field_multi_address_paints_per_address_utxo_value() {
+        let stats_a = r#"{"address":"addrA","chain_stats":{"tx_count":2,"funded_txo_count":2,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":2500,"spent_txo_sum":0}}"#;
+        let stats_b = r#"{"address":"addrB","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":40,"spent_txo_sum":5},"mempool_stats":{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}"#;
+        let utxo_a = r#"[{"txid":"utxoa","vout":0,"status":{"confirmed":true,"block_height":11},"value":4242}]"#;
+        let utxo_b = r#"[{"txid":"utxob","vout":2,"status":{"confirmed":false},"value":9090}]"#;
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/address/addrA".to_string(), stats_a.to_string()),
+                ("/address/addrB".to_string(), stats_b.to_string()),
+                ("/address/addrA/utxo".to_string(), utxo_a.to_string()),
+                ("/address/addrB/utxo".to_string(), utxo_b.to_string()),
+            ]),
+        );
+        host.multi_address.input = "addrA, addrB".to_string();
+        host.activate(Screen::MultiAddress).expect("multi");
+        assert_painted_screen(&host, "addresses");
+        assert_view(
+            &host,
+            &[
+                "address addrA chain_tx_count 2 funded_sum 20 mempool_tx_count 1",
+                "mempool_funded_sum 2500",
+                "address addrA utxo txid utxoa vout 0 value 4242",
+                "address addrB chain_tx_count 4 funded_sum 40 mempool_tx_count 0",
+                "address addrB utxo txid utxob vout 2 value 9090",
+            ],
+        );
+        let painted = painted_of(&host);
+        let value_a = painted
+            .find("address addrA utxo txid utxoa vout 0 value 4242")
+            .expect("addrA utxo value");
+        let value_b = painted
+            .find("address addrB utxo txid utxob vout 2 value 9090")
+            .expect("addrB utxo value");
+        assert!(value_a < value_b, "{painted}");
+        assert_eq!(
+            rec.get_paths(),
+            vec![
+                "/address/addrA".to_string(),
+                "/address/addrA/utxo".to_string(),
+                "/address/addrB".to_string(),
+                "/address/addrB/utxo".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn indexer_field_test_transactions_paint_fee() {
+        let body = r#"[{"txid":"test-tx-1","wtxid":"test-wtxid-1","allowed":false,"vsize":141,"fees":{"base":0.00001,"effective-feerate":1.0,"effective-includes":["test-tx-1"]},"reject-reason":"min relay fee not met"}]"#;
+        let (mut host, rec) = host_with(
+            Network::Testnet3,
+            BTreeMap::from([(
+                splora_frontend_shared::test_txs_path().to_string(),
+                body.to_string(),
+            )]),
+        );
+        host.test_txs.input = "abcd".to_string();
+        host.activate(Screen::TestTransactions).expect("open");
+        host.submit().expect("test");
+        assert_eq!(
+            rec.post_paths(),
+            vec![splora_frontend_shared::test_txs_path().to_string()]
+        );
+        assert!(rec.get_paths().is_empty());
+        assert_painted_screen(&host, "test transactions");
+        assert_view(
+            &host,
+            &[
+                "test txid test-tx-1 allowed false",
+                "fee 0.00001",
+                "effective_feerate 1",
+                "reject-reason min relay fee not met",
+            ],
+        );
+        assert_no_banned_products(&painted_of(&host));
+    }
+
+    fn lines_with<'a>(text: &'a str, prefix: &str) -> Vec<&'a str> {
+        text.lines().filter(|line| line.starts_with(prefix)).collect()
+    }
+
+    fn assert_no_private_key(text: &str) {
+        assert!(!text.contains("nsec"), "{text}");
+        assert!(!text.to_ascii_lowercase().contains("private key"), "{text}");
+        assert!(!text.contains("private-key"), "{text}");
+    }
+
+    /// Dashboard, blocks, block, transaction, address, and mempool each paint
+    /// one row per block or transaction. A flat field sentence is not a row.
+    #[test]
+    fn painted_shell_paints_one_row_per_block_or_transaction() {
+        let blocks = r#"[{"id":"aaaa","height":10,"version":1,"timestamp":1000,"tx_count":2,"size":1,"weight":1,"merkle_root":"m","previousblockhash":"p","mediantime":1,"nonce":1,"bits":1,"difficulty":1.0},{"id":"bbbb","height":11,"version":1,"timestamp":2000,"tx_count":3,"size":1,"weight":1,"merkle_root":"m","mediantime":1,"nonce":1,"bits":1,"difficulty":1.0}]"#;
+        let recent = r#"[{"txid":"txxx","fee":5,"vsize":10,"value":1},{"txid":"txxy","fee":9,"vsize":11,"value":2}]"#;
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/blocks".to_string(), blocks.to_string()),
+                ("/mempool/recent".to_string(), recent.to_string()),
+                ("/blocks/tip/height".to_string(), "11".to_string()),
+                ("/blocks/tip/hash".to_string(), "bbbb".to_string()),
+                ("/fee-estimates".to_string(), r#"{"2":1.1}"#.to_string()),
+                (
+                    "/mempool".to_string(),
+                    r#"{"count":2,"vsize":21,"total_fee":14,"fee_histogram":[]}"#.to_string(),
+                ),
+            ]),
+        );
+        host.activate(Screen::Dashboard).expect("dashboard");
+        let painted = painted_of(&host);
+        assert_eq!(
+            lines_with(&painted, "row block "),
+            vec![
+                "row block height 10 hash aaaa tx_count 2 time 1000",
+                "row block height 11 hash bbbb tx_count 3 time 2000",
+            ],
+            "painted view has no row per block: {painted}"
+        );
+        assert_eq!(
+            lines_with(&painted, "row tx "),
+            vec!["row tx txid txxx fee 5", "row tx txid txxy fee 9"],
+            "painted view has no row per transaction: {painted}"
+        );
+        for line in lines_with(&painted, "row block ") {
+            assert!(!line.contains("size "), "{line}");
+            assert!(!line.contains("weight "), "{line}");
+            assert!(!line.contains("previous_hash"), "{line}");
+            assert!(!line.contains("median_time"), "{line}");
+        }
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/blocks".to_string(), blocks.to_string())]),
+        );
+        host.activate(Screen::Blocks).expect("blocks");
+        let painted = painted_of(&host);
+        assert_eq!(
+            lines_with(&painted, "row block "),
+            vec![
+                "row block height 10 hash aaaa tx_count 2 time 1000",
+                "row block height 11 hash bbbb tx_count 3 time 2000",
+            ],
+            "blocks list is one flat sentence: {painted}"
+        );
+        assert!(lines_with(&painted, "row tx ").is_empty(), "{painted}");
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let block = r#"{"id":"aaaa","height":10,"version":1,"timestamp":1000,"tx_count":2,"size":1,"weight":1,"merkle_root":"m","previousblockhash":"p","mediantime":1,"nonce":1,"bits":1,"difficulty":1.0}"#;
+        let txs = r#"[{"txid":"one","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":1,"sigops":0,"fee":15,"status":{"confirmed":true}},{"txid":"two","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":1,"sigops":0,"fee":25,"status":{"confirmed":true}}]"#;
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/block/aaaa".to_string(), block.to_string()),
+                ("/block/aaaa/txs".to_string(), txs.to_string()),
+                ("/block/aaaa/txids".to_string(), r#"["one","two"]"#.to_string()),
+            ]),
+        );
+        host.block.query = "aaaa".to_string();
+        host.activate(Screen::Block).expect("block");
+        let painted = painted_of(&host);
+        assert_eq!(
+            lines_with(&painted, "row block "),
+            vec!["row block height 10 hash aaaa tx_count 2 time 1000"],
+            "block screen is one flat sentence: {painted}"
+        );
+        assert_eq!(
+            lines_with(&painted, "row tx "),
+            vec!["row tx txid one fee 15", "row tx txid two fee 25"],
+            "block transactions are one flat sentence: {painted}"
+        );
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/tx/txidabc".to_string(), TX_JSON.to_string())]),
+        );
+        host.tx.txid = "txidabc".to_string();
+        host.activate(Screen::Tx).expect("tx");
+        let painted = painted_of(&host);
+        assert_eq!(
+            lines_with(&painted, "row tx "),
+            vec!["row tx txid txidabc fee 10"],
+            "transaction screen is one flat sentence: {painted}"
+        );
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let utxos = r#"[{"txid":"utxotx444","vout":1,"status":{"confirmed":true,"block_height":10},"value":5000},{"txid":"utxotx555","vout":0,"status":{"confirmed":false},"value":7000}]"#;
+        let script = "DDogAddress111";
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{script}"), ADDRESS_JSON.to_string()),
+                (
+                    format!("/address/{script}/txs"),
+                    ADDRESS_TXS_JSON.to_string(),
+                ),
+                (format!("/address/{script}/utxo"), utxos.to_string()),
+            ]),
+        );
+        host.address.address = script.to_string();
+        host.activate(Screen::Address).expect("address");
+        let painted = painted_of(&host);
+        assert!(
+            painted.contains("funded_sum 9000"),
+            "address omits funded sum: {painted}"
+        );
+        assert_eq!(
+            lines_with(&painted, "row address "),
+            vec!["row address funded_sum 9000"],
+            "address funded sum is not its own row: {painted}"
+        );
+        assert_eq!(
+            lines_with(&painted, "row utxo "),
+            vec!["row utxo value 5000", "row utxo value 7000"],
+            "address does not show each utxo value: {painted}"
+        );
+        assert_eq!(
+            lines_with(&painted, "row tx "),
+            vec!["row tx txid addresstx333 fee 1"],
+            "address transaction is one flat sentence: {painted}"
+        );
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/address/addrA".to_string(), ADDR_A_JSON.to_string()),
+                ("/address/addrB".to_string(), ADDR_B_JSON.to_string()),
+                (
+                    "/address/addrA/utxo".to_string(),
+                    ADDR_A_UTXO_JSON.to_string(),
+                ),
+                (
+                    "/address/addrB/utxo".to_string(),
+                    ADDR_B_UTXO_JSON.to_string(),
+                ),
+            ]),
+        );
+        host.multi_address.input = "addrA, addrB".to_string();
+        host.activate(Screen::MultiAddress).expect("multi");
+        let painted = painted_of(&host);
+        assert_eq!(
+            lines_with(&painted, "row utxo "),
+            vec!["row utxo value 4242", "row utxo value 9090"],
+            "multi-address does not show each utxo value: {painted}"
+        );
+        assert_eq!(
+            lines_with(&painted, "row address "),
+            vec![
+                "row address funded_sum 20",
+                "row address funded_sum 40",
+            ],
+            "{painted}"
+        );
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (
+                    splora_frontend_shared::mempool_path().to_string(),
+                    r#"{"count":2,"vsize":21,"total_fee":14,"fee_histogram":[]}"#.to_string(),
+                ),
+                (
+                    splora_frontend_shared::mempool_recent_path().to_string(),
+                    recent.to_string(),
+                ),
+            ]),
+        );
+        host.activate(Screen::Mempool).expect("mempool");
+        assert_eq!(
+            rec.get_paths(),
+            vec![
+                splora_frontend_shared::mempool_path().to_string(),
+                splora_frontend_shared::mempool_recent_path().to_string(),
+            ]
+        );
+        let painted = painted_of(&host);
+        assert_eq!(
+            lines_with(&painted, "row tx "),
+            vec!["row tx txid txxx fee 5", "row tx txid txxy fee 9"],
+            "mempool recent transactions are one flat sentence: {painted}"
+        );
+        assert_no_private_key(&painted);
+        assert_no_banned_products(&painted);
+
+        let render = source_fn(include_str!("main.rs"), "fn render(", "\nfn main");
+        assert!(
+            render.contains("for row in painted_rows("),
+            "Shell::render paints one flat sentence and no row per block or transaction:\n{render}"
+        );
+        assert!(
+            !render.to_ascii_lowercase().contains("private key"),
+            "{render}"
+        );
+        assert!(!render.contains("private-key"), "{render}");
+        assert!(!render.contains("nsec"), "{render}");
     }
 }

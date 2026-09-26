@@ -1,7 +1,11 @@
 use crate::FAIL_CLOSED;
 use crate::browser::{browser_signer_present, page_origin, signed_get};
-use crate::models::recent_txids;
+use crate::models::{parse_fee_estimates, parse_mempool_summary_json, recent_txids};
 use crate::paths::{docs_api_type_page, mempool_paths, static_page_requests, tx_path};
+use crate::rows::{
+    address_rows_markup, block_rows_markup, blocks_rows_markup, dashboard_rows_markup,
+    rows_with_notices, transaction_row_markup,
+};
 use crate::screens::{
     address_fields_text, address_requests, block_fields_text, block_load_plan_with_txids,
     block_txids_fields_text, blocks_list_fields_text, blocks_list_requests,
@@ -20,8 +24,7 @@ use splora_frontend_shared::{
     address_path, address_txs_path, address_utxo_path, block_height_path, block_path,
     block_txs_path, blocks_path, blocks_start_height_path, blocks_tip_hash_path,
     blocks_tip_height_path, broadcast_path, fee_estimates_path, mempool_path, mempool_recent_path,
-    parse_blocks_tip_hash, parse_blocks_tip_height, parse_fee_estimates, parse_mempool,
-    test_txs_path,
+    parse_blocks_tip_hash, parse_blocks_tip_height, test_txs_path,
 };
 
 fn shell_style() -> String {
@@ -88,13 +91,22 @@ fn FailClosed() -> impl IntoView {
     view! { <p>{FAIL_CLOSED}</p> }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn signed_text(result: Result<String, crate::ClientError>, method: &str, path: &str) -> String {
+    match result {
+        Ok(text) => text,
+        Err(crate::ClientError::MissingSigner) => crate::FAIL_CLOSED.to_string(),
+        Err(crate::ClientError::RejectedEvent) => format!("indexer error {method} {path}"),
+    }
+}
+
 fn schedule(indexer_path: String, body: RwSignal<String>, network: RwSignal<Network>) {
     #[cfg(target_arch = "wasm32")]
     if browser_signer_present() {
         leptos::task::spawn_local(async move {
             let path = indexer_path;
             let result = signed_get(&page_origin(), network.get_untracked(), &path).await;
-            body.set(crate::text_after_signed_get(result));
+            body.set(signed_text(result, "GET", &path));
         });
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -121,7 +133,7 @@ fn schedule_post(
                 &payload,
             )
             .await;
-            body.set(crate::text_after_signed_get(result));
+            body.set(signed_text(result, method, &indexer_path));
         });
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -138,15 +150,30 @@ fn schedule_block(
     block_body: RwSignal<String>,
     txs_body: RwSignal<String>,
     txids_body: RwSignal<String>,
+    height_body: RwSignal<String>,
 ) {
     #[cfg(target_arch = "wasm32")]
     load_block_signed(
-        id, page_start, initial, network, block_body, txs_body, txids_body,
+        id,
+        page_start,
+        initial,
+        network,
+        block_body,
+        txs_body,
+        txids_body,
+        height_body,
     );
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = (
-            id, page_start, initial, network, block_body, txs_body, txids_body,
+            id,
+            page_start,
+            initial,
+            network,
+            block_body,
+            txs_body,
+            txids_body,
+            height_body,
         );
     }
 }
@@ -155,13 +182,15 @@ fn schedule_block(
 fn store_block_response(
     path: &str,
     text: String,
-    height_body: &mut Option<String>,
+    height_text: &mut Option<String>,
+    height_body: RwSignal<String>,
     block_body: RwSignal<String>,
     txs_body: RwSignal<String>,
     txids_body: RwSignal<String>,
 ) {
     if path.starts_with("/block-height/") {
-        *height_body = Some(text);
+        height_body.set(text.clone());
+        *height_text = Some(text);
     } else if path.ends_with("/txids") {
         txids_body.set(text);
     } else if path.contains("/txs") {
@@ -180,33 +209,36 @@ fn load_block_signed(
     block_body: RwSignal<String>,
     txs_body: RwSignal<String>,
     txids_body: RwSignal<String>,
+    height_body: RwSignal<String>,
 ) {
     if !browser_signer_present() {
         return;
     }
     leptos::task::spawn_local(async move {
-        let mut height_body = None;
+        let mut height_text = None;
         for req in initial {
             let result = signed_get(&page_origin(), network.get_untracked(), &req.path).await;
-            let text = crate::text_after_signed_get(result);
+            let text = signed_text(result, req.method, &req.path);
             store_block_response(
                 &req.path,
                 text,
-                &mut height_body,
+                &mut height_text,
+                height_body,
                 block_body,
                 txs_body,
                 txids_body,
             );
         }
-        if let Some(body) = height_body {
+        if let Some(body) = height_text {
             let mut ignored_height = None;
             for req in block_load_plan_with_txids(&id, Some(&body), page_start) {
                 let result = signed_get(&page_origin(), network.get_untracked(), &req.path).await;
-                let text = crate::text_after_signed_get(result);
+                let text = signed_text(result, req.method, &req.path);
                 store_block_response(
                     &req.path,
                     text,
                     &mut ignored_height,
+                    height_body,
                     block_body,
                     txs_body,
                     txids_body,
@@ -221,7 +253,7 @@ fn schedule_row(path: String, rows: RwSignal<Vec<(String, String)>>, network: Rw
     if browser_signer_present() {
         leptos::task::spawn_local(async move {
             let result = signed_get(&page_origin(), network.get_untracked(), &path).await;
-            let text = crate::text_after_signed_get(result);
+            let text = signed_text(result, "GET", &path);
             rows.update(|rows| {
                 if let Some(slot) = rows.iter_mut().find(|(existing, _)| existing == &path) {
                     slot.1 = text;
@@ -275,8 +307,8 @@ fn skip_closed_or_empty(body: &str, lines: &mut Vec<String>) -> bool {
     if body.trim().is_empty() {
         return true;
     }
-    if body == FAIL_CLOSED {
-        push_notice(lines, FAIL_CLOSED);
+    if let Some(line) = crate::screens::closed_notice(body) {
+        push_notice(lines, line);
         return true;
     }
     false
@@ -287,7 +319,7 @@ fn mempool_summary_text(body: &str) -> String {
     if skip_closed_or_empty(body, &mut lines) {
         return lines.join("\n");
     }
-    match parse_mempool(body) {
+    match parse_mempool_summary_json(body) {
         Ok(stats) => {
             lines.push(format!(
                 "mempool count {count} vsize {vsize} total_fee {total_fee}",
@@ -320,13 +352,9 @@ fn dashboard_tip_fees_text(tip_hash: &str, tip_height: &str, fees: &str) -> Stri
     }
     if !skip_closed_or_empty(fees, &mut lines) {
         match parse_fee_estimates(fees) {
-            Ok(rows) => {
-                for row in rows {
-                    lines.push(format!(
-                        "fee target {target} rate {rate}",
-                        target = row.target,
-                        rate = row.rate
-                    ));
+            Ok(estimates) => {
+                for (target, rate) in &estimates.0 {
+                    lines.push(format!("fee target {target} rate {rate}"));
                 }
             }
             Err(_) => push_notice(&mut lines, "unreadable indexer response"),
@@ -364,7 +392,14 @@ fn Dashboard() -> impl IntoView {
     schedule(mempool_path().to_string(), mempool_body, network);
     view! {
         <h2>"Dashboard"</h2>
-        <pre>{move || dashboard_fields_text(&blocks_body.get(), &recent_body.get())}</pre>
+        <div inner_html=move || {
+            let blocks = blocks_body.get();
+            let recent = recent_body.get();
+            rows_with_notices(
+                &dashboard_fields_text(&blocks, &recent),
+                &dashboard_rows_markup(&blocks, &recent),
+            )
+        }></div>
         <pre>{move || dashboard_tip_fees_text(&tip_hash_body.get(), &tip_height_body.get(), &fees_body.get())}</pre>
         <pre>{move || mempool_summary_text(&mempool_body.get())}</pre>
     }
@@ -406,7 +441,13 @@ fn BlocksPage() -> impl IntoView {
     }
     view! {
         <h2>"Blocks"</h2>
-        <pre>{move || blocks_list_fields_text(&body.get())}</pre>
+        <div inner_html=move || {
+            let blocks = body.get();
+            rows_with_notices(
+                &blocks_list_fields_text(&blocks),
+                &blocks_rows_markup(&blocks),
+            )
+        }></div>
     }
 }
 
@@ -418,6 +459,7 @@ fn BlockPage() -> impl IntoView {
     let block_body = RwSignal::new(String::new());
     let txs_body = RwSignal::new(String::new());
     let txids_body = RwSignal::new(String::new());
+    let height_body = RwSignal::new(String::new());
     let id = params.with(|p| p.get("hash").unwrap_or_default());
     let page_start = query.with(|map| {
         map.get("start_index")
@@ -446,12 +488,27 @@ fn BlockPage() -> impl IntoView {
         }
     }
     schedule_block(
-        id, page_start, initial, network, block_body, txs_body, txids_body,
+        id,
+        page_start,
+        initial,
+        network,
+        block_body,
+        txs_body,
+        txids_body,
+        height_body,
     );
     view! {
         <h2>"Block"</h2>
-        <pre>{move || block_fields_text(&block_body.get(), &txs_body.get())}</pre>
+        <div inner_html=move || {
+            let block = block_body.get();
+            let txs = txs_body.get();
+            rows_with_notices(
+                &block_fields_text(&block, &txs),
+                &block_rows_markup(&block, &txs),
+            )
+        }></div>
         <pre>{move || block_txids_fields_text(&txids_body.get())}</pre>
+        <pre>{move || height_body.get()}</pre>
     }
 }
 
@@ -472,7 +529,13 @@ fn TransactionPage() -> impl IntoView {
     }
     view! {
         <h2>"Transaction"</h2>
-        <pre>{move || transaction_fields_text(&body.get())}</pre>
+        <div inner_html=move || {
+            let tx = body.get();
+            rows_with_notices(
+                &transaction_fields_text(&tx),
+                &transaction_row_markup(&tx),
+            )
+        }></div>
     }
 }
 
@@ -498,7 +561,15 @@ fn AddressPage() -> impl IntoView {
     }
     view! {
         <h2>"Address"</h2>
-        <pre>{move || address_fields_text(&stats_body.get(), &txs_body.get(), &utxo_body.get())}</pre>
+        <div inner_html=move || {
+            let stats = stats_body.get();
+            let txs = txs_body.get();
+            let utxos = utxo_body.get();
+            rows_with_notices(
+                &address_fields_text(&stats, &txs, &utxos),
+                &address_rows_markup(&stats, &txs, &utxos),
+            )
+        }></div>
     }
 }
 

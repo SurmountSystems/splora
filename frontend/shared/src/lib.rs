@@ -5,6 +5,9 @@
 
 mod parse;
 mod paths;
+mod request;
+mod rows;
+pub mod wire;
 
 pub use parse::{
     AddressStats, BacklogStats, Block, FeeEstimate, ParseError, RecentTx, TestTxResult, Tx, Utxo,
@@ -20,3 +23,5 @@ pub use paths::{
     broadcast_path, fee_estimates_path, indexer_routes, mempool_path, mempool_recent_path,
     path_list, test_txs_body, test_txs_path, tx_path,
 };
+pub use request::{IndexerCall, IndexerRequest, indexer_request};
+pub use rows::{AddressRow, BlockRow, TxRow};

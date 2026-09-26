@@ -2190,6 +2190,7 @@ dependencies = [
  "waker-fn",
  "web-time",
  "windows 0.62.2",
+ "zed-scap",
 ]
 
 [[package]]
@@ -5365,6 +5366,7 @@ dependencies = [
 name = "splora-native"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dirs 4.0.0",
  "gpui-pre",
  "gpui-pre-platform",

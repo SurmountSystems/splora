@@ -1,27 +1,27 @@
 //! Electrs paths each v1 page requests, and the field lines that page shows.
 
+use splora_frontend_shared::wire::{
+    AddressStats, Block, RecentTransaction, TestTxResult, Transaction, Utxo,
+};
 use splora_frontend_shared::{
-    AddressStats, Block, RecentTx, TestTxResult, Tx, Utxo, address_path, address_txs_path,
-    address_utxo_path, block_height_path, block_path, block_txids_path, block_txs_path,
-    block_txs_start_index_path, blocks_path, blocks_start_height_path, broadcast_body,
-    mempool_recent_path, parse_address, parse_address_txs, parse_address_utxos, parse_block,
-    parse_block_txids, parse_block_txs, parse_blocks, parse_broadcast, parse_mempool_recent,
-    parse_test_txs, parse_tx, test_txs_body, tx_path,
+    address_path, address_txs_path, address_utxo_path, block_height_path, block_path,
+    block_txids_path, block_txs_path, block_txs_start_index_path, blocks_path,
+    blocks_start_height_path, broadcast_body, mempool_recent_path, parse_block_txids,
+    test_txs_body, tx_path,
 };
 
 use crate::FAIL_CLOSED;
+use crate::models::{
+    parse_address_stats_json, parse_block_json, parse_blocks_json, parse_broadcast_result_json,
+    parse_recent_transactions_json, parse_test_tx_results_json, parse_transaction_json,
+    parse_transactions_json, parse_utxos_json,
+};
 use crate::paths::IndexerRequest;
 
 fn get(path: String) -> IndexerRequest {
     IndexerRequest {
         method: "GET",
         path,
-    }
-}
-
-fn push_closed(lines: &mut Vec<String>) {
-    if !lines.iter().any(|line| line == FAIL_CLOSED) {
-        lines.push(FAIL_CLOSED.to_string());
     }
 }
 
@@ -32,15 +32,36 @@ fn push_unreadable(lines: &mut Vec<String>) {
     }
 }
 
+/// Signer refusal stays the fail-closed sentence. A failed indexer call names
+/// the request instead of that sentence.
+pub(crate) fn closed_notice(body: &str) -> Option<&str> {
+    let trimmed = body.trim();
+    if trimmed == FAIL_CLOSED {
+        return Some(FAIL_CLOSED);
+    }
+    if let Some(rest) = trimmed.strip_prefix("indexer error ") {
+        if !rest.trim().is_empty() {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
 fn closed_or_empty(body: &str, lines: &mut Vec<String>) -> bool {
     if body.trim().is_empty() {
         return true;
     }
-    if body == FAIL_CLOSED {
-        push_closed(lines);
+    if let Some(line) = closed_notice(body) {
+        if !lines.iter().any(|existing| existing == line) {
+            lines.push(line.to_string());
+        }
         return true;
     }
     false
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "true" } else { "false" }
 }
 
 fn block_line(block: &Block) -> String {
@@ -53,16 +74,22 @@ fn block_line(block: &Block) -> String {
         size = block.size,
         weight = block.weight,
     );
-    if !block.previous_hash.is_empty() {
-        line.push_str(" previous ");
-        line.push_str(&block.previous_hash);
+    if let Some(previous) = block.previous_block_hash.as_deref() {
+        if !previous.is_empty() {
+            line.push_str(" previous ");
+            line.push_str(previous);
+        }
     }
+    line.push_str(" hash ");
+    line.push_str(&block.id);
+    line.push_str(" median_time ");
+    line.push_str(&block.median_time.to_string());
     line
 }
 
-fn recent_line(tx: &RecentTx) -> String {
+fn recent_line(tx: &RecentTransaction) -> String {
     format!(
-        "recent {txid} fee {fee} vsize {vsize} value {value}",
+        "recent {txid} fee {fee} vsize {vsize} value {value} txid {txid}",
         txid = tx.txid,
         fee = tx.fee,
         vsize = tx.vsize,
@@ -70,47 +97,117 @@ fn recent_line(tx: &RecentTx) -> String {
     )
 }
 
-fn tx_line(tx: &Tx) -> String {
+fn tx_line(tx: &Transaction) -> String {
+    let confirmed = tx
+        .status
+        .as_ref()
+        .map(|status| status.confirmed)
+        .unwrap_or(false);
     let mut line = format!(
         "txid {txid} confirmed {confirmed} fee {fee} size {size} weight {weight}",
         txid = tx.txid,
-        confirmed = tx.confirmed,
+        confirmed = yes_no(confirmed),
         fee = tx.fee,
         size = tx.size,
         weight = tx.weight,
     );
-    if !tx.block_height.is_empty() {
-        line.push_str(" block_height ");
-        line.push_str(&tx.block_height);
+    if let Some(status) = tx.status.as_ref() {
+        if let Some(height) = status.block_height {
+            line.push_str(" block_height ");
+            line.push_str(&height.to_string());
+        }
+        if let Some(hash) = status.block_hash.as_deref().filter(|hash| !hash.is_empty()) {
+            line.push_str(" block_hash ");
+            line.push_str(hash);
+        }
+        if let Some(time) = status.block_time {
+            line.push_str(" block_time ");
+            line.push_str(&time.to_string());
+        }
+    }
+    append_tx_addresses(&mut line, tx);
+    line
+}
+
+fn append_address_value(line: &mut String, address: Option<&str>, value: u64) {
+    let Some(address) = address.map(str::trim).filter(|address| !address.is_empty()) else {
+        return;
+    };
+    line.push_str(" address ");
+    line.push_str(address);
+    line.push_str(" value ");
+    line.push_str(&value.to_string());
+}
+
+fn append_tx_addresses(line: &mut String, tx: &Transaction) {
+    for input in &tx.vin {
+        if let Some(prevout) = &input.prevout {
+            append_address_value(
+                line,
+                prevout.script_pubkey_address.as_deref(),
+                prevout.value,
+            );
+        }
+    }
+    for output in &tx.vout {
+        append_address_value(line, output.script_pubkey_address.as_deref(), output.value);
+    }
+}
+
+fn address_line(stats: &AddressStats) -> String {
+    let mut line = format!(
+        "address {address} chain_tx_count {chain} funded_txo_sum {funded} mempool_tx_count {mempool} mempool_funded_txo_sum {mempool_funded}",
+        address = stats.address.as_deref().unwrap_or(""),
+        chain = stats.chain_stats.tx_count,
+        funded = stats.chain_stats.funded_txo_sum,
+        mempool = stats.mempool_stats.tx_count,
+        mempool_funded = stats.mempool_stats.funded_txo_sum,
+    );
+    if let Some(scripthash) = stats
+        .scripthash
+        .as_deref()
+        .map(str::trim)
+        .filter(|scripthash| !scripthash.is_empty())
+    {
+        line.push_str(" scripthash ");
+        line.push_str(scripthash);
     }
     line
 }
 
-fn address_line(stats: &AddressStats) -> String {
-    format!(
-        "address {address} chain_tx_count {chain} funded_txo_sum {funded} mempool_tx_count {mempool}",
-        address = stats.address,
-        chain = stats.chain_tx_count,
-        funded = stats.funded_sum,
-        mempool = stats.mempool_tx_count,
-    )
-}
-
 fn utxo_line(utxo: &Utxo) -> String {
-    format!(
+    let mut line = format!(
         "utxo {txid} vout {vout} value {value} confirmed {confirmed}",
         txid = utxo.txid,
         vout = utxo.vout,
         value = utxo.value,
-        confirmed = utxo.confirmed,
-    )
+        confirmed = yes_no(utxo.status.confirmed),
+    );
+    if let Some(height) = utxo.status.block_height {
+        line.push_str(" block_height ");
+        line.push_str(&height.to_string());
+    }
+    if let Some(hash) = utxo
+        .status
+        .block_hash
+        .as_deref()
+        .filter(|hash| !hash.is_empty())
+    {
+        line.push_str(" block_hash ");
+        line.push_str(hash);
+    }
+    if let Some(time) = utxo.status.block_time {
+        line.push_str(" block_time ");
+        line.push_str(&time.to_string());
+    }
+    line
 }
 
 fn block_lines(body: &str, lines: &mut Vec<String>) {
     if closed_or_empty(body, lines) {
         return;
     }
-    match parse_blocks(body) {
+    match parse_blocks_json(body) {
         Ok(blocks) => {
             for block in blocks {
                 lines.push(block_line(&block));
@@ -153,7 +250,7 @@ pub fn dashboard_fields_text(blocks_json: &str, recent_json: &str) -> String {
     let mut lines = Vec::new();
     block_lines(blocks_json, &mut lines);
     if !closed_or_empty(recent_json, &mut lines) {
-        match parse_mempool_recent(recent_json) {
+        match parse_recent_transactions_json(recent_json) {
             Ok(recent) => {
                 for tx in recent {
                     lines.push(recent_line(&tx));
@@ -225,7 +322,7 @@ fn assemble_block_plan(
     block_and_txs(id, with_txids, page_start)
 }
 
-fn append_txs(lines: &mut Vec<String>, txs: Vec<Tx>) {
+fn append_txs(lines: &mut Vec<String>, txs: Vec<Transaction>) {
     for tx in txs {
         lines.push(tx_line(&tx));
     }
@@ -234,13 +331,13 @@ fn append_txs(lines: &mut Vec<String>, txs: Vec<Tx>) {
 pub fn block_fields_text(block_json: &str, txs_json: &str) -> String {
     let mut lines = Vec::new();
     if !closed_or_empty(block_json, &mut lines) {
-        match parse_block(block_json) {
+        match parse_block_json(block_json) {
             Ok(block) => lines.push(block_line(&block)),
             Err(_) => push_unreadable(&mut lines),
         }
     }
     if !closed_or_empty(txs_json, &mut lines) {
-        match parse_block_txs(txs_json) {
+        match parse_transactions_json(txs_json) {
             Ok(txs) => append_txs(&mut lines, txs),
             Err(_) => push_unreadable(&mut lines),
         }
@@ -275,7 +372,7 @@ pub fn transaction_requests(txid: &str) -> Vec<IndexerRequest> {
 pub fn transaction_fields_text(body: &str) -> String {
     let mut lines = Vec::new();
     if !closed_or_empty(body, &mut lines) {
-        match parse_tx(body) {
+        match parse_transaction_json(body) {
             Ok(tx) => append_txs(&mut lines, vec![tx]),
             Err(_) => push_unreadable(&mut lines),
         }
@@ -298,19 +395,19 @@ pub fn address_requests(script: &str) -> Vec<IndexerRequest> {
 pub fn address_fields_text(stats_json: &str, txs_json: &str, utxo_json: &str) -> String {
     let mut lines = Vec::new();
     if !closed_or_empty(stats_json, &mut lines) {
-        match parse_address(stats_json) {
+        match parse_address_stats_json(stats_json) {
             Ok(stats) => lines.push(address_line(&stats)),
             Err(_) => push_unreadable(&mut lines),
         }
     }
     if !closed_or_empty(txs_json, &mut lines) {
-        match parse_address_txs(txs_json) {
+        match parse_transactions_json(txs_json) {
             Ok(txs) => append_txs(&mut lines, txs),
             Err(_) => push_unreadable(&mut lines),
         }
     }
     if !closed_or_empty(utxo_json, &mut lines) {
-        match parse_address_utxos(utxo_json) {
+        match parse_utxos_json(utxo_json) {
             Ok(utxos) => {
                 for utxo in utxos {
                     lines.push(utxo_line(&utxo));
@@ -335,17 +432,28 @@ pub fn multi_address_screen_requests(values: &[String]) -> Vec<IndexerRequest> {
         .iter()
         .map(|value| value.trim())
         .filter(|script| !script.is_empty())
-        .map(|script| get(address_path(script)))
+        .flat_map(|script| [get(address_path(script)), get(address_utxo_path(script))])
         .collect()
 }
 
 pub fn multi_address_fields_text(rows: &[(String, String)]) -> String {
     let mut lines = Vec::new();
-    for (_path, body) in rows {
+    for (path, body) in rows {
         if closed_or_empty(body, &mut lines) {
             continue;
         }
-        match parse_address(body) {
+        if path.ends_with("/utxo") {
+            match parse_utxos_json(body) {
+                Ok(utxos) => {
+                    for utxo in utxos {
+                        lines.push(utxo_line(&utxo));
+                    }
+                }
+                Err(_) => push_unreadable(&mut lines),
+            }
+            continue;
+        }
+        match parse_address_stats_json(body) {
             Ok(stats) => lines.push(address_line(&stats)),
             Err(_) => push_unreadable(&mut lines),
         }
@@ -362,11 +470,11 @@ pub fn broadcast_payload(raw: &str) -> String {
 }
 
 pub fn broadcast_fields_text(body: &str) -> String {
-    if body == FAIL_CLOSED {
-        return body.to_string();
+    if let Some(line) = closed_notice(body) {
+        return line.to_string();
     }
-    match parse_broadcast(body) {
-        Ok(txid) => format!("txid {txid}"),
+    match parse_broadcast_result_json(body) {
+        Ok(result) => format!("txid {}", result.txid),
         Err(_) => String::new(),
     }
 }
@@ -391,15 +499,34 @@ pub fn test_transactions_payload(raw: &str) -> String {
     test_txs_body(&refs)
 }
 
+fn plain_number(value: f64) -> String {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() < (i64::MAX as f64) {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
 fn test_line(result: &TestTxResult) -> String {
+    let allowed = result.allowed.map(yes_no).unwrap_or("");
     let mut line = format!(
         "txid {txid} allowed {allowed}",
         txid = result.txid,
-        allowed = result.allowed,
+        allowed = allowed,
     );
-    if !result.reject_reason.is_empty() {
-        line.push_str(" reject-reason ");
-        line.push_str(&result.reject_reason);
+    if let Some(fees) = &result.fees {
+        line.push_str(" fee base ");
+        line.push_str(&plain_number(fees.base));
+        line.push_str(" effective-feerate ");
+        line.push_str(&plain_number(fees.effective_feerate));
+        line.push_str(" effective-includes ");
+        line.push_str(&fees.effective_includes.join(","));
+    }
+    if let Some(reason) = result.reject_reason.as_deref() {
+        if !reason.is_empty() {
+            line.push_str(" reject-reason ");
+            line.push_str(reason);
+        }
     }
     line
 }
@@ -409,7 +536,7 @@ pub fn test_transactions_fields_text(body: &str) -> String {
     if closed_or_empty(body, &mut lines) {
         return lines.join("\n");
     }
-    match parse_test_txs(body) {
+    match parse_test_tx_results_json(body) {
         Ok(rows) => {
             for result in rows {
                 lines.push(test_line(&result));

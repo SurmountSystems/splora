@@ -10,7 +10,8 @@ license = "MIT"
 splora-api = { path = "../splora-api" }
 splora-frontend-shared = { path = "../shared" }
 nostr = { version = "=0.45.4", default-features = false, features = ["std", "os-rng", "nip98"] }
-gpui = { package = "gpui-pre", version = "=0.3.5", default-features = false }
+gpui = { package = "gpui-pre", version = "=0.3.5", default-features = false, features = ["x11"] }
+anyhow = "1"
 gpui-pre-platform = { version = "=0.3.5", features = ["wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

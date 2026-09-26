@@ -7,6 +7,7 @@ mod auth;
 mod browser;
 mod models;
 mod paths;
+mod rows;
 mod screens;
 mod theme;
 mod views;
@@ -18,7 +19,10 @@ pub use auth::{
 };
 pub use browser::browser_signer_present;
 pub use models::{
-    FeeEstimate, parse_blocks_tip_hash, parse_blocks_tip_height, parse_fee_estimates, recent_txids,
+    parse_address_stats_json, parse_block_json, parse_blocks_json, parse_blocks_tip_hash,
+    parse_blocks_tip_height, parse_broadcast_result_json, parse_fee_estimates,
+    parse_mempool_summary_json, parse_recent_transactions_json, parse_test_tx_results_json,
+    parse_transaction_json, parse_transactions_json, parse_utxos_json, recent_txids,
 };
 pub use paths::{
     IndexerRequest, address_path, address_txs_path, block_path, block_txids_path, block_txs_path,
@@ -26,6 +30,10 @@ pub use paths::{
     multi_address_requests_from_values, multi_address_screen_route, screen_routes,
     static_page_requests, static_page_routes, switcher_labels, test_transactions_request, tx_path,
     v1_client_requests,
+};
+pub use rows::{
+    address_rows_markup, block_rows_markup, blocks_rows_markup, dashboard_rows_markup,
+    transaction_row_markup,
 };
 pub use screens::{
     address_fields_text, address_requests, block_fields_text, block_load_plan,
