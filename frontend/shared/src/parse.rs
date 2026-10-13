@@ -140,13 +140,14 @@ impl From<TxJson> for Tx {
 ///
 /// The object keys are `address`, `chain_stats`, and `mempool_stats`
 /// (`src/rest.rs`). `chain_stats.tx_count` and `chain_stats.funded_txo_sum`
-/// come from `ScriptStats` in `src/new_index/schema.rs`. Mempool tx count is
-/// `mempool_stats.tx_count`.
+/// come from `ScriptStats` in `src/new_index/schema.rs`. A missing funded
+/// sum is `None`, not an error and not `"0"`. Explicit `0` is `Some("0")`.
+/// Mempool tx count is `mempool_stats.tx_count`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressStats {
     pub address: String,
     pub chain_tx_count: String,
-    pub funded_sum: String,
+    pub funded_sum: Option<String>,
     pub mempool_tx_count: String,
 }
 
@@ -248,14 +249,10 @@ pub fn parse_tx(body: &str) -> Result<Tx, ParseError> {
 
 pub fn parse_address(body: &str) -> Result<AddressStats, ParseError> {
     let raw: AddressJson = serde_json::from_str(body)?;
-    let funded_sum = raw
-        .chain_stats
-        .funded_txo_sum
-        .ok_or_else(|| ParseError::new("missing chain_stats.funded_txo_sum"))?;
     Ok(AddressStats {
         address: raw.address,
         chain_tx_count: raw.chain_stats.tx_count.to_string(),
-        funded_sum: funded_sum.to_string(),
+        funded_sum: raw.chain_stats.funded_txo_sum.map(|sum| sum.to_string()),
         mempool_tx_count: raw.mempool_stats.tx_count.to_string(),
     })
 }
@@ -497,11 +494,13 @@ pub fn parse_address_prefix(body: &str) -> Result<Vec<String>, ParseError> {
 ///
 /// Same stats object as [`AddressStats`], with `scripthash` instead of
 /// `address`. `src/rest.rs` uses the script type as the object key.
+/// A missing funded sum is `None`, not an error and not `"0"`.
+/// Explicit `0` is `Some("0")`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptHashStats {
     pub scripthash: String,
     pub chain_tx_count: String,
-    pub funded_sum: String,
+    pub funded_sum: Option<String>,
     pub mempool_tx_count: String,
 }
 
@@ -514,14 +513,10 @@ struct ScriptHashJson {
 
 pub fn parse_scripthash(body: &str) -> Result<ScriptHashStats, ParseError> {
     let raw: ScriptHashJson = serde_json::from_str(body)?;
-    let funded_sum = raw
-        .chain_stats
-        .funded_txo_sum
-        .ok_or_else(|| ParseError::new("missing chain_stats.funded_txo_sum"))?;
     Ok(ScriptHashStats {
         scripthash: raw.scripthash,
         chain_tx_count: raw.chain_stats.tx_count.to_string(),
-        funded_sum: funded_sum.to_string(),
+        funded_sum: raw.chain_stats.funded_txo_sum.map(|sum| sum.to_string()),
         mempool_tx_count: raw.mempool_stats.tx_count.to_string(),
     })
 }

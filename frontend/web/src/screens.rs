@@ -96,13 +96,21 @@ fn block_line(block: &Block) -> String {
     line.push_str(" median_time ");
     line.push_str(&block.median_time.to_string());
     line.push_str(&format!(
-        " version {version} merkle_root {merkle_root} nonce {nonce} bits {bits} difficulty {difficulty}",
+        " version {version} merkle_root {merkle_root}",
         version = block.version,
         merkle_root = block.merkle_root,
-        nonce = block.nonce,
-        bits = block.bits,
-        difficulty = plain_number(block.difficulty),
     ));
+    // A missing key is None. Some(0) still prints. Do not substitute zero.
+    if let Some(nonce) = block.nonce {
+        line.push_str(&format!(" nonce {nonce}"));
+    }
+    if let Some(bits) = block.bits {
+        line.push_str(&format!(" bits {bits}"));
+    }
+    if let Some(difficulty) = block.difficulty {
+        line.push_str(" difficulty ");
+        line.push_str(&plain_number(difficulty));
+    }
     line
 }
 
@@ -222,14 +230,54 @@ fn append_tx_addresses(line: &mut String, tx: &Transaction) {
     }
 }
 
+/// Chain funded minus chain spent. Either missing sum omits the balance.
+/// `Some(0)` still counts. The difference is signed, not saturating.
+pub(crate) fn confirmed_balance_words(funded: Option<u64>, spent: Option<u64>) -> Option<String> {
+    match (funded, spent) {
+        (Some(funded), Some(spent)) => {
+            let balance = funded as i128 - spent as i128;
+            Some(format!("Confirmed balance {balance}"))
+        }
+        _ => None,
+    }
+}
+
+/// Chain funded count minus chain spent count. Both counts are present on
+/// a successful parse. The difference is signed, not saturating.
+/// `0 - 0` is `Confirmed UTXOs 0`.
+pub(crate) fn confirmed_utxo_words(funded: u64, spent: u64) -> String {
+    let count = funded as i128 - spent as i128;
+    format!("Confirmed UTXOs {count}")
+}
+
+fn push_optional_sum(line: &mut String, label: &str, sum: Option<u64>) {
+    if let Some(sum) = sum {
+        line.push(' ');
+        line.push_str(label);
+        line.push(' ');
+        line.push_str(&sum.to_string());
+    }
+}
+
 fn address_line(stats: &AddressStats) -> String {
     let mut line = format!(
-        "address {address} chain_tx_count {chain} funded_txo_sum {funded} mempool_tx_count {mempool} mempool_funded_txo_sum {mempool_funded}",
+        "address {address} chain_tx_count {chain}",
         address = stats.address.as_deref().unwrap_or(""),
         chain = stats.chain_stats.tx_count,
-        funded = stats.chain_stats.funded_txo_sum,
+    );
+    push_optional_sum(
+        &mut line,
+        "funded_txo_sum",
+        stats.chain_stats.funded_txo_sum,
+    );
+    line.push_str(&format!(
+        " mempool_tx_count {mempool}",
         mempool = stats.mempool_stats.tx_count,
-        mempool_funded = stats.mempool_stats.funded_txo_sum,
+    ));
+    push_optional_sum(
+        &mut line,
+        "mempool_funded_txo_sum",
+        stats.mempool_stats.funded_txo_sum,
     );
     if let Some(scripthash) = stats
         .scripthash
@@ -241,13 +289,36 @@ fn address_line(stats: &AddressStats) -> String {
         line.push_str(scripthash);
     }
     line.push_str(&format!(
-        " chain_funded_txo_count {funded_count} chain_spent_txo_count {spent_count} chain_spent_txo_sum {spent_sum} mempool_funded_txo_count {mempool_funded_count} mempool_spent_txo_count {mempool_spent_count} mempool_spent_txo_sum {mempool_spent_sum}",
+        " chain_funded_txo_count {funded_count} chain_spent_txo_count {spent_count}",
         funded_count = stats.chain_stats.funded_txo_count,
         spent_count = stats.chain_stats.spent_txo_count,
-        spent_sum = stats.chain_stats.spent_txo_sum,
+    ));
+    push_optional_sum(
+        &mut line,
+        "chain_spent_txo_sum",
+        stats.chain_stats.spent_txo_sum,
+    );
+    line.push_str(&format!(
+        " mempool_funded_txo_count {mempool_funded_count} mempool_spent_txo_count {mempool_spent_count}",
         mempool_funded_count = stats.mempool_stats.funded_txo_count,
         mempool_spent_count = stats.mempool_stats.spent_txo_count,
-        mempool_spent_sum = stats.mempool_stats.spent_txo_sum,
+    ));
+    push_optional_sum(
+        &mut line,
+        "mempool_spent_txo_sum",
+        stats.mempool_stats.spent_txo_sum,
+    );
+    if let Some(words) = confirmed_balance_words(
+        stats.chain_stats.funded_txo_sum,
+        stats.chain_stats.spent_txo_sum,
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    line.push(' ');
+    line.push_str(&confirmed_utxo_words(
+        stats.chain_stats.funded_txo_count,
+        stats.chain_stats.spent_txo_count,
     ));
     line
 }

@@ -922,9 +922,9 @@ fn assert_block_details() {
     assert_eq!(block.weight, 4000);
     assert_eq!(block.merkle_root, "merkle-root-1");
     assert_eq!(block.median_time, 1_599_990_000);
-    assert_eq!(block.nonce, 7);
-    assert_eq!(block.bits, 386_604_799);
-    assert_eq!(block.difficulty, 1.0);
+    assert_eq!(block.nonce, Some(7));
+    assert_eq!(block.bits, Some(386_604_799));
+    assert_eq!(block.difficulty, Some(1.0));
     assert_eq!(block.tx_count, 12);
     assert_eq!(block.previous_block_hash.as_deref(), Some("prev-block-1"));
 }
@@ -1044,7 +1044,7 @@ fn assert_tx_and_address() {
     assert_eq!(tx.vout[0].script_pubkey_address.as_deref(), Some(address));
     let stats: AddressStats = serde_json::from_str(&address_json(address)).unwrap();
     assert_eq!(stats.address.as_deref(), Some(address));
-    assert_eq!(stats.chain_stats.funded_txo_sum, 500_000);
+    assert_eq!(stats.chain_stats.funded_txo_sum, Some(500_000));
     assert_eq!(stats.mempool_stats.tx_count, 3);
 }
 
@@ -1115,7 +1115,7 @@ fn assert_address_prefix(typed: &str, opened: &str, list_len: usize) {
     let stats: AddressStats = serde_json::from_str(&address_json(opened)).unwrap();
     assert_eq!(stats.address.as_deref(), Some(opened));
     assert_eq!(stats.chain_stats.tx_count, 9);
-    assert_eq!(stats.chain_stats.funded_txo_sum, 500_000);
+    assert_eq!(stats.chain_stats.funded_txo_sum, Some(500_000));
     assert_eq!(stats.mempool_stats.tx_count, 3);
 }
 

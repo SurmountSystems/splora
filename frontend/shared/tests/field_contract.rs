@@ -55,7 +55,7 @@ fn wire_structs_expose_block_tx_address_utxo_mempool_and_fee_fields() {
 
     let stats: AddressStats = serde_json::from_str(&fixture("address.json")).unwrap();
     assert_eq!(stats.address.as_deref(), Some("xyz"));
-    assert_eq!(stats.chain_stats.funded_txo_sum, 500_000);
+    assert_eq!(stats.chain_stats.funded_txo_sum, Some(500_000));
 
     let utxos: Vec<Utxo> = serde_json::from_str(&fixture("address_utxos.json")).unwrap();
     assert_eq!(utxos.len(), 1);
@@ -94,8 +94,11 @@ fn wire_structs_reject_json_that_omits_a_required_field() {
             .remove("funded_txo_sum")
             .is_some()
     );
-    let err = serde_json::from_str::<AddressStats>(&address.to_string()).unwrap_err();
-    assert_missing_field(&err, "funded_txo_sum");
+    let parsed: AddressStats = serde_json::from_str(&address.to_string())
+        .expect("a missing funded_txo_sum is not a parse error");
+    assert_eq!(parsed.chain_stats.funded_txo_sum, None);
+    assert_ne!(parsed.chain_stats.funded_txo_sum, Some(0));
+    assert_eq!(parsed.chain_stats.spent_txo_sum, Some(100_000));
 
     let mut utxos: serde_json::Value =
         serde_json::from_str(&fixture("address_utxos.json")).unwrap();

@@ -8,9 +8,9 @@ use serde_json::Value;
 use splora_frontend_shared::{
     AssetRegistryEntry, RegistryAsset, asset_registry_path, asset_supply_decimal_path,
     asset_supply_path, asset_txs_chain_page_path, asset_txs_chain_path, asset_txs_mempool_path,
-    assets_registry_path, assets_registry_search_path, parse_asset_registry, parse_asset_supply,
-    parse_asset_supply_decimal, parse_asset_txs_chain, parse_assets_registry,
-    parse_assets_registry_search,
+    assets_registry_page_path, assets_registry_path, assets_registry_search_path,
+    parse_asset_registry, parse_asset_supply, parse_asset_supply_decimal, parse_asset_txs_chain,
+    parse_assets_registry, parse_assets_registry_search,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,24 @@ pub fn registry_list_request(liquid: bool) -> Option<LiquidRequest> {
         return None;
     }
     Some(get(assets_registry_path().to_string()))
+}
+
+pub fn registry_page_request(
+    liquid: bool,
+    start_index: Option<&str>,
+    limit: Option<&str>,
+    sort_field: Option<&str>,
+    sort_dir: Option<&str>,
+) -> Option<LiquidRequest> {
+    if !liquid {
+        return None;
+    }
+    Some(get(assets_registry_page_path(
+        start_index,
+        limit,
+        sort_field,
+        sort_dir,
+    )))
 }
 
 pub fn registry_entry_request(liquid: bool, asset: &str) -> Option<LiquidRequest> {

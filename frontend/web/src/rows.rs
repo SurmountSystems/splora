@@ -13,10 +13,14 @@ use splora_frontend_shared::{
 };
 
 use crate::models::{
-    parse_address_stats_json, parse_block_json, parse_blocks_json, parse_recent_transactions_json,
-    parse_transaction_json, parse_transactions_json, parse_utxos_json,
+    parse_address_stats_json, parse_block_json, parse_blocks_json, parse_blocks_tip_height,
+    parse_recent_transactions_json, parse_transaction_json, parse_transactions_json,
+    parse_utxos_json,
 };
-use crate::screens::{UtxoAmount, closed_notice, plain_number, utxo_amount};
+use crate::screens::{
+    UtxoAmount, closed_notice, confirmed_balance_words, confirmed_utxo_words, plain_number,
+    utxo_amount,
+};
 
 fn html_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -68,6 +72,78 @@ fn finite_rate(rate: Option<f64>) -> Option<String> {
 
 fn paragraph(class: &str, text: &str) -> String {
     format!("<p class=\"{class}\">{text}</p>")
+}
+
+fn push_sum(out: &mut String, class: &str, sum: Option<u64>) {
+    if let Some(sum) = sum {
+        out.push_str(&paragraph(class, &sum.to_string()));
+    }
+}
+
+/// Chain funded sum. `None` omits the line. `Some(0)` is `Total received 0`.
+fn total_received_words(funded: Option<u64>) -> Option<String> {
+    funded.map(|sum| format!("Total received {sum}"))
+}
+
+/// Chain spent plus mempool spent. Either missing sum omits the line.
+/// `Some(0)` plus `Some(0)` is `Total sent 0`. The add is `u128` so it does not wrap.
+fn total_sent_words(chain_spent: Option<u64>, mempool_spent: Option<u64>) -> Option<String> {
+    match (chain_spent, mempool_spent) {
+        (Some(chain_spent), Some(mempool_spent)) => {
+            let sum = chain_spent as u128 + mempool_spent as u128;
+            Some(format!("Total sent {sum}"))
+        }
+        _ => None,
+    }
+}
+
+/// Mempool funded count minus mempool spent count.
+/// Both counts are present on a successful parse. Signed, not saturating.
+/// `0 - 0` is `Pending UTXOs 0`. A missing count never reaches this function.
+fn pending_utxo_words(funded: u64, spent: u64) -> String {
+    let count = funded as i128 - spent as i128;
+    format!("Pending UTXOs {count}")
+}
+
+/// Mempool funded sum minus mempool spent sum.
+/// Either missing sum omits the line. A missing sum is not zero.
+/// `Some(0)` minus `Some(0)` is `Pending 0`. The difference is signed, not saturating.
+fn pending_amount_words(funded: Option<u64>, spent: Option<u64>) -> Option<String> {
+    match (funded, spent) {
+        (Some(funded), Some(spent)) => {
+            let amount = funded as i128 - spent as i128;
+            Some(format!("Pending {amount}"))
+        }
+        _ => None,
+    }
+}
+
+/// Chain funded plus mempool funded, minus chain spent plus mempool spent.
+/// Any missing sum omits the line. A missing sum is not zero. Do not treat
+/// a missing sum as zero. All four `Some(0)` is `Balance 0`. Add and subtract
+/// as `i128`, so the difference is signed and does not wrap.
+fn balance_words(
+    chain_funded: Option<u64>,
+    chain_spent: Option<u64>,
+    mempool_funded: Option<u64>,
+    mempool_spent: Option<u64>,
+) -> Option<String> {
+    match (chain_funded, chain_spent, mempool_funded, mempool_spent) {
+        (Some(chain_funded), Some(chain_spent), Some(mempool_funded), Some(mempool_spent)) => {
+            let balance = (chain_funded as i128 + mempool_funded as i128)
+                - (chain_spent as i128 + mempool_spent as i128);
+            Some(format!("Balance {balance}"))
+        }
+        _ => None,
+    }
+}
+
+/// Chain tx count plus mempool tx count.
+/// Both counts are present on a successful parse. The add is `u128` so it does not wrap.
+/// `0 + 0` is `Transactions 0`. A missing count never reaches this function.
+fn transactions_words(chain_count: u64, mempool_count: u64) -> String {
+    let sum = chain_count as u128 + mempool_count as u128;
+    format!("Transactions {sum}")
 }
 
 fn table(class: &str, rows: Vec<String>) -> String {
@@ -181,9 +257,16 @@ fn block_row(block: &Block) -> String {
     }
     cells.push(td("version", &row.version.to_string()));
     cells.push(td("merkle-root", &html_escape(&row.merkle_root)));
-    cells.push(td("nonce", &row.nonce.to_string()));
-    cells.push(td("bits", &row.bits.to_string()));
-    cells.push(td("difficulty", &plain_number(row.difficulty)));
+    // A missing key is None. Some(0) still prints. Do not substitute zero.
+    if let Some(nonce) = row.nonce {
+        cells.push(td("nonce", &nonce.to_string()));
+    }
+    if let Some(bits) = row.bits {
+        cells.push(td("bits", &bits.to_string()));
+    }
+    if let Some(difficulty) = row.difficulty {
+        cells.push(td("difficulty", &plain_number(difficulty)));
+    }
     format!("<tr class=\"block-row\">{}</tr>", cells.concat())
 }
 
@@ -193,6 +276,13 @@ fn address_span(address: &str) -> String {
 
 fn value_span(value: u64) -> String {
     format!("<span class=\"value\">{value}</span>")
+}
+
+fn script_type_span(text: &str) -> String {
+    format!(
+        "<span class=\"scriptpubkey-type\">{}</span>",
+        html_escape(text)
+    )
 }
 
 fn issuance_span(phrase: &str) -> String {
@@ -274,10 +364,25 @@ fn input_party(input: &TxInput) -> String {
         if let Some(value) = prevout.value {
             inner.push_str(&value_span(value));
         }
+        if !prevout.script_pubkey_type.is_empty() {
+            inner.push_str(&script_type_span(&format!(
+                "input script type {}",
+                prevout.script_pubkey_type
+            )));
+        }
     }
     if let Some(issuance) = &input.issuance {
         inner.push_str(&issuance_markup(issuance));
     }
+    // A parsed input always has sequence, including zero. A missing key never
+    // reaches here. Coinbase paints only when the bool is true.
+    if input.is_coinbase {
+        inner.push_str("<span class=\"coinbase\">coinbase</span>");
+    }
+    inner.push_str(&format!(
+        "<span class=\"sequence\">sequence {}</span>",
+        input.sequence
+    ));
     format!("<span class=\"party\">{inner}</span>")
 }
 
@@ -289,6 +394,8 @@ fn output_party(output: &TxOutput) -> String {
     if output.script_pubkey_type == "op_return" {
         inner.push_str("<span class=\"scriptpubkey-type\">op_return</span>");
         inner.push_str("<span class=\"op-return\">OP_RETURN</span>");
+    } else if !output.script_pubkey_type.is_empty() {
+        inner.push_str(&script_type_span(&output.script_pubkey_type));
     }
     if let Some(value) = output.value {
         inner.push_str(&value_span(value));
@@ -307,6 +414,66 @@ fn tx_parties(tx: &Transaction) -> String {
     parties
 }
 
+/// Mempool `Math.max(weight / 4, sigops * 5)`, then `Math.round(n * 100) / 100`.
+/// Floating division, not the integer virtual-size quotient.
+fn adjusted_vsize_text(weight: u32, sigops: u32) -> String {
+    let value = (f64::from(weight) / 4.0).max(f64::from(sigops) * 5.0);
+    let rounded = (value * 100.0).round() / 100.0;
+    plain_number(rounded)
+}
+
+/// `tx.size | bytes: 2`: decimal 2, from `B`, powers of 1000. `u32` stays under TB.
+/// Divide in f64, then `(value * 100).round() / 100`. Integer half-up paints 1005 as 1.01 kB.
+fn size_number_and_unit(size: u32) -> (String, &'static str) {
+    let (scale, unit): (f64, &str) = if size < 1_000 {
+        (1.0, "B")
+    } else if size < 1_000_000 {
+        (1_000.0, "kB")
+    } else if size < 1_000_000_000 {
+        (1_000_000.0, "MB")
+    } else {
+        (1_000_000_000.0, "GB")
+    };
+    let value = f64::from(size) / scale;
+    let rounded = (value * 100.0).round() / 100.0;
+    (plain_number(rounded), unit)
+}
+
+/// `tx.weight | wuBytes: 2`, plaintext. Scale 1000, not 1024.
+/// The unit comes from the raw weight before rounding. Half away from zero
+/// on the hundredths, then the JavaScript number string. `u32` stays under TWU.
+fn weight_number_and_unit(weight: u32) -> (String, &'static str) {
+    let weight = u64::from(weight);
+    let (scale, unit): (f64, &str) = if weight < 1_000 {
+        (1.0, "WU")
+    } else if weight < 1_000_000 {
+        (1_000.0, "kWU")
+    } else if weight < 1_000_000_000 {
+        (1_000_000.0, "MWU")
+    } else if weight < 1_000_000_000_000 {
+        (1_000_000_000.0, "GWU")
+    } else {
+        (1_000_000_000_000.0, "TWU")
+    };
+    let value = weight as f64 / scale;
+    let rounded = (value * 100.0).round() / 100.0;
+    (plain_number(rounded), unit)
+}
+
+/// Angular `{{ tx.fee | number }}`: DecimalPipe `1.0-3`, en-US grouping.
+/// Fee is an integer, so there is no fraction. `0` stays `0`.
+fn grouped_integer(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped.chars().rev().collect()
+}
+
 fn tx_row(tx: &Transaction) -> String {
     let row = TxRow::from(tx);
     let confirmed = tx
@@ -314,14 +481,34 @@ fn tx_row(tx: &Transaction) -> String {
         .as_ref()
         .map(|status| status.confirmed)
         .unwrap_or(false);
+    let n = adjusted_vsize_text(tx.weight, tx.sigops);
+    let (number, unit) = size_number_and_unit(tx.size);
+    let (weight_number, weight_unit) = weight_number_and_unit(tx.weight);
     let mut cells = vec![
         td("txid", &txid_anchor(&row.txid)),
         td("fee", &row.fee.to_string()),
+        td(
+            "preview-fee",
+            &format!(
+                "<span class=\"label\">Fee</span> {} <span class=\"symbol\">sats</span>",
+                grouped_integer(row.fee)
+            ),
+        ),
         td("confirmed", yes_no(confirmed)),
-        td("size", &tx.size.to_string()),
+        td(
+            "size",
+            &format!("Size {number} <span class=\"symbol\">{unit}</span>"),
+        ),
         td("weight", &tx.weight.to_string()),
+        td(
+            "weight-units",
+            &format!("Weight {weight_number} {weight_unit}"),
+        ),
+        td("virtual-size", &format!("Virtual size {}", tx.weight / 4)),
+        td("adjusted-vsize", &format!("Adjusted vsize {n}")),
         td("version", &row.version.to_string()),
         td("locktime", &row.lock_time.to_string()),
+        td("sigops-label", "Sigops"),
         td("sigops", &row.sigops.to_string()),
     ];
     if let Some(rate) = finite_rate(row.sat_per_vbyte()) {
@@ -410,18 +597,16 @@ fn address_summary(stats: &AddressStats) -> String {
         "chain-tx-count",
         &stats.chain_stats.tx_count.to_string(),
     ));
-    out.push_str(&paragraph(
-        "funded-sum",
-        &stats.chain_stats.funded_txo_sum.to_string(),
-    ));
+    push_sum(&mut out, "funded-sum", stats.chain_stats.funded_txo_sum);
     out.push_str(&paragraph(
         "mempool-tx-count",
         &stats.mempool_stats.tx_count.to_string(),
     ));
-    out.push_str(&paragraph(
+    push_sum(
+        &mut out,
         "mempool-funded-sum",
-        &stats.mempool_stats.funded_txo_sum.to_string(),
-    ));
+        stats.mempool_stats.funded_txo_sum,
+    );
     out.push_str(&paragraph(
         "chain-funded-txo-count",
         &stats.chain_stats.funded_txo_count.to_string(),
@@ -430,10 +615,7 @@ fn address_summary(stats: &AddressStats) -> String {
         "chain-spent-txo-count",
         &stats.chain_stats.spent_txo_count.to_string(),
     ));
-    out.push_str(&paragraph(
-        "chain-spent-sum",
-        &stats.chain_stats.spent_txo_sum.to_string(),
-    ));
+    push_sum(&mut out, "chain-spent-sum", stats.chain_stats.spent_txo_sum);
     out.push_str(&paragraph(
         "mempool-funded-txo-count",
         &stats.mempool_stats.funded_txo_count.to_string(),
@@ -442,9 +624,57 @@ fn address_summary(stats: &AddressStats) -> String {
         "mempool-spent-txo-count",
         &stats.mempool_stats.spent_txo_count.to_string(),
     ));
-    out.push_str(&paragraph(
+    push_sum(
+        &mut out,
         "mempool-spent-sum",
-        &stats.mempool_stats.spent_txo_sum.to_string(),
+        stats.mempool_stats.spent_txo_sum,
+    );
+    if let Some(words) = confirmed_balance_words(
+        stats.chain_stats.funded_txo_sum,
+        stats.chain_stats.spent_txo_sum,
+    ) {
+        out.push_str(&paragraph("confirmed-balance", &words));
+    }
+    out.push_str(&paragraph(
+        "confirmed-utxos",
+        &confirmed_utxo_words(
+            stats.chain_stats.funded_txo_count,
+            stats.chain_stats.spent_txo_count,
+        ),
+    ));
+    if let Some(words) = total_received_words(stats.chain_stats.funded_txo_sum) {
+        out.push_str(&paragraph("total-received", &words));
+    }
+    if let Some(words) = total_sent_words(
+        stats.chain_stats.spent_txo_sum,
+        stats.mempool_stats.spent_txo_sum,
+    ) {
+        out.push_str(&paragraph("total-sent", &words));
+    }
+    out.push_str(&paragraph(
+        "pending-utxos",
+        &pending_utxo_words(
+            stats.mempool_stats.funded_txo_count,
+            stats.mempool_stats.spent_txo_count,
+        ),
+    ));
+    if let Some(words) = pending_amount_words(
+        stats.mempool_stats.funded_txo_sum,
+        stats.mempool_stats.spent_txo_sum,
+    ) {
+        out.push_str(&paragraph("pending-amount", &words));
+    }
+    if let Some(words) = balance_words(
+        stats.chain_stats.funded_txo_sum,
+        stats.chain_stats.spent_txo_sum,
+        stats.mempool_stats.funded_txo_sum,
+        stats.mempool_stats.spent_txo_sum,
+    ) {
+        out.push_str(&paragraph("balance", &words));
+    }
+    out.push_str(&paragraph(
+        "transactions",
+        &transactions_words(stats.chain_stats.tx_count, stats.mempool_stats.tx_count),
     ));
     out
 }
@@ -548,13 +778,54 @@ pub fn block_rows_markup(block_json: &str, txs_json: &str) -> String {
     out
 }
 
+/// Sum of output values on one transaction. Every present value is added,
+/// including zero. An empty output list is 0. Any missing value omits the
+/// total. A missing value is not zero. The add is `u128` so it does not wrap.
+/// `valuecommitment` is not an amount.
+fn output_total_words(tx: &Transaction) -> Option<String> {
+    let mut sum: u128 = 0;
+    for output in &tx.vout {
+        let Some(value) = output.value else {
+            return None;
+        };
+        sum += value as u128;
+    }
+    Some(format!("Output total {sum}"))
+}
+
 pub fn transaction_row_markup(body: &str) -> String {
     let mut out = match one_tx(body) {
-        Some(tx) => table("tx-rows", vec![tx_row(&tx)]),
+        Some(tx) => {
+            let mut markup = table("tx-rows", vec![tx_row(&tx)]);
+            if let Some(words) = output_total_words(&tx) {
+                markup.push_str(&paragraph("output-total", &words));
+            }
+            markup
+        }
         None => String::new(),
     };
     out.push_str(&liquid_tx_labels(body));
     out
+}
+
+/// Tip height minus `status.block_height`, plus 1.
+/// A missing block height, a missing status, or a tip body that is empty or
+/// not an integer omits the paragraph. The difference is `i128` so it does not wrap.
+pub fn confirmation_markup(tx_body: &str, tip_height_body: &str) -> String {
+    let Some(block_height) = one_tx(tx_body)
+        .and_then(|tx| tx.status)
+        .and_then(|status| status.block_height)
+    else {
+        return String::new();
+    };
+    let Ok(tip_text) = parse_blocks_tip_height(tip_height_body) else {
+        return String::new();
+    };
+    let Ok(tip_height) = tip_text.parse::<u64>() else {
+        return String::new();
+    };
+    let count = tip_height as i128 - block_height as i128 + 1;
+    paragraph("confirmations", &format!("Confirmations {count}"))
 }
 
 pub fn summary_rows_markup(body: &str) -> String {
@@ -634,6 +905,14 @@ fn paint_outspend(spend: &splora_frontend_shared::wire::Outspend) -> String {
     }
     if let Some(vin) = spend.vin {
         out.push_str(&format!(" vin {vin}"));
+    }
+    // A missing status or JSON null is None. false still prints. Do not substitute false.
+    if let Some(status) = spend.status.as_ref() {
+        out.push(' ');
+        out.push_str(&format!(
+            "<span class=\"spend-confirmed\">confirmed {}</span>",
+            yes_no(status.confirmed)
+        ));
     }
     out.push_str("</p>");
     out
@@ -875,6 +1154,13 @@ pub fn package_txid_markup(body: &str) -> String {
         // An empty other-wtxid is not a witness id. A missing one is not the txid.
         if let Some(wtxid) = tx.other_wtxid.as_deref().filter(|wtxid| !wtxid.is_empty()) {
             out.push_str(&html_escape(wtxid));
+        }
+        // A missing key, JSON null, and an empty string omit the label. The text 0 still prints.
+        if let Some(error) = tx.error.as_deref().filter(|error| !error.is_empty()) {
+            out.push_str(&format!(
+                "<span class=\"package-error\">error {}</span>",
+                html_escape(error)
+            ));
         }
     }
     out
@@ -1122,11 +1408,62 @@ pub fn scripthash_markup(body: &str) -> String {
                 "chain-tx-count",
                 &html_escape(&stats.chain_tx_count),
             ));
-            out.push_str(&paragraph("funded-sum", &html_escape(&stats.funded_sum)));
+            if let Some(funded) = stats.funded_sum.as_deref() {
+                out.push_str(&paragraph("funded-sum", &html_escape(funded)));
+            }
             out.push_str(&paragraph(
                 "mempool-tx-count",
                 &html_escape(&stats.mempool_tx_count),
             ));
+            if let Ok(wire) = parse_address_stats_json(body) {
+                if let Some(words) = confirmed_balance_words(
+                    wire.chain_stats.funded_txo_sum,
+                    wire.chain_stats.spent_txo_sum,
+                ) {
+                    out.push_str(&paragraph("confirmed-balance", &words));
+                }
+                out.push_str(&paragraph(
+                    "confirmed-utxos",
+                    &confirmed_utxo_words(
+                        wire.chain_stats.funded_txo_count,
+                        wire.chain_stats.spent_txo_count,
+                    ),
+                ));
+                if let Some(words) = total_received_words(wire.chain_stats.funded_txo_sum) {
+                    out.push_str(&paragraph("total-received", &words));
+                }
+                if let Some(words) = total_sent_words(
+                    wire.chain_stats.spent_txo_sum,
+                    wire.mempool_stats.spent_txo_sum,
+                ) {
+                    out.push_str(&paragraph("total-sent", &words));
+                }
+                out.push_str(&paragraph(
+                    "pending-utxos",
+                    &pending_utxo_words(
+                        wire.mempool_stats.funded_txo_count,
+                        wire.mempool_stats.spent_txo_count,
+                    ),
+                ));
+                if let Some(words) = pending_amount_words(
+                    wire.mempool_stats.funded_txo_sum,
+                    wire.mempool_stats.spent_txo_sum,
+                ) {
+                    out.push_str(&paragraph("pending-amount", &words));
+                }
+                if let Some(words) = balance_words(
+                    wire.chain_stats.funded_txo_sum,
+                    wire.chain_stats.spent_txo_sum,
+                    wire.mempool_stats.funded_txo_sum,
+                    wire.mempool_stats.spent_txo_sum,
+                ) {
+                    out.push_str(&paragraph("balance", &words));
+                }
+                out.push_str(&paragraph(
+                    "transactions",
+                    &transactions_words(wire.chain_stats.tx_count, wire.mempool_stats.tx_count),
+                ));
+            }
             out
         }
         Err(_) => failure_markup(body).unwrap_or_default(),
@@ -1160,7 +1497,9 @@ pub fn address_rows_markup(stats_json: &str, txs_json: &str, utxo_json: &str) ->
 /// Peg-in, peg-out, asset id, and the confidential label from the parsed transaction.
 ///
 /// `TxInput.is_pegin` and `TxOutput.pegout` are on the shared transaction.
-/// A missing `is_pegin` is false. A missing `pegout` is none. `TxOutput.asset`,
+/// A missing `is_pegin` is None and does not paint a peg-in.
+/// `Some(false)` does not paint a peg-in. `Some(true)` paints Peg-in.
+/// A missing `pegout` is none. `TxOutput.asset`,
 /// `value`, `valuecommitment`, and `assetcommitment` are on the shared output.
 /// A missing value is none, not zero. A commitment is not an amount.
 fn liquid_tx_labels(body: &str) -> String {
@@ -1185,7 +1524,7 @@ fn parsed_peg_labels(body: &str) -> String {
 fn peg_labels_from_tx(tx: &Transaction) -> String {
     let mut vin_rows = String::new();
     for input in &tx.vin {
-        if !input.is_pegin {
+        if input.is_pegin != Some(true) {
             continue;
         }
         let link = if input.txid.is_empty() {
@@ -1487,13 +1826,26 @@ pub fn block_details_markup(block_json: &str, open: bool) -> String {
         );
     };
     let id = html_escape(&block.id);
+    let mut rows = format!("<tr><td>Version</td><td>{}</td></tr>", block.version);
+    // A missing key is None. Some(0) still prints. Do not substitute zero.
+    if let Some(bits) = block.bits {
+        rows.push_str(&format!("<tr><td>Bits</td><td>{bits}</td></tr>"));
+    }
+    rows.push_str(&format!(
+        "<tr><td>Merkle root</td><td>{}</td></tr>",
+        html_escape(&block.merkle_root)
+    ));
+    if let Some(difficulty) = block.difficulty {
+        let difficulty = plain_number(difficulty);
+        rows.push_str(&format!(
+            "<tr><td>Difficulty</td><td>{difficulty}</td></tr>"
+        ));
+    }
+    if let Some(nonce) = block.nonce {
+        rows.push_str(&format!("<tr><td>Nonce</td><td>{nonce}</td></tr>"));
+    }
     format!(
-        "<div id=\"details\"{hidden}><table><tbody><tr><td>Version</td><td>{}</td></tr><tr><td>Bits</td><td>{}</td></tr><tr><td>Merkle root</td><td>{}</td></tr><tr><td>Difficulty</td><td>{}</td></tr><tr><td>Nonce</td><td>{}</td></tr></tbody></table><a href=\"/block/{id}/header\">Block Header Hex</a></div>",
-        block.version,
-        block.bits,
-        html_escape(&block.merkle_root),
-        plain_number(block.difficulty),
-        block.nonce
+        "<div id=\"details\"{hidden}><table><tbody>{rows}</tbody></table><a href=\"/block/{id}/header\">Block Header Hex</a></div>"
     )
 }
 

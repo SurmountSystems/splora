@@ -616,9 +616,16 @@ impl TxScreen {
             return Err(ClientError::BadPath);
         }
         let body = read_required(client, &tx_path(&self.txid))?;
-        let tx = serde_json::from_str::<splora_frontend_shared::wire::Transaction>(&body)
-            .map_err(http_parse)?;
-        let mut lines = vec![render_tx_row(&tx)];
+        let document: serde_json::Value = serde_json::from_str(&body).map_err(http_parse)?;
+        let tx = transaction_keeping_absent_vin_keys(&serde_sigops_for_shared_type(
+            &serde_weight_for_shared_type(&document),
+        ))?;
+        let vin_json = vin_objects(&document);
+        let mut lines = vec![render_tx_row(
+            &tx,
+            &vin_json,
+            json_u64_at(&document, "weight"),
+        )];
         let mut rows = vec![paint_tx_row(&TxRow::from(&tx))];
         if let Some(hash) = tx
             .status
@@ -700,6 +707,28 @@ impl TxScreen {
             &tx,
             poison_network_name(client.network()),
         ));
+        if let Some(words) = output_total_words(&tx) {
+            lines.push(words);
+        }
+        lines.push(fee_words(tx.fee));
+        lines.push(size_words(tx.size));
+        if let Some(words) = virtual_size_words(&document) {
+            lines.push(words);
+        }
+        if let Some(words) = adjusted_vsize_words(&document) {
+            lines.push(words);
+        }
+        if let Some(words) = sigops_words(&document) {
+            lines.push(words);
+        }
+        if let Some(words) = weight_words(&document) {
+            lines.push(words);
+        }
+        let tip_height = tip_height_for_confirmations(client)?;
+        let block_height = tx.status.as_ref().and_then(|status| status.block_height);
+        if let Some(words) = confirmation_words(block_height, tip_height) {
+            lines.push(words);
+        }
         self.body = lines.join("\n");
         self.rows = rows;
         Ok(())
@@ -1918,8 +1947,9 @@ fn phone_pager_lines(tx_count: u32, start_index: &str) -> Vec<String> {
 }
 
 fn render_block_line(block: &splora_frontend_shared::wire::Block) -> String {
-    format!(
-        "block hash {} height {} tx_count {} timestamp {} size {} weight {} previous_hash {} median_time {} version {} merkle_root {} nonce {} bits {} difficulty {}",
+    // A missing key is None. Some(0) still prints. Do not substitute zero.
+    let mut line = format!(
+        "block hash {} height {} tx_count {} timestamp {} size {} weight {} previous_hash {} median_time {} version {} merkle_root {}",
         block.id,
         block.height,
         block.tx_count,
@@ -1930,10 +1960,18 @@ fn render_block_line(block: &splora_frontend_shared::wire::Block) -> String {
         block.median_time,
         block.version,
         block.merkle_root,
-        block.nonce,
-        block.bits,
-        plain_number(block.difficulty)
-    )
+    );
+    if let Some(nonce) = block.nonce {
+        line.push_str(&format!(" nonce {nonce}"));
+    }
+    if let Some(bits) = block.bits {
+        line.push_str(&format!(" bits {bits}"));
+    }
+    if let Some(difficulty) = block.difficulty {
+        line.push_str(" difficulty ");
+        line.push_str(&plain_number(difficulty));
+    }
+    line
 }
 
 fn render_block_list(body: &str) -> Result<String, ClientError> {
@@ -2016,13 +2054,247 @@ fn utxo_value_rows(body: &str) -> Result<Vec<String>, ClientError> {
         .collect())
 }
 
+fn present_sum(sum: Option<u64>) -> String {
+    match sum {
+        Some(sum) => sum.to_string(),
+        None => String::new(),
+    }
+}
+
+/// Chain funded minus chain spent. A missing sum is not zero. The difference is signed.
+fn confirmed_balance_words(funded: Option<u64>, spent: Option<u64>) -> Option<String> {
+    match (funded, spent) {
+        (Some(funded), Some(spent)) => {
+            let balance = funded as i128 - spent as i128;
+            Some(format!("Confirmed balance {balance}"))
+        }
+        _ => None,
+    }
+}
+
+/// A JSON number, including zero. A missing key, null, or non-number is not a count.
+fn json_u64_at(value: &serde_json::Value, key: &str) -> Option<u64> {
+    match value.get(key) {
+        Some(serde_json::Value::Number(number)) => number.as_u64(),
+        _ => None,
+    }
+}
+
+fn chain_side(body: &str) -> Option<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("chain_stats").cloned()
+}
+
+fn mempool_side(body: &str) -> Option<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("mempool_stats").cloned()
+}
+
+/// Either chain count key is absent. Mempool counts do not count.
+fn chain_count_absent(body: &str) -> bool {
+    let Some(chain) = chain_side(body) else {
+        return false;
+    };
+    json_u64_at(&chain, "funded_txo_count").is_none()
+        || json_u64_at(&chain, "spent_txo_count").is_none()
+}
+
+/// Either mempool count key is absent. Chain counts do not count.
+fn mempool_count_absent(body: &str) -> bool {
+    let Some(mempool) = mempool_side(body) else {
+        return false;
+    };
+    json_u64_at(&mempool, "funded_txo_count").is_none()
+        || json_u64_at(&mempool, "spent_txo_count").is_none()
+}
+
+/// Either tx_count key is absent. A missing key is not zero.
+fn tx_count_absent(body: &str) -> bool {
+    let Some(chain) = chain_side(body) else {
+        return false;
+    };
+    let Some(mempool) = mempool_side(body) else {
+        return false;
+    };
+    json_u64_at(&chain, "tx_count").is_none() || json_u64_at(&mempool, "tx_count").is_none()
+}
+
+/// Chain funded count minus chain spent count. A missing count is not zero.
+/// The difference is signed. Mempool counts are not this line.
+fn confirmed_utxo_words(body: &str) -> Option<String> {
+    let chain = chain_side(body)?;
+    let funded = json_u64_at(&chain, "funded_txo_count")?;
+    let spent = json_u64_at(&chain, "spent_txo_count")?;
+    let count = i128::from(funded) - i128::from(spent);
+    Some(format!("Confirmed UTXOs {count}"))
+}
+
+/// Chain funded sum. A missing sum is not this line. This is not the balance.
+fn total_received_words(funded: Option<u64>) -> Option<String> {
+    funded.map(|sum| format!("Total received {sum}"))
+}
+
+/// Chain spent plus mempool spent. A missing sum is not this line.
+/// The sum is signed so two `u64` values do not wrap.
+fn total_sent_words(chain_spent: Option<u64>, mempool_spent: Option<u64>) -> Option<String> {
+    match (chain_spent, mempool_spent) {
+        (Some(chain_spent), Some(mempool_spent)) => {
+            let sum = chain_spent as i128 + mempool_spent as i128;
+            Some(format!("Total sent {sum}"))
+        }
+        _ => None,
+    }
+}
+
+/// Mempool funded count minus mempool spent count. A missing count is not zero.
+/// The difference is signed. Chain counts are not this line.
+fn pending_utxo_words(body: &str) -> Option<String> {
+    let mempool = mempool_side(body)?;
+    let funded = json_u64_at(&mempool, "funded_txo_count")?;
+    let spent = json_u64_at(&mempool, "spent_txo_count")?;
+    let count = i128::from(funded) - i128::from(spent);
+    Some(format!("Pending UTXOs {count}"))
+}
+
+/// Chain tx count plus mempool tx count. A missing count is not zero.
+/// The sum is signed so two `u64` values do not wrap.
+fn transaction_count_words(body: &str) -> Option<String> {
+    let chain = chain_side(body)?;
+    let mempool = mempool_side(body)?;
+    let chain_count = json_u64_at(&chain, "tx_count")?;
+    let mempool_count = json_u64_at(&mempool, "tx_count")?;
+    let sum = chain_count as i128 + mempool_count as i128;
+    Some(format!("Transactions {sum}"))
+}
+
+/// Mempool funded sum minus mempool spent sum. A missing sum is not zero.
+/// The difference is signed so two `u64` values do not wrap.
+/// This is not Pending UTXOs and not the confirmed balance.
+fn pending_amount_words(funded: Option<u64>, spent: Option<u64>) -> Option<String> {
+    match (funded, spent) {
+        (Some(funded), Some(spent)) => {
+            let amount = i128::from(funded) - i128::from(spent);
+            Some(format!("Pending {amount}"))
+        }
+        _ => None,
+    }
+}
+
+/// Chain funded plus mempool funded, minus chain spent plus mempool spent.
+/// A missing sum is not zero. The difference is signed so the sums do not wrap.
+/// This is not Confirmed balance and not Pending.
+fn combined_balance_words(
+    chain_funded: Option<u64>,
+    mempool_funded: Option<u64>,
+    chain_spent: Option<u64>,
+    mempool_spent: Option<u64>,
+) -> Option<String> {
+    match (chain_funded, mempool_funded, chain_spent, mempool_spent) {
+        (Some(chain_funded), Some(mempool_funded), Some(chain_spent), Some(mempool_spent)) => {
+            let balance = i128::from(chain_funded) + i128::from(mempool_funded)
+                - i128::from(chain_spent)
+                - i128::from(mempool_spent);
+            Some(format!("Balance {balance}"))
+        }
+        _ => None,
+    }
+}
+
+fn show_num(value: Option<u64>) -> String {
+    value.map(|number| number.to_string()).unwrap_or_default()
+}
+
+/// Address line when a chain or mempool count key is absent. The missing count stays blank.
+fn lenient_address_stats_line(body: &str) -> Result<String, ClientError> {
+    let value: serde_json::Value = serde_json::from_str(body).map_err(http_parse)?;
+    let address = value
+        .get("address")
+        .and_then(|item| item.as_str())
+        .or_else(|| value.get("scripthash").and_then(|item| item.as_str()))
+        .unwrap_or("");
+    let chain = value
+        .get("chain_stats")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mempool = value
+        .get("mempool_stats")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let funded_sum = json_u64_at(&chain, "funded_txo_sum");
+    let spent_sum = json_u64_at(&chain, "spent_txo_sum");
+    let mempool_spent = json_u64_at(&mempool, "spent_txo_sum");
+    let mut line = format!(
+        "address {address} chain_tx_count {} funded_sum {} mempool_tx_count {} mempool_funded_sum {} chain_funded_txo_count {} chain_spent_txo_count {} chain_spent_txo_sum {} mempool_funded_txo_count {} mempool_spent_txo_count {} mempool_spent_txo_sum {}",
+        show_num(json_u64_at(&chain, "tx_count")),
+        show_num(funded_sum),
+        show_num(json_u64_at(&mempool, "tx_count")),
+        show_num(json_u64_at(&mempool, "funded_txo_sum")),
+        show_num(json_u64_at(&chain, "funded_txo_count")),
+        show_num(json_u64_at(&chain, "spent_txo_count")),
+        show_num(spent_sum),
+        show_num(json_u64_at(&mempool, "funded_txo_count")),
+        show_num(json_u64_at(&mempool, "spent_txo_count")),
+        show_num(mempool_spent),
+    );
+    if let Some(words) = confirmed_balance_words(funded_sum, spent_sum) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = confirmed_utxo_words(body) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = total_received_words(funded_sum) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = total_sent_words(spent_sum, mempool_spent) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = pending_utxo_words(body) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = transaction_count_words(body) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = pending_amount_words(
+        json_u64_at(&mempool, "funded_txo_sum"),
+        json_u64_at(&mempool, "spent_txo_sum"),
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = combined_balance_words(
+        funded_sum,
+        json_u64_at(&mempool, "funded_txo_sum"),
+        spent_sum,
+        mempool_spent,
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    Ok(line)
+}
+
 fn address_funded_row(body: &str) -> Result<String, ClientError> {
-    let stats = serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body)
-        .map_err(http_parse)?;
-    Ok(format!(
-        "row address funded_sum {}",
-        stats.chain_stats.funded_txo_sum
-    ))
+    let sum = match serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body) {
+        Ok(stats) => stats.chain_stats.funded_txo_sum,
+        Err(err) => {
+            if !chain_count_absent(body) && !mempool_count_absent(body) && !tx_count_absent(body) {
+                return Err(http_parse(err));
+            }
+            let value: serde_json::Value = serde_json::from_str(body).map_err(http_parse)?;
+            let chain = value
+                .get("chain_stats")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            json_u64_at(&chain, "funded_txo_sum")
+        }
+    };
+    Ok(format!("row address funded_sum {}", present_sum(sum)))
 }
 
 fn render_recent(body: &str) -> Result<String, ClientError> {
@@ -2131,9 +2403,12 @@ fn tx_extra_fields(tx: &splora_frontend_shared::wire::Transaction) -> String {
     )
 }
 
-fn render_tx_parties(tx: &splora_frontend_shared::wire::Transaction) -> Vec<String> {
+fn render_tx_parties(
+    tx: &splora_frontend_shared::wire::Transaction,
+    vin_json: &[serde_json::Value],
+) -> Vec<String> {
     let mut lines = Vec::new();
-    for input in &tx.vin {
+    for (index, input) in tx.vin.iter().enumerate() {
         lines.push(format!("input outpoint {}:{}", input.txid, input.vout));
         if let Some(prevout) = &input.prevout {
             let address = prevout.script_pubkey_address.as_deref().unwrap_or("");
@@ -2141,7 +2416,11 @@ fn render_tx_parties(tx: &splora_frontend_shared::wire::Transaction) -> Vec<Stri
                 "input address {address} value {}",
                 blinded_value_text(prevout)
             ));
+            push_script_type(&mut lines, "input", &prevout.script_pubkey_type);
         }
+        let raw = vin_json.get(index);
+        push_input_coinbase(&mut lines, raw);
+        push_input_sequence(&mut lines, raw);
         if let Some(issuance) = &input.issuance {
             lines.extend(issuance_lines(issuance));
         }
@@ -2152,8 +2431,127 @@ fn render_tx_parties(tx: &splora_frontend_shared::wire::Transaction) -> Vec<Stri
             "output address {address} value {}",
             blinded_value_text(output)
         ));
+        push_script_type(&mut lines, "output", &output.script_pubkey_type);
     }
     lines
+}
+
+/// `scriptpubkey_type` as the indexer spelled it. An empty string is omitted.
+/// The label does not repeat the script bytes or the asm.
+fn push_script_type(lines: &mut Vec<String>, side: &str, script_type: &str) {
+    if script_type.is_empty() {
+        return;
+    }
+    lines.push(format!("{side} script type {script_type}"));
+}
+
+/// Shared `is_coinbase` is a bool, so a missing key is not false.
+/// Only JSON `true` paints. False, null, and a missing key stay off the screen.
+fn push_input_coinbase(lines: &mut Vec<String>, raw: Option<&serde_json::Value>) {
+    let Some(raw) = raw else {
+        return;
+    };
+    if raw.get("is_coinbase").and_then(|value| value.as_bool()) == Some(true) {
+        lines.push("input coinbase".to_string());
+    }
+}
+
+/// Shared `sequence` is `u32`, so a missing key is not zero.
+/// A present integer paints, including zero. A missing key omits the label.
+fn push_input_sequence(lines: &mut Vec<String>, raw: Option<&serde_json::Value>) {
+    let Some(raw) = raw else {
+        return;
+    };
+    let Some(sequence) = json_u64_at(raw, "sequence") else {
+        return;
+    };
+    lines.push(format!("sequence {sequence}"));
+}
+
+fn vin_objects(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    value
+        .get("vin")
+        .and_then(|vin| vin.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Shared `Transaction.weight` is `u32`, so a missing key or JSON null cannot load.
+/// The copy lets the rest of the transaction parse. Virtual size, the Weight row,
+/// and the header weight read the original document and do not use this placeholder.
+fn serde_weight_for_shared_type(value: &serde_json::Value) -> serde_json::Value {
+    let missing = matches!(value.get("weight"), None | Some(serde_json::Value::Null));
+    if !missing {
+        return value.clone();
+    }
+    let mut copy = value.clone();
+    if let Some(object) = copy.as_object_mut() {
+        object.insert("weight".to_string(), serde_json::Value::from(0_u32));
+    }
+    copy
+}
+
+/// Shared `Transaction.sigops` is `u32`, so a missing key or JSON null cannot load.
+/// The copy lets the rest of the transaction parse. Adjusted vsize and the Sigops
+/// label read the original document and do not use this placeholder.
+fn serde_sigops_for_shared_type(value: &serde_json::Value) -> serde_json::Value {
+    let missing = matches!(value.get("sigops"), None | Some(serde_json::Value::Null));
+    if !missing {
+        return value.clone();
+    }
+    let mut copy = value.clone();
+    if let Some(object) = copy.as_object_mut() {
+        object.insert("sigops".to_string(), serde_json::Value::from(0_u32));
+    }
+    copy
+}
+
+/// Shared `TxInput` cannot load when `is_coinbase` or `sequence` is absent.
+/// The copy lets the rest of the transaction parse. Paint reads the original
+/// object and does not use this copy.
+fn transaction_keeping_absent_vin_keys(
+    value: &serde_json::Value,
+) -> Result<splora_frontend_shared::wire::Transaction, ClientError> {
+    match serde_json::from_value(value.clone()) {
+        Ok(tx) => Ok(tx),
+        Err(err) => {
+            if !vin_omits_coinbase_or_sequence(value) {
+                return Err(http_parse(err));
+            }
+            serde_json::from_value(vin_keys_for_shared_type(value)).map_err(http_parse)
+        }
+    }
+}
+
+fn vin_omits_coinbase_or_sequence(value: &serde_json::Value) -> bool {
+    let Some(vins) = value.get("vin").and_then(|vin| vin.as_array()) else {
+        return false;
+    };
+    vins.iter().any(|vin| {
+        let Some(object) = vin.as_object() else {
+            return false;
+        };
+        !object.contains_key("is_coinbase") || !object.contains_key("sequence")
+    })
+}
+
+fn vin_keys_for_shared_type(value: &serde_json::Value) -> serde_json::Value {
+    let mut copy = value.clone();
+    let Some(vins) = copy.get_mut("vin").and_then(|vin| vin.as_array_mut()) else {
+        return copy;
+    };
+    for vin in vins {
+        let Some(object) = vin.as_object_mut() else {
+            continue;
+        };
+        object
+            .entry("is_coinbase")
+            .or_insert(serde_json::Value::Bool(false));
+        object
+            .entry("sequence")
+            .or_insert(serde_json::Value::from(0_u32));
+    }
+    copy
 }
 
 /// Fields from `TxInput.issuance`, after that input's prevout line.
@@ -2218,20 +2616,224 @@ fn issuance_amount_line(
     None
 }
 
-fn render_tx_row(tx: &splora_frontend_shared::wire::Transaction) -> String {
+/// Sum of output `value` fields. Every present value is added, including zero.
+/// An empty output list is 0. A missing value omits the total and is not zero.
+/// The add is `u128` so two `u64::MAX` values do not wrap. A commitment is not an amount.
+fn output_total_words(tx: &splora_frontend_shared::wire::Transaction) -> Option<String> {
+    let mut sum: u128 = 0;
+    for output in &tx.vout {
+        let Some(value) = output.value else {
+            return None;
+        };
+        sum += u128::from(value);
+    }
+    Some(format!("output total {sum}"))
+}
+
+/// Details fee. Angular `number` pipe, then `sats`. Explicit 0 paints.
+/// Thousands separators, no fraction digits. The raw header `fee N` stays ungrouped.
+fn fee_words(fee: u64) -> String {
+    format!("Fee {} sats", grouped_count(fee))
+}
+
+/// en-US integer grouping. `1,500` not `1500`. No fraction digits.
+fn grouped_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index.is_multiple_of(3) {
+            reversed.push(',');
+        }
+        reversed.push(ch);
+    }
+    reversed.chars().rev().collect()
+}
+
+/// Transaction size on the details row. The Angular `bytes` pipe with 2 decimals.
+/// Powers of 1000, chosen before rounding. Not 1024. The raw header `size N` stays.
+fn size_words(bytes: u32) -> String {
+    format!("Size {}", bytes_pipe_text(u64::from(bytes)))
+}
+
+/// Plaintext `bytes: 2`: the number, a space, and the unit. Trailing zeros drop.
+/// Divide in f64, then `(value * 100).round() / 100`. The unit is chosen from
+/// the raw count before that round. Powers of 1000, not 1024. Weight stays on
+/// the integer scaler so 1005 is not the weight contract.
+fn bytes_pipe_text(bytes: u64) -> String {
+    let (scale, unit): (f64, &str) = if bytes < 1_000 {
+        (1.0, "B")
+    } else if bytes < 1_000_000 {
+        (1_000.0, "kB")
+    } else if bytes < 1_000_000_000 {
+        (1_000_000.0, "MB")
+    } else if bytes < 1_000_000_000_000 {
+        (1_000_000_000.0, "GB")
+    } else {
+        (1_000_000_000_000.0, "TB")
+    };
+    let value = (bytes as f64) / scale;
+    let hundredths = (value * 100.0).round() as u64;
+    format!("{} {unit}", js_number_from_hundredths(hundredths))
+}
+
+/// Plaintext `wuBytes: 2`. Same 1000 thresholds as size. Integer half-up, not the size f64 round.
+fn wu_bytes_pipe_text(weight: u64) -> String {
+    scaled_count_text(weight, ["WU", "kWU", "MWU", "GWU", "TWU"])
+}
+
+/// Powers of 1000, chosen from the raw count before rounding. Not 1024.
+fn scaled_count_text(count: u64, units: [&str; 5]) -> String {
+    let (number, unit) = if count < 1_000 {
+        (count.to_string(), units[0])
+    } else if count < 1_000_000 {
+        (
+            js_number_from_hundredths(scale_hundredths(count, 1_000)),
+            units[1],
+        )
+    } else if count < 1_000_000_000 {
+        (
+            js_number_from_hundredths(scale_hundredths(count, 1_000_000)),
+            units[2],
+        )
+    } else if count < 1_000_000_000_000 {
+        (
+            js_number_from_hundredths(scale_hundredths(count, 1_000_000_000)),
+            units[3],
+        )
+    } else {
+        (
+            js_number_from_hundredths(scale_hundredths(count, 1_000_000_000_000)),
+            units[4],
+        )
+    };
+    format!("{number} {unit}")
+}
+
+/// `Math.round(bytes / divisor * 100)` for a positive count, half away from zero.
+fn scale_hundredths(bytes: u64, divisor: u64) -> u64 {
+    let numerator = u128::from(bytes) * 100;
+    let divisor = u128::from(divisor);
+    let mut hundredths = numerator / divisor;
+    if (numerator % divisor) * 2 >= divisor {
+        hundredths += 1;
+    }
+    u64::try_from(hundredths).unwrap_or(u64::MAX)
+}
+
+/// JavaScript `Number.toString` for an integer count of hundredths.
+fn js_number_from_hundredths(hundredths: u64) -> String {
+    let whole = hundredths / 100;
+    let frac = (hundredths % 100) as u8;
+    if frac == 0 {
+        format!("{whole}")
+    } else if frac.is_multiple_of(10) {
+        format!("{whole}.{}", frac / 10)
+    } else {
+        format!("{whole}.{frac:02}")
+    }
+}
+
+/// Virtual size is `weight / 4` from the original document, integer division.
+/// A missing key or JSON null omits the line. A present zero stays zero.
+/// `sat_per_vbyte_from_weight` hides a zero quotient, so this does not call it.
+fn virtual_size_words(document: &serde_json::Value) -> Option<String> {
+    let weight = json_u64_at(document, "weight")?;
+    Some(format!("virtual size {}", weight / 4))
+}
+
+/// Details weight from the original document. A missing key or JSON null omits
+/// the line. The serde placeholder 0 is not used. The raw header `weight N` stays.
+fn weight_words(document: &serde_json::Value) -> Option<String> {
+    let weight = json_u64_at(document, "weight")?;
+    Some(format!("Weight {}", wu_bytes_pipe_text(weight)))
+}
+
+/// Details sigops from the original document. Angular `number` pipe, no fraction.
+/// A missing key or JSON null omits the line. Explicit 0 paints. The serde
+/// placeholder 0 is not used. The raw header `sigops N` stays lowercase.
+fn sigops_words(document: &serde_json::Value) -> Option<String> {
+    let sigops = json_u64_at(document, "sigops")?;
+    Some(format!("Sigops {}", grouped_count(sigops)))
+}
+
+/// Adjusted vsize is `max(weight / 4, sigops * 5)` from the original document.
+/// The division is floating point, then half away from zero to 2 decimal places.
+/// A missing key or JSON null omits the line. The serde placeholder 0 is not used.
+/// This is not the integer virtual-size line.
+fn adjusted_vsize_words(document: &serde_json::Value) -> Option<String> {
+    let weight = json_u64_at(document, "weight")?;
+    let sigops = json_u64_at(document, "sigops")?;
+    let from_weight = (weight as f64) / 4.0;
+    let from_sigops = (sigops as f64) * 5.0;
+    Some(format!(
+        "Adjusted vsize {}",
+        two_decimals_half_away_from_zero(from_weight.max(from_sigops))
+    ))
+}
+
+/// Two digits after the decimal. Halfway cases go away from zero.
+fn two_decimals_half_away_from_zero(value: f64) -> String {
+    let negative = value < 0.0;
+    let cents = (value.abs() * 100.0).round() as u64;
+    let text = format!("{}.{:02}", cents / 100, cents % 100);
+    if negative { format!("-{text}") } else { text }
+}
+
+/// Tip height minus the transaction block height, plus 1.
+/// A missing block height or a missing tip omits the line. An explicit zero
+/// height is present. The subtraction is `i128` so it does not wrap.
+fn confirmation_words(block_height: Option<u64>, tip_height: Option<u64>) -> Option<String> {
+    let block_height = block_height?;
+    let tip_height = tip_height?;
+    let count = i128::from(tip_height) - i128::from(block_height) + 1;
+    Some(format!("confirmations {count}"))
+}
+
+fn absent_tip_message(message: &str) -> bool {
+    message.starts_with("missing ")
+        || message == "tip height was empty"
+        || message == "tip height was not an integer"
+}
+
+/// `ExplorerClient::tip_height` reads `GET /blocks/tip/height`. A missing route,
+/// an empty body, or a non-integer body omits the count. It does not become 0.
+fn tip_height_for_confirmations<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+) -> Result<Option<u64>, ClientError> {
+    match client.tip_height() {
+        Ok(text) => Ok(text.parse().ok()),
+        Err(ClientError::Http(message)) if absent_tip_message(&message) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+/// Header weight from the original document. A present zero stays `weight 0`.
+/// A missing key or JSON null omits the label instead of printing the placeholder.
+fn weight_header(weight: Option<u64>) -> String {
+    match weight {
+        Some(weight) => format!(" weight {weight}"),
+        None => String::new(),
+    }
+}
+
+fn render_tx_row(
+    tx: &splora_frontend_shared::wire::Transaction,
+    vin_json: &[serde_json::Value],
+    document_weight: Option<u64>,
+) -> String {
     let (confirmed, block_height) = tx_confirmed_and_height(tx);
     let mut lines = vec![format!(
-        "tx txid {} fee {} confirmed {} block_height {} size {} weight {}{}{}",
+        "tx txid {} fee {} confirmed {} block_height {} size {}{}{}{}",
         tx.txid,
         tx.fee,
         confirmed,
         block_height,
         tx.size,
-        tx.weight,
+        weight_header(document_weight),
         block_hash_and_time(tx.status.as_ref()),
         tx_extra_fields(tx)
     )];
-    lines.extend(render_tx_parties(tx));
+    lines.extend(render_tx_parties(tx, vin_json));
     lines.join("\n")
 }
 
@@ -2241,35 +2843,94 @@ fn render_tx_list(body: &str) -> Result<String, ClientError> {
     if rows.is_empty() {
         return Ok("The transaction list is empty.".to_string());
     }
+    let values: Vec<serde_json::Value> = serde_json::from_str(body).map_err(http_parse)?;
     Ok(rows
         .iter()
-        .map(render_tx_row)
+        .enumerate()
+        .map(|(index, tx)| {
+            let vin = values.get(index).map(vin_objects).unwrap_or_default();
+            render_tx_row(tx, &vin, Some(u64::from(tx.weight)))
+        })
         .collect::<Vec<_>>()
         .join("\n"))
 }
 
 fn render_address_stats(body: &str) -> Result<String, ClientError> {
-    let stats = serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body)
-        .map_err(http_parse)?;
+    let stats = match serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body) {
+        Ok(stats) => stats,
+        Err(err) => {
+            if chain_count_absent(body) || mempool_count_absent(body) || tx_count_absent(body) {
+                return lenient_address_stats_line(body);
+            }
+            return Err(http_parse(err));
+        }
+    };
     let address = stats
         .address
         .as_deref()
         .or(stats.scripthash.as_deref())
         .unwrap_or("");
-    Ok(format!(
+    let mut line = format!(
         "address {} chain_tx_count {} funded_sum {} mempool_tx_count {} mempool_funded_sum {} chain_funded_txo_count {} chain_spent_txo_count {} chain_spent_txo_sum {} mempool_funded_txo_count {} mempool_spent_txo_count {} mempool_spent_txo_sum {}",
         address,
         stats.chain_stats.tx_count,
-        stats.chain_stats.funded_txo_sum,
+        present_sum(stats.chain_stats.funded_txo_sum),
         stats.mempool_stats.tx_count,
-        stats.mempool_stats.funded_txo_sum,
+        present_sum(stats.mempool_stats.funded_txo_sum),
         stats.chain_stats.funded_txo_count,
         stats.chain_stats.spent_txo_count,
-        stats.chain_stats.spent_txo_sum,
+        present_sum(stats.chain_stats.spent_txo_sum),
         stats.mempool_stats.funded_txo_count,
         stats.mempool_stats.spent_txo_count,
-        stats.mempool_stats.spent_txo_sum
-    ))
+        present_sum(stats.mempool_stats.spent_txo_sum)
+    );
+    if let Some(words) = confirmed_balance_words(
+        stats.chain_stats.funded_txo_sum,
+        stats.chain_stats.spent_txo_sum,
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = confirmed_utxo_words(body) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = total_received_words(stats.chain_stats.funded_txo_sum) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = total_sent_words(
+        stats.chain_stats.spent_txo_sum,
+        stats.mempool_stats.spent_txo_sum,
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = pending_utxo_words(body) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = transaction_count_words(body) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = pending_amount_words(
+        stats.mempool_stats.funded_txo_sum,
+        stats.mempool_stats.spent_txo_sum,
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    if let Some(words) = combined_balance_words(
+        stats.chain_stats.funded_txo_sum,
+        stats.mempool_stats.funded_txo_sum,
+        stats.chain_stats.spent_txo_sum,
+        stats.mempool_stats.spent_txo_sum,
+    ) {
+        line.push(' ');
+        line.push_str(&words);
+    }
+    Ok(line)
 }
 
 fn render_address_txs(body: &str) -> Result<String, ClientError> {
@@ -2278,9 +2939,12 @@ fn render_address_txs(body: &str) -> Result<String, ClientError> {
     if rows.is_empty() {
         return Ok("The address transaction list is empty.".to_string());
     }
+    let values: Vec<serde_json::Value> = serde_json::from_str(body).map_err(http_parse)?;
     Ok(rows
         .iter()
-        .map(|tx| {
+        .enumerate()
+        .map(|(index, tx)| {
+            let vin = values.get(index).map(vin_objects).unwrap_or_default();
             let (confirmed, block_height) = tx_confirmed_and_height(tx);
             let mut lines = vec![format!(
                 "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}{}{}",
@@ -2293,7 +2957,7 @@ fn render_address_txs(body: &str) -> Result<String, ClientError> {
                 block_hash_and_time(tx.status.as_ref()),
                 tx_extra_fields(tx)
             )];
-            lines.extend(render_tx_parties(tx));
+            lines.extend(render_tx_parties(tx, &vin));
             lines.join("\n")
         })
         .collect::<Vec<_>>()
@@ -2385,8 +3049,9 @@ fn append_tx_body(lines: &mut String, body: &str) {
 }
 
 fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
-    format!(
-        "block details\nid {}\nheight {}\nversion {}\ntimestamp {}\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\npreviousblockhash {}\nmediantime {}\nnonce {}\nbits {}\ndifficulty {}",
+    // A missing key is None. Some(0) still prints. Do not substitute zero.
+    let mut text = format!(
+        "block details\nid {}\nheight {}\nversion {}\ntimestamp {}\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\npreviousblockhash {}\nmediantime {}",
         block.id,
         block.height,
         block.version,
@@ -2397,22 +3062,31 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
         block.merkle_root,
         block.previous_block_hash.as_deref().unwrap_or(""),
         block.median_time,
-        block.nonce,
-        block.bits,
-        plain_number(block.difficulty)
-    )
+    );
+    if let Some(nonce) = block.nonce {
+        text.push_str(&format!("\nnonce {nonce}"));
+    }
+    if let Some(bits) = block.bits {
+        text.push_str(&format!("\nbits {bits}"));
+    }
+    if let Some(difficulty) = block.difficulty {
+        text.push_str("\ndifficulty ");
+        text.push_str(&plain_number(difficulty));
+    }
+    text
 }
 
 /// Peg-in and Liquid Peg Out from the parsed transaction.
 ///
-/// A missing `is_pegin` is false. A missing `pegout` is none. The body is one
-/// transaction or a list. Each label is emitted once for that body.
+/// A missing `is_pegin` is `None`, not false. `Some(false)` does not paint a
+/// peg-in. A missing `pegout` is none. The body is one transaction or a list.
+/// Each label is emitted once for that body.
 fn peg_lines(body: &str) -> Vec<String> {
     let txs = peg_transactions(body);
     let mut lines = Vec::new();
     if txs
         .iter()
-        .any(|tx| tx.vin.iter().any(|input| input.is_pegin))
+        .any(|tx| tx.vin.iter().any(|input| input.is_pegin == Some(true)))
     {
         lines.push("Peg-in".to_string());
     }
@@ -2853,6 +3527,11 @@ fn render_package(body: &str) -> Result<String, ClientError> {
         // Missing and "" are not a witness id. Do not copy txid into that spot.
         if let Some(wtxid) = tx.other_wtxid.as_deref().filter(|wtxid| !wtxid.is_empty()) {
             lines.push(wtxid.to_string());
+        }
+        // A missing key, JSON null, and "" omit the label. The text 0 still prints.
+        // This is PackageTx.error, not reject-reason. The text is not escaped.
+        if let Some(error) = tx.error.as_deref().filter(|error| !error.is_empty()) {
+            lines.push(format!("error {error}"));
         }
     }
     Ok(lines.join("\n"))
@@ -3753,19 +4432,13 @@ mod tests {
         assert!(!emptyc.contains("Confidential"), "{emptyc}");
         assert!(emptyc.contains("value  confirmed"), "{emptyc}");
         assert!(!emptyc.contains('0'), "{emptyc}");
-        assert!(
-            rows.iter().any(|row| row == "row utxo value "),
-            "{rows:?}"
-        );
+        assert!(rows.iter().any(|row| row == "row utxo value "), "{rows:?}");
 
         let zeroed = line("zeroed");
         assert!(zeroed.contains("value 0 confirmed"), "{zeroed}");
         assert!(!zeroed.contains("Confidential"), "{zeroed}");
         assert!(!zeroed.contains("Some("), "{zeroed}");
-        assert!(
-            rows.iter().any(|row| row == "row utxo value 0"),
-            "{rows:?}"
-        );
+        assert!(rows.iter().any(|row| row == "row utxo value 0"), "{rows:?}");
     }
 
     struct MapExplorer {
@@ -4536,6 +5209,7 @@ mod tests {
                 "/tx/txidabc/hex".to_string(),
                 "/tx/txidabc/raw".to_string(),
                 "/tx/txidabc/merkleblock-proof".to_string(),
+                "/blocks/tip/height".to_string(),
             ]
         );
         assert!(rec.post_paths().is_empty());
@@ -5253,6 +5927,34 @@ mod tests {
                 "median_time 1700000000",
             ],
         );
+    }
+
+    /// Some(0) prints the digits. None omits the label. Do not substitute zero.
+    #[test]
+    fn block_option_fields_paint_zero_and_omit_missing_labels() {
+        let zero = r#"{"id":"abc","height":1,"version":1,"timestamp":2,"tx_count":3,"size":4,"weight":5,"merkle_root":"mm","previousblockhash":"pp","mediantime":6,"nonce":0,"bits":0,"difficulty":0}"#;
+        let zero_block: splora_frontend_shared::wire::Block =
+            serde_json::from_str(zero).expect("zero block");
+        for painted in [
+            render_block_line(&zero_block),
+            block_details_text(&zero_block),
+        ] {
+            assert!(painted.contains("nonce 0"), "{painted}");
+            assert!(painted.contains("bits 0"), "{painted}");
+            assert!(painted.contains("difficulty 0"), "{painted}");
+            assert!(!painted.contains("difficulty 0.0"), "{painted}");
+        }
+        let omitted = r#"{"id":"abc","height":1,"version":1,"timestamp":2,"tx_count":3,"size":4,"weight":5,"merkle_root":"mm","previousblockhash":"pp","mediantime":6}"#;
+        let omitted_block: splora_frontend_shared::wire::Block =
+            serde_json::from_str(omitted).expect("omitted block");
+        for painted in [
+            render_block_line(&omitted_block),
+            block_details_text(&omitted_block),
+        ] {
+            assert!(!painted.contains("nonce"), "{painted}");
+            assert!(!painted.contains("bits"), "{painted}");
+            assert!(!painted.contains("difficulty"), "{painted}");
+        }
     }
 
     #[test]

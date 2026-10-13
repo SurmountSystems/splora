@@ -19,9 +19,9 @@ pub struct BlockRow {
     pub merkle_root: String,
     pub previous_block_hash: Option<String>,
     pub median_time: u32,
-    pub nonce: u32,
-    pub bits: u32,
-    pub difficulty: f64,
+    pub nonce: Option<u32>,
+    pub bits: Option<u32>,
+    pub difficulty: Option<f64>,
 }
 
 impl From<&Block> for BlockRow {
@@ -162,13 +162,15 @@ pub fn sat_per_vbyte_from_vsize(fee: u64, vsize: u32) -> Option<f64> {
 }
 
 /// Chain or mempool script totals copied from [`ScriptStats`].
+///
+/// A missing sum is `None`, not zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptStatsRow {
     pub tx_count: u64,
     pub funded_txo_count: u64,
     pub spent_txo_count: u64,
-    pub funded_txo_sum: u64,
-    pub spent_txo_sum: u64,
+    pub funded_txo_sum: Option<u64>,
+    pub spent_txo_sum: Option<u64>,
 }
 
 impl From<&ScriptStats> for ScriptStatsRow {
@@ -198,12 +200,13 @@ pub struct UtxoRow {
 /// One address list row.
 ///
 /// `funded_sum` is `AddressStats.chain_stats.funded_txo_sum`.
+/// A missing sum is `None`, not zero.
 /// `utxo_value` is the supplied UTXO's amount. A missing amount is `None`,
 /// not zero. No supplied UTXO is also `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressRow {
     pub address: String,
-    pub funded_sum: u64,
+    pub funded_sum: Option<u64>,
     pub utxo_value: Option<u64>,
     pub chain_stats: ScriptStatsRow,
     pub mempool_stats: ScriptStatsRow,
@@ -352,7 +355,7 @@ mod tests {
         assert_eq!(funded_sum, stats.chain_stats.funded_txo_sum);
         assert_eq!(utxo_value, utxos[0].value);
         assert_eq!(address, "xyz");
-        assert_eq!(funded_sum, 500_000);
+        assert_eq!(funded_sum, Some(500_000));
         assert_eq!(utxo_value, Some(42_000));
 
         let AddressRow {
@@ -362,7 +365,7 @@ mod tests {
             ..
         } = AddressRow::from_stats(&stats, None).unwrap();
         assert_eq!(address, "xyz");
-        assert_eq!(funded_sum, 500_000);
+        assert_eq!(funded_sum, Some(500_000));
         assert_eq!(utxo_value, None);
     }
 
@@ -402,7 +405,7 @@ mod tests {
         assert_eq!(row.weight, block.weight);
         assert_eq!(row.size, 1500);
         assert_eq!(row.weight, 4000);
-        assert_eq!(row.difficulty, 1.0);
+        assert_eq!(row.difficulty, Some(1.0));
         assert_eq!(row.version, block.version);
         assert_eq!(row.version, 536_870_912);
         assert_eq!(row.merkle_root, block.merkle_root);
@@ -412,9 +415,9 @@ mod tests {
         assert_eq!(row.median_time, block.median_time);
         assert_eq!(row.median_time, 1_599_990_000);
         assert_eq!(row.nonce, block.nonce);
-        assert_eq!(row.nonce, 7);
+        assert_eq!(row.nonce, Some(7));
         assert_eq!(row.bits, block.bits);
-        assert_eq!(row.bits, 386_604_799);
+        assert_eq!(row.bits, Some(386_604_799));
 
         let owned = BlockRow::from(block.clone());
         assert_eq!(owned.difficulty, block.difficulty);
@@ -434,7 +437,7 @@ mod tests {
         assert_eq!(genesis_row.difficulty, parsed.difficulty);
         assert_eq!(genesis_row.size, parsed.size);
         assert_eq!(genesis_row.weight, parsed.weight);
-        assert_eq!(genesis_row.difficulty, 1.0);
+        assert_eq!(genesis_row.difficulty, Some(1.0));
         assert_eq!(genesis_row.size, 1);
         assert_eq!(genesis_row.weight, 4);
     }
@@ -488,7 +491,7 @@ mod tests {
         let utxos: Vec<Utxo> = serde_json::from_str(&fixture("address_utxos.json")).unwrap();
         let row = AddressRow::from_stats(&stats, Some(&utxos[0])).unwrap();
         assert_eq!(row.funded_sum, stats.chain_stats.funded_txo_sum);
-        assert_eq!(row.funded_sum, 500_000);
+        assert_eq!(row.funded_sum, Some(500_000));
         assert_eq!(row.utxo_value, utxos[0].value);
         assert_eq!(row.utxo_value, Some(42_000));
         assert_eq!(row.chain_stats.tx_count, stats.chain_stats.tx_count);

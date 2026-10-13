@@ -3,7 +3,7 @@ use crate::browser::{browser_signer_present, page_origin, signed_get};
 use crate::liquid::{
     asset_cards_markup, asset_confirmed_page_request, asset_history_markup, liquid_asset_requests,
     registry_entry_markup, registry_entry_request, registry_list_markup, registry_list_request,
-    registry_search_markup, registry_search_request, supply_markup,
+    registry_page_request, registry_search_markup, registry_search_request, supply_markup,
 };
 use crate::local_pages::{
     JPY_PER_BTC, USD_PER_BTC, calculator_fiat_text, capped_btc_text, graphs_page_text,
@@ -20,13 +20,13 @@ use crate::rows::{
     address_highlight_markup, address_rows_markup, asset_markup, batch_outspends_markup,
     block_details_markup, block_raw_beside, block_rows_markup, block_status_markup,
     block_transactions_markup, block_txid_index_markup, block_txid_links_markup,
-    blocks_rows_markup, broadcast_txid_markup, chain_tip_markup, dashboard_rows_markup,
-    details_open_after_click, height_body_markup, indexed_bytes_markup, mempool_txids_markup,
-    merkle_proof_markup, multi_address_links_markup, one_outspend_markup, outspends_markup,
-    package_txid_markup, poison_alert_markup, recent_rows_markup, rows_with_notices,
-    scripthash_markup, summary_rows_markup, summary_rows_with_status, test_txid_markup,
-    tip_links_markup, transaction_hex_markup, transaction_row_markup, tx_raw_beside,
-    tx_status_markup,
+    blocks_rows_markup, broadcast_txid_markup, chain_tip_markup, confirmation_markup,
+    dashboard_rows_markup, details_open_after_click, height_body_markup, indexed_bytes_markup,
+    mempool_txids_markup, merkle_proof_markup, multi_address_links_markup, one_outspend_markup,
+    outspends_markup, package_txid_markup, poison_alert_markup, recent_rows_markup,
+    rows_with_notices, scripthash_markup, summary_rows_markup, summary_rows_with_status,
+    test_txid_markup, tip_links_markup, transaction_hex_markup, transaction_row_markup,
+    tx_raw_beside, tx_status_markup,
 };
 use crate::screens::{
     address_chain_request, address_fields_text, address_mempool_txs_request, address_requests,
@@ -37,11 +37,11 @@ use crate::screens::{
     broadcast_fields_text, broadcast_payload, broadcast_screen_request, broadcast_submission,
     dashboard_fields_text, dashboard_screen_requests, entered_addresses, indexer_failure_text,
     is_block_hash, mempool_txid_page_request, mempool_txids_request, multi_address_fields_text,
-    multi_address_screen_requests, multi_address_summary_post, resolved_block_hash,
-    test_transactions_fields_text, test_transactions_payload, test_transactions_screen_request,
-    transaction_detail_requests, transaction_fields_text, transaction_requests,
-    tx_merkleblock_proof_request, tx_outspend_index_request, tx_raw_request, tx_status_request,
-    txs_outspends_request,
+    multi_address_screen_requests, multi_address_summary_post, multi_address_txs_post,
+    resolved_block_hash, test_transactions_fields_text, test_transactions_payload,
+    test_transactions_screen_request, transaction_detail_requests, transaction_fields_text,
+    transaction_requests, tx_merkleblock_proof_request, tx_outspend_index_request, tx_raw_request,
+    tx_status_request, txs_outspends_request,
 };
 use crate::search::{plan_search_on, search_links_markup, search_loaded_markup};
 use crate::theme::{ACCENT, BACKGROUND, TEXT};
@@ -51,14 +51,14 @@ use leptos_router::hooks::{use_params_map, use_query_map};
 use leptos_router::path;
 use splora_api::Network;
 use splora_frontend_shared::{
-    FiatCode, address_path, address_txs_path, address_utxo_path, block_height_path, block_path,
-    block_txs_path, blocks_path, blocks_start_height_path, blocks_tip_hash_path,
-    blocks_tip_height_path, broadcast_path, btc_fiat_jpy, btc_fiat_usd, btc_to_sats,
-    calculator_field_names, cap_btc_supply, enter_btc, enter_fiat, fee_estimates_path, format_fiat,
-    loaded_calculator, mempool_path, mempool_recent_path, parse_address_txs_summary,
+    FiatCode, address_path, address_txs_path, address_utxo_path, addresses_txs_path,
+    block_height_path, block_path, block_txs_path, blocks_path, blocks_start_height_path,
+    blocks_tip_hash_path, blocks_tip_height_path, broadcast_path, btc_fiat_jpy, btc_fiat_usd,
+    btc_to_sats, calculator_field_names, cap_btc_supply, enter_btc, enter_fiat, fee_estimates_path,
+    format_fiat, loaded_calculator, mempool_path, mempool_recent_path, parse_address_txs_summary,
     parse_blocks_tip_hash, parse_blocks_tip_height, route_availability, sats_fiat_usd, sats_to_btc,
-    scripthash_txs_chain_page_path, scripthash_txs_mempool_path, switch_usd_jpy_usd, test_txs_path,
-    truncate_btc_decimals, usd_to_btc_and_sats,
+    scripthash_txs_chain_page_path, scripthash_txs_mempool_path, scripthashes_txs_path,
+    switch_usd_jpy_usd, test_txs_path, truncate_btc_decimals, usd_to_btc_and_sats,
 };
 
 fn shell_style() -> String {
@@ -783,6 +783,7 @@ fn TransactionPage() -> impl IntoView {
     let raw_bytes = RwSignal::new(Vec::new());
     let merkleblock_body = RwSignal::new(String::new());
     let status_body = RwSignal::new(String::new());
+    let tip_height_body = RwSignal::new(String::new());
     let spend_rows = RwSignal::new(Vec::new());
     let txid = params.with(|p| p.get("txid").unwrap_or_default());
     for req in transaction_requests(&txid) {
@@ -809,6 +810,11 @@ fn TransactionPage() -> impl IntoView {
     schedule(proof.path, merkleblock_body, network);
     let status = tx_status_request(&txid);
     schedule(status.path, status_body, network);
+    schedule(
+        blocks_tip_height_path().to_string(),
+        tip_height_body,
+        network,
+    );
     Effect::new(move |_| {
         let txid = params.with(|p| p.get("txid").unwrap_or_default());
         let txid = txid.trim().to_string();
@@ -845,6 +851,7 @@ fn TransactionPage() -> impl IntoView {
             );
             tx_raw_beside(&rows, &raw_bytes.get())
         }></div>
+        <div inner_html=move || confirmation_markup(&body.get(), &tip_height_body.get())></div>
         <div inner_html=move || outspends_markup(&spends_body.get())></div>
         <div inner_html=move || merkle_proof_markup(&proof_body.get())></div>
         <div inner_html=move || transaction_hex_markup(&hex_body.get())></div>
@@ -1075,6 +1082,8 @@ fn MultiAddressPage() -> impl IntoView {
     let rows = RwSignal::new(Vec::new());
     let summary_body = RwSignal::new(String::new());
     let script_summary = RwSignal::new(String::new());
+    let txs_body = RwSignal::new(String::new());
+    let script_txs = RwSignal::new(String::new());
     let draft = RwSignal::new(String::new());
     let values = query.with(|map| map.get_all("addresses").unwrap_or_default());
     let scripts = values
@@ -1098,6 +1107,27 @@ fn MultiAddressPage() -> impl IntoView {
         load_entered(calls, rows, network);
         summary_body.set(String::new());
         script_summary.set(String::new());
+        txs_body.set(String::new());
+        script_txs.set(String::new());
+        for post in multi_address_txs_post(&values) {
+            if post.path == addresses_txs_path() {
+                schedule_post(
+                    post.method,
+                    post.path.to_string(),
+                    post.body,
+                    txs_body,
+                    network,
+                );
+            } else if post.path == scripthashes_txs_path() {
+                schedule_post(
+                    post.method,
+                    post.path.to_string(),
+                    post.body,
+                    script_txs,
+                    network,
+                );
+            }
+        }
         for post in multi_address_summary_post(&values) {
             let target = if post.path.contains("scripthash") {
                 script_summary
@@ -1124,6 +1154,8 @@ fn MultiAddressPage() -> impl IntoView {
         <div inner_html=move || multi_address_links_markup(&rows.get())></div>
         <div inner_html=move || summary_rows_markup(&summary_body.get())></div>
         <div inner_html=move || summary_rows_markup(&script_summary.get())></div>
+        <div inner_html=move || address_rows_markup("", &txs_body.get(), "")></div>
+        <div inner_html=move || address_rows_markup("", &script_txs.get(), "")></div>
     }
 }
 
@@ -1575,6 +1607,7 @@ fn AssetPage() -> impl IntoView {
 fn AssetsPage() -> impl IntoView {
     let network = use_context::<RwSignal<Network>>().expect("network");
     let list_body = RwSignal::new(String::new());
+    let later_body = RwSignal::new(String::new());
     Effect::new(move |_| {
         let liquid = network.get() == Network::Liquid;
         list_body.set(String::new());
@@ -1587,6 +1620,21 @@ fn AssetsPage() -> impl IntoView {
         <div class="container-xl" inner_html=move || {
             asset_cards_markup(&list_body.get(), network.get() == Network::Liquid)
                 .unwrap_or_default()
+        }></div>
+        <button on:click=move |_| {
+            let liquid = network.get_untracked() == Network::Liquid;
+            if let Some(req) = registry_page_request(
+                liquid,
+                Some("25"),
+                Some("25"),
+                Some("name"),
+                Some("asc"),
+            ) {
+                schedule(req.path, later_body, network);
+            }
+        }>"Next registry page"</button>
+        <div inner_html=move || {
+            registry_list_markup(&later_body.get(), network.get() == Network::Liquid)
         }></div>
     }
 }

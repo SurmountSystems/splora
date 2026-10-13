@@ -90,9 +90,10 @@ fn transaction_body() -> String {
 fn transaction_parses_is_pegin_and_pegout() {
     let tx: Transaction = serde_json::from_str(&transaction_body()).expect("peg transaction");
 
-    assert_eq!(tx.vin[0].is_pegin, true);
-    assert_eq!(tx.vin[1].is_pegin, false);
-    assert_eq!(tx.vin[2].is_pegin, false);
+    assert_eq!(tx.vin[0].is_pegin, Some(true));
+    assert_eq!(tx.vin[1].is_pegin, Some(false));
+    assert_eq!(tx.vin[2].is_pegin, None);
+    assert_ne!(tx.vin[2].is_pegin, Some(false));
 
     let pegout = tx.vout[0].pegout.as_ref().expect("pegout");
     assert_eq!(pegout.genesis_hash, GENESIS_HASH);

@@ -1,6 +1,7 @@
 //! Peg-in and Liquid Peg Out come from `TxInput.is_pegin` and `TxOutput.pegout`.
 //!
-//! A missing `is_pegin` is false. A missing `pegout` is none. A key buried in
+//! A missing `is_pegin` is `None`, not false. `Some(false)` stays false.
+//! `Some(true)` stays true. A missing `pegout` is none. A key buried in
 //! `prevout`, or a `pegout` object on an input, is not that field. The paint
 //! does not scan the raw body, and it does not invent an asset amount.
 
@@ -147,7 +148,7 @@ fn assert_no_peg_labels(text: &str) {
     assert_no_invented_amount(text);
 }
 
-/// `is_pegin: true` sits on the prevout object. `TxInput.is_pegin` stays false.
+/// `is_pegin: true` sits on the prevout object. `TxInput.is_pegin` stays `None`.
 fn prevout_decoy_body() -> String {
     let prevout = output_with("bc1qdecoy", 10, r#""is_pegin":true"#);
     tx_body(
@@ -235,7 +236,7 @@ fn peg_lines_reads_typed_fields_not_the_raw_body() {
 fn prevout_is_pegin_does_not_paint_peg_in() {
     let body = prevout_decoy_body();
     let tx: Transaction = serde_json::from_str(&body).expect("typed tx");
-    assert!(!tx.vin[0].is_pegin);
+    assert_eq!(tx.vin[0].is_pegin, None);
     assert!(tx.vout.iter().all(|output| output.pegout.is_none()));
     let host = open_tx("decoy-pegin-tx", &body);
     assert_no_peg_labels(&host.rendered());
@@ -245,7 +246,7 @@ fn prevout_is_pegin_does_not_paint_peg_in() {
 fn input_pegout_object_does_not_paint_liquid_peg_out() {
     let body = input_pegout_decoy_body();
     let tx: Transaction = serde_json::from_str(&body).expect("typed tx");
-    assert!(!tx.vin[0].is_pegin);
+    assert_eq!(tx.vin[0].is_pegin, None);
     assert!(tx.vout.iter().all(|output| output.pegout.is_none()));
     let host = open_tx("decoy-pegout-tx", &body);
     assert_no_peg_labels(&host.rendered());
@@ -255,7 +256,7 @@ fn input_pegout_object_does_not_paint_liquid_peg_out() {
 fn typed_is_pegin_paints_peg_in() {
     let body = typed_pegin_body();
     let tx: Transaction = serde_json::from_str(&body).expect("typed tx");
-    assert!(tx.vin[0].is_pegin);
+    assert_eq!(tx.vin[0].is_pegin, Some(true));
     assert!(tx.vout.iter().all(|output| output.pegout.is_none()));
     let text = open_tx("pegin-tx", &body).rendered();
     assert!(has_line(&text, "Peg-in"), "{text}");
@@ -267,7 +268,7 @@ fn typed_is_pegin_paints_peg_in() {
 fn typed_pegout_paints_liquid_peg_out() {
     let body = typed_pegout_body();
     let tx: Transaction = serde_json::from_str(&body).expect("typed tx");
-    assert!(!tx.vin[0].is_pegin);
+    assert_eq!(tx.vin[0].is_pegin, None);
     let pegout = tx.vout[0].pegout.as_ref().expect("pegout");
     assert_eq!(pegout.script_pubkey_address.as_deref(), Some(PEG_ADDRESS));
     let text = open_tx("pegout-tx", &body).rendered();
@@ -280,7 +281,7 @@ fn typed_pegout_paints_liquid_peg_out() {
 fn missing_is_pegin_and_pegout_paint_neither() {
     let body = omitted_body();
     let tx: Transaction = serde_json::from_str(&body).expect("typed tx");
-    assert!(!tx.vin[0].is_pegin);
+    assert_eq!(tx.vin[0].is_pegin, None);
     assert!(tx.vout.iter().all(|output| output.pegout.is_none()));
     assert_no_peg_labels(&open_tx("omitted-tx", &body).rendered());
 }
@@ -289,7 +290,7 @@ fn missing_is_pegin_and_pegout_paint_neither() {
 fn false_is_pegin_and_null_pegout_paint_neither() {
     let body = false_and_null_body();
     let tx: Transaction = serde_json::from_str(&body).expect("typed tx");
-    assert!(!tx.vin[0].is_pegin);
+    assert_eq!(tx.vin[0].is_pegin, Some(false));
     assert!(tx.vout.iter().all(|output| output.pegout.is_none()));
     assert_no_peg_labels(&open_tx("false-tx", &body).rendered());
 }
@@ -301,7 +302,7 @@ fn address_list_ignores_nested_peg_keys() {
     assert!(
         parsed
             .iter()
-            .all(|tx| tx.vin.iter().all(|input| !input.is_pegin))
+            .all(|tx| tx.vin.iter().all(|input| input.is_pegin.is_none()))
     );
     assert!(
         parsed
@@ -318,7 +319,7 @@ fn address_list_paints_typed_peg_labels() {
     assert!(
         parsed
             .iter()
-            .any(|tx| tx.vin.iter().any(|input| input.is_pegin))
+            .any(|tx| tx.vin.iter().any(|input| input.is_pegin == Some(true)))
     );
     assert!(
         parsed

@@ -1,0 +1,116 @@
+//! Adjusted vsize on the transaction details row from `GET /tx/:txid`.
+//!
+//! When sigops is present, the cell is `Math.max(weight / 4, sigops * 5)`
+//! with floating division, then `Math.round(value * 100) / 100`, then
+//! JavaScript number stringification. A missing or null sigops omits the
+//! row. Explicit zero still paints. Script hex, asm, scriptsig, and witness
+//! stay off the page. Virtual size stays integer `weight / 4`.
+
+use splora_web::transaction_row_markup;
+
+const SCRIPT_HEX: &str = "ADJVSIZEPUBHEXDEAD";
+const SCRIPT_SIG_HEX: &str = "ADJVSIZESIGHEXDEAD";
+const SCRIPT_SIG_ASM: &str = "ADJVSIZESIGASMDEAD";
+const SCRIPT_ASM: &str = "ADJVSIZEASMDEAD";
+const WITNESS: &str = "ADJVSIZEWITDEAD";
+
+enum Sigops {
+    Present(u32),
+    Missing,
+    Null,
+}
+
+fn tx(weight: u32, sigops: Sigops) -> String {
+    let sigops_field = match sigops {
+        Sigops::Present(sigops) => format!(r#","sigops":{sigops}"#),
+        Sigops::Missing => String::new(),
+        Sigops::Null => r#","sigops":null"#.to_string(),
+    };
+    format!(
+        r#"{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","version":1,"locktime":0,"vin":[{{"txid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","vout":0,"prevout":null,"scriptsig":"{SCRIPT_SIG_HEX}","scriptsig_asm":"{SCRIPT_SIG_ASM}","witness":["{WITNESS}"],"is_coinbase":false,"sequence":1}}],"vout":[{{"scriptpubkey":"{SCRIPT_HEX}","scriptpubkey_asm":"{SCRIPT_ASM}","scriptpubkey_type":"p2pkh","value":1}}],"size":10,"weight":{weight}{sigops_field},"fee":1}}"#
+    )
+}
+
+fn adjusted_cell(text: &str) -> String {
+    format!("<td class=\"adjusted-vsize\">Adjusted vsize {text}</td>")
+}
+
+fn virtual_cell(virtual_size: u32) -> String {
+    format!("<td class=\"virtual-size\">Virtual size {virtual_size}</td>")
+}
+
+fn assert_one(markup: &str, expected: &str) {
+    assert_eq!(
+        markup.matches(expected).count(),
+        1,
+        "expected one {expected} in {markup}"
+    );
+}
+
+fn assert_absent(markup: &str, needle: &str) {
+    assert!(
+        !markup.contains(needle),
+        "{needle} leaked into the markup: {markup}"
+    );
+}
+
+fn assert_scripts_stay_off(markup: &str) {
+    assert_absent(markup, SCRIPT_HEX);
+    assert_absent(markup, SCRIPT_SIG_HEX);
+    assert_absent(markup, SCRIPT_SIG_ASM);
+    assert_absent(markup, SCRIPT_ASM);
+    assert_absent(markup, WITNESS);
+}
+
+#[test]
+fn weight_over_four_larger_paints_fraction() {
+    let markup = transaction_row_markup(&tx(7, Sigops::Present(0)));
+    assert_one(&markup, &adjusted_cell("1.75"));
+    assert_one(&markup, &virtual_cell(1));
+    assert_absent(&markup, &adjusted_cell("1"));
+    assert_scripts_stay_off(&markup);
+}
+
+#[test]
+fn weight_over_four_larger_paints_one_hundred() {
+    let markup = transaction_row_markup(&tx(400, Sigops::Present(1)));
+    assert_one(&markup, &adjusted_cell("100"));
+    assert_one(&markup, &virtual_cell(100));
+    assert_absent(&markup, "Adjusted vsize 5");
+    assert_scripts_stay_off(&markup);
+}
+
+#[test]
+fn sigops_times_five_larger_paints_fifteen() {
+    let markup = transaction_row_markup(&tx(8, Sigops::Present(3)));
+    assert_one(&markup, &adjusted_cell("15"));
+    assert_one(&markup, &virtual_cell(2));
+    assert_absent(&markup, "Adjusted vsize 2");
+    assert_scripts_stay_off(&markup);
+}
+
+#[test]
+fn explicit_zero_sigops_paints_adjusted_vsize_zero() {
+    let markup = transaction_row_markup(&tx(0, Sigops::Present(0)));
+    assert_one(&markup, &adjusted_cell("0"));
+    assert_one(&markup, &virtual_cell(0));
+    assert_scripts_stay_off(&markup);
+}
+
+#[test]
+fn missing_sigops_omits_adjusted_vsize() {
+    let markup = transaction_row_markup(&tx(20, Sigops::Missing));
+    assert_absent(&markup, "Adjusted vsize");
+    assert_absent(&markup, "Adjusted vsize 5");
+    assert_absent(&markup, "Adjusted vsize 0");
+    assert_scripts_stay_off(&markup);
+}
+
+#[test]
+fn null_sigops_omits_adjusted_vsize() {
+    let markup = transaction_row_markup(&tx(20, Sigops::Null));
+    assert_absent(&markup, "Adjusted vsize");
+    assert_absent(&markup, "Adjusted vsize 5");
+    assert_absent(&markup, "Adjusted vsize 0");
+    assert_scripts_stay_off(&markup);
+}

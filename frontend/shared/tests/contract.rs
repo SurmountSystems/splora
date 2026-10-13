@@ -314,7 +314,7 @@ fn parses_address_screen() {
     let stats = parse_address(&fixture("address.json")).unwrap();
     assert_eq!(stats.address, "xyz");
     assert_eq!(stats.chain_tx_count, "9");
-    assert_eq!(stats.funded_sum, "500000");
+    assert_eq!(stats.funded_sum.as_deref(), Some("500000"));
     assert_eq!(stats.mempool_tx_count, "3");
 }
 

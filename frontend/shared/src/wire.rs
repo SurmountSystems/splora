@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 /// block and is omitted by some clients; both deserialize. `ext` is the liquid
 /// header extra object. A Bitcoin body omits it. A missing key is `None`. The
 /// value is the JSON object the indexer already emits. There is no elements
-/// crate and no unblinding.
+/// crate and no unblinding. `nonce`, `bits`, and `difficulty` are omitted on
+/// a liquid build. A missing key or JSON null is `None`, not zero. Explicit
+/// `0` / `0.0` stays `Some`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub id: String,
@@ -30,9 +32,12 @@ pub struct Block {
     pub previous_block_hash: Option<String>,
     #[serde(rename = "mediantime")]
     pub median_time: u32,
-    pub nonce: u32,
-    pub bits: u32,
-    pub difficulty: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ext: Option<serde_json::Value>,
 }
@@ -80,7 +85,8 @@ pub struct Issuance {
 /// One input from `TransactionValue` in `src/rest.rs`.
 ///
 /// `is_pegin` is always present on a liquid build, including false. A Bitcoin
-/// body omits it, and a missing key deserializes as false. `issuance` is
+/// body omits it. A missing key is `None`. A present `false` stays
+/// `Some(false)`. JSON `null` is `None`, not `Some(false)`. `issuance` is
 /// omitted when the input has no issuance. A missing key is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxInput {
@@ -94,8 +100,8 @@ pub struct TxInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness: Option<Vec<String>>,
     pub is_coinbase: bool,
-    #[serde(default)]
-    pub is_pegin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_pegin: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuance: Option<Issuance>,
     pub sequence: u32,
@@ -187,14 +193,20 @@ pub struct Transaction {
     pub status: Option<TxStatus>,
 }
 
-/// `ScriptStats` in `src/new_index/schema.rs` (non-liquid).
+/// `ScriptStats` in `src/new_index/schema.rs`.
+///
+/// A liquid build omits `funded_txo_sum` and `spent_txo_sum`. A missing
+/// key is `None`, not zero. Explicit `0` stays `Some(0)`. JSON `null` is
+/// `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptStats {
     pub tx_count: u64,
     pub funded_txo_count: u64,
     pub spent_txo_count: u64,
-    pub funded_txo_sum: u64,
-    pub spent_txo_sum: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funded_txo_sum: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent_txo_sum: Option<u64>,
 }
 
 /// `GET /address/:script` or `GET /scripthash/:script`.
@@ -470,9 +482,9 @@ mod tests {
         assert_eq!(block.merkle_root, "merkle-root-1");
         assert_eq!(block.previous_block_hash.as_deref(), Some("prev-block-1"));
         assert_eq!(block.median_time, 1_599_990_000);
-        assert_eq!(block.nonce, 7);
-        assert_eq!(block.bits, 386_604_799);
-        assert_eq!(block.difficulty, 1.0);
+        assert_eq!(block.nonce, Some(7));
+        assert_eq!(block.bits, Some(386_604_799));
+        assert_eq!(block.difficulty, Some(1.0));
         assert_eq!(block.version, 536_870_912);
 
         let genesis = r#"{"id":"g","height":0,"version":1,"timestamp":0,"tx_count":1,"size":1,"weight":4,"merkle_root":"m","mediantime":0,"nonce":0,"bits":0,"difficulty":1}"#;
@@ -555,10 +567,10 @@ mod tests {
         assert_eq!(stats.chain_stats.tx_count, 9);
         assert_eq!(stats.chain_stats.funded_txo_count, 6);
         assert_eq!(stats.chain_stats.spent_txo_count, 2);
-        assert_eq!(stats.chain_stats.funded_txo_sum, 500_000);
-        assert_eq!(stats.chain_stats.spent_txo_sum, 100_000);
+        assert_eq!(stats.chain_stats.funded_txo_sum, Some(500_000));
+        assert_eq!(stats.chain_stats.spent_txo_sum, Some(100_000));
         assert_eq!(stats.mempool_stats.tx_count, 3);
-        assert_eq!(stats.mempool_stats.funded_txo_sum, 2500);
+        assert_eq!(stats.mempool_stats.funded_txo_sum, Some(2500));
     }
 
     #[test]

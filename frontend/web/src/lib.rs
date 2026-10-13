@@ -26,7 +26,7 @@ pub use liquid::{
     asset_history_markup, asset_mempool_txs_request, asset_search_markup,
     asset_supply_decimal_request, asset_supply_request, liquid_asset_requests,
     registry_entry_markup, registry_entry_request, registry_list_markup, registry_list_request,
-    registry_search_markup, registry_search_request, supply_markup,
+    registry_page_request, registry_search_markup, registry_search_request, supply_markup,
 };
 pub use local_pages::{
     calculator_fiat_text, capped_btc_text, docs_view_text, graphs_page_text, hashrate_page_text,
@@ -52,12 +52,12 @@ pub use rows::{
     block_details_markup, block_raw_beside, block_rows_markup, block_status_markup,
     block_transactions_markup, block_tx_page_path, block_txid_index_markup,
     block_txid_links_markup, blocks_rows_markup, broadcast_txid_markup, chain_tip_markup,
-    dashboard_rows_markup, details_open_after_click, height_body_markup, indexed_bytes_markup,
-    mempool_txids_markup, merkle_proof_markup, multi_address_links_markup, one_outspend_markup,
-    outspends_markup, package_txid_markup, poison_alert_markup, recent_rows_markup,
-    scripthash_markup, summary_rows_markup, summary_rows_with_status, test_txid_markup,
-    tip_links_markup, transaction_hex_markup, transaction_row_markup, tx_raw_beside,
-    tx_status_markup,
+    confirmation_markup, dashboard_rows_markup, details_open_after_click, height_body_markup,
+    indexed_bytes_markup, mempool_txids_markup, merkle_proof_markup, multi_address_links_markup,
+    one_outspend_markup, outspends_markup, package_txid_markup, poison_alert_markup,
+    recent_rows_markup, scripthash_markup, summary_rows_markup, summary_rows_with_status,
+    test_txid_markup, tip_links_markup, transaction_hex_markup, transaction_row_markup,
+    tx_raw_beside, tx_status_markup,
 };
 pub use screens::{
     BatchPost, address_chain_request, address_fields_text, address_mempool_txs_request,

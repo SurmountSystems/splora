@@ -255,18 +255,18 @@ fn parses_scripthash_twins_of_the_address_routes() {
     .unwrap();
     assert_eq!(stats.scripthash, "aa");
     assert_eq!(stats.chain_tx_count, "4");
-    assert_eq!(stats.funded_sum, "9");
+    assert_eq!(stats.funded_sum.as_deref(), Some("9"));
     assert_eq!(stats.mempool_tx_count, "1");
 
     let missing = parse_scripthash(
         r#"{"scripthash":"aa","chain_stats":{"tx_count":4},"mempool_stats":{"tx_count":0}}"#,
     )
-    .unwrap_err();
-    assert!(
-        missing.detail.contains("funded_txo_sum"),
-        "detail was {}",
-        missing.detail
-    );
+    .expect("a missing funded sum is not a parse error");
+    assert_eq!(missing.scripthash, "aa");
+    assert_eq!(missing.chain_tx_count, "4");
+    assert_eq!(missing.funded_sum, None);
+    assert_ne!(missing.funded_sum.as_deref(), Some("0"));
+    assert_eq!(missing.mempool_tx_count, "0");
 
     let txs = parse_scripthash_txs(&fixture("address_txs.json")).unwrap();
     assert_eq!(txs[0].txid, "addr-tx-1");
