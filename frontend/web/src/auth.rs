@@ -2,7 +2,7 @@
 //!
 //! `frontend/splora-api` is the shared prefix table and header encoder.
 
-use crate::paths::allowed_post_path;
+use crate::paths::allowed_post;
 use splora_api::{KIND_NIP98, Network, authorization_header, nip98_tags};
 
 pub const FAIL_CLOSED: &str = "A NIP-07 signer is required. The indexer was not called.";
@@ -18,6 +18,8 @@ pub fn text_after_signed_get(result: Result<String, ClientError>) -> String {
 pub enum ClientError {
     MissingSigner,
     RejectedEvent,
+    /// The indexer answered with its own sentence.
+    Indexer(String),
 }
 
 impl ClientError {
@@ -126,7 +128,7 @@ pub fn post_indexer(
     payload: &str,
     transport: &mut dyn FnMut(&str, &str, &str, &str) -> Result<Vec<u8>, ClientError>,
 ) -> Result<Vec<u8>, ClientError> {
-    if payload.contains("nsec1") || !allowed_post_path(indexer_path) {
+    if payload.contains("nsec1") || !allowed_post(indexer_path, payload) {
         return Err(ClientError::RejectedEvent);
     }
     let signer = signer.ok_or(ClientError::MissingSigner)?;

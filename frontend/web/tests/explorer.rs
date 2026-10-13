@@ -252,7 +252,7 @@ fn screen_parsers_return_shared_wire_structs() {
     ))
     .expect("utxo");
     assert!(utxos[0].status.confirmed);
-    assert_eq!(utxos[0].value, 42_000);
+    assert_eq!(utxos[0].value, Some(42_000));
 
     let recent = parse_recent(include_str!(
         "../../shared/tests/fixtures/mempool_recent.json"

@@ -1,0 +1,124 @@
+//! GPUI docs screen for routes this indexer serves. Tests read the text and do not open a window.
+
+use gpui::{Context, IntoElement, Render, Window, div, prelude::*};
+
+/// Static docs view. No private-key field and no window of its own.
+pub struct DocsScreen;
+
+impl DocsScreen {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Render for DocsScreen {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().id("indexer-docs").child(docs_screen_text())
+    }
+}
+
+/// Text painted by [`DocsScreen`].
+pub fn docs_screen_text() -> String {
+    [
+        "Indexer routes. This screen is local text. It has no private-key field.",
+        "Prefixes",
+        "/",
+        "/testnet",
+        "/testnet4",
+        "/mutinynet",
+        "/liquid",
+        "/signet is HTTP 307 to /mutinynet, not a sixth chain.",
+        "Routes",
+        "GET /api/v1/ws",
+        "GET /blocks/tip/hash",
+        "GET /blocks/tip/height",
+        "GET /blocks",
+        "GET /blocks/:start_height",
+        "GET /block-template",
+        "GET /block-height/:height",
+        "GET /block/:hash",
+        "GET /block/:hash/status",
+        "GET /block/:hash/txids",
+        "GET /block/:hash/header",
+        "GET /block/:hash/raw",
+        "GET /block/:hash/txid/:index",
+        "GET /block/:hash/txs",
+        "GET /block/:hash/txs/:start_index",
+        "GET /internal/block/:hash/txs",
+        "GET /tx/:txid",
+        "GET /tx/:txid/hex",
+        "GET /tx/:txid/raw",
+        "GET /tx/:txid/status",
+        "GET /tx/:txid/merkle-proof",
+        "GET /tx/:txid/merkleblock-proof",
+        "GET /tx/:txid/outspend/:index",
+        "GET /tx/:txid/outspends",
+        "GET /txs/outspends",
+        "POST /tx",
+        "GET /broadcast",
+        "POST /txs/test",
+        "POST /txs/package",
+        "POST /electrum",
+        "POST /internal/txs",
+        "POST /internal/txs/outspends/by-txid",
+        "POST /internal/txs/outspends/by-outpoint",
+        "GET /address/:address",
+        "GET /address/:address/txs",
+        "GET /address/:address/txs/chain",
+        "GET /address/:address/txs/summary",
+        "GET /address/:address/txs/mempool",
+        "GET /address/:address/utxo",
+        "GET /scripthash/:scripthash",
+        "GET /scripthash/:scripthash/txs",
+        "GET /scripthash/:scripthash/txs/chain",
+        "GET /scripthash/:scripthash/txs/summary",
+        "GET /scripthash/:scripthash/txs/mempool",
+        "GET /scripthash/:scripthash/utxo",
+        "GET /address-prefix/:prefix",
+        "POST /addresses/txs",
+        "POST /addresses/txs/summary",
+        "POST /scripthashes/txs",
+        "POST /scripthashes/txs/summary",
+        "GET /mempool",
+        "GET /mempool/txids",
+        "GET /mempool/txids/page",
+        "GET /mempool/txids/page/:last_seen_txid",
+        "GET /mempool/recent",
+        "GET /internal/mempool/txs",
+        "GET /internal/mempool/txs/:last_seen_txid",
+        "GET /internal/mempool/txs/all",
+        "POST /internal/mempool/txs",
+        "GET /fee-estimates",
+        "Liquid feature routes",
+        "GET /assets/registry",
+        "GET /assets/registry/search",
+        "GET /assets/registry/:asset",
+        "GET /asset/:asset",
+        "GET /asset/:asset/txs",
+        "GET /asset/:asset/txs/chain",
+        "GET /asset/:asset/txs/chain/:last_seen_txid",
+        "GET /asset/:asset/txs/mempool",
+        "GET /asset/:asset/supply",
+        "GET /asset/:asset/supply/:decimal",
+        "GET /tx/:txid/merkleblock-proof is omitted when the liquid feature is on.",
+    ]
+    .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::docs_screen_text;
+
+    #[test]
+    fn docs_screen_text_contains_blocks_and_tx() {
+        let text = docs_screen_text();
+        assert!(
+            text.contains("/blocks"),
+            "docs screen text missing /blocks: {text}"
+        );
+        assert!(
+            text.contains("/tx/"),
+            "docs screen text missing /tx/: {text}"
+        );
+    }
+}

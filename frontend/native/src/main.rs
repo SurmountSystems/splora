@@ -10,7 +10,7 @@ use splora_api::Network;
 use splora_native::{
     ACCENT_RGB, BACKGROUND_RGB, ClientError, ExplorerClient, ExplorerGet, ExplorerPost,
     NetworkSwitcher, NpubPopupModel, Screen, ScreenHost, TEXT_RGB, launch_npub, network_label,
-    painted_rows, painted_shell_text, ureq_client,
+    notice_from_error, painted_rows, painted_shell_text, transaction_id_in_row, ureq_client,
 };
 
 struct Shell<G> {
@@ -24,7 +24,7 @@ impl<G: ExplorerGet + ExplorerPost + 'static> Shell<G> {
     fn note(&mut self, result: Result<(), ClientError>) {
         self.host.notice = match result {
             Ok(()) => String::new(),
-            Err(err) => err.to_string(),
+            Err(err) => notice_from_error(&err),
         };
     }
 
@@ -156,8 +156,39 @@ impl<G: ExplorerGet + ExplorerPost + 'static> Render for Shell<G> {
             self.host.root(),
         );
         let mut data_rows = div().flex().flex_col().gap_1();
+        let mut tx_row_index = 0usize;
         for row in painted_rows(&self.host) {
-            data_rows = data_rows.child(div().flex().flex_row().child(row));
+            let row_id = tx_row_index;
+            tx_row_index += 1;
+            if let Some(txid) = transaction_id_in_row(&row) {
+                let txid = txid.to_string();
+                data_rows = data_rows.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .id(("tx-row", row_id))
+                        .child(row)
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let result = this.host.open_transaction(&txid);
+                            this.note(result);
+                            cx.notify();
+                        })),
+                );
+            } else {
+                let row_text = row.clone();
+                data_rows = data_rows.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .id(("tx-row", row_id))
+                        .child(row)
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            let result = this.host.open_row(&row_text);
+                            this.note(result);
+                            cx.notify();
+                        })),
+                );
+            }
         }
         let mut column = div()
             .id("shell")
@@ -186,7 +217,9 @@ impl<G: ExplorerGet + ExplorerPost + 'static> Render for Shell<G> {
                     this.host.backspace();
                 } else if key == "enter" {
                     let result = match this.host.screen {
-                        Screen::Broadcast | Screen::TestTransactions => this.host.submit(),
+                        Screen::Broadcast | Screen::TestTransactions | Screen::Calculator => {
+                            this.host.submit()
+                        }
                         Screen::Popup => Ok(()),
                         _ => this.host.reload(),
                     };
@@ -210,7 +243,7 @@ impl<G: ExplorerGet + ExplorerPost + 'static> Render for Shell<G> {
                 .child(self.paste_button(cx));
             if matches!(
                 self.host.screen,
-                Screen::Broadcast | Screen::TestTransactions
+                Screen::Broadcast | Screen::TestTransactions | Screen::Calculator
             ) {
                 actions = actions.child(self.command_button(cx, "submit", "Submit", true));
             }

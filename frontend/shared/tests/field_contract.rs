@@ -59,7 +59,7 @@ fn wire_structs_expose_block_tx_address_utxo_mempool_and_fee_fields() {
 
     let utxos: Vec<Utxo> = serde_json::from_str(&fixture("address_utxos.json")).unwrap();
     assert_eq!(utxos.len(), 1);
-    assert_eq!(utxos[0].value, 42_000);
+    assert_eq!(utxos[0].value, Some(42_000));
 
     let mempool: MempoolSummary = serde_json::from_str(
         r#"{"count":2,"vsize":300,"total_fee":1500,"fee_histogram":[[10.5,200],[1,100]]}"#,
@@ -100,8 +100,9 @@ fn wire_structs_reject_json_that_omits_a_required_field() {
     let mut utxos: serde_json::Value =
         serde_json::from_str(&fixture("address_utxos.json")).unwrap();
     assert!(utxos[0].as_object_mut().unwrap().remove("value").is_some());
-    let err = serde_json::from_str::<Vec<Utxo>>(&utxos.to_string()).unwrap_err();
-    assert_missing_field(&err, "value");
+    let parsed: Vec<Utxo> =
+        serde_json::from_str(&utxos.to_string()).expect("a missing value is not a parse error");
+    assert_eq!(parsed[0].value, None);
 
     let mempool = r#"{"count":2,"vsize":300,"total_fee":1500,"fee_histogram":[]}"#;
     let err = serde_json::from_str::<MempoolSummary>(&without_key(mempool, "count")).unwrap_err();

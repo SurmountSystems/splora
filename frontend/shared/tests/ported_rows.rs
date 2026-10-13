@@ -11,8 +11,9 @@ use splora_frontend_shared::wire::{
     AddressStats, Block, FeeEstimates, MempoolSummary, RecentTransaction, Transaction,
 };
 use splora_frontend_shared::{
-    IndexerCall, address_txs_path, block_path, block_txs_path, broadcast_path, fee_estimates_path,
-    indexer_request, indexer_routes, mempool_path, mempool_recent_path, tx_path,
+    IndexerCall, address_prefix_path, address_txs_path, block_path, block_txs_path, broadcast_path,
+    fee_estimates_path, indexer_request, indexer_routes, mempool_path, mempool_recent_path,
+    tx_path,
 };
 
 const PORTED_ROWS: usize = 89;
@@ -735,8 +736,8 @@ fn assert_electrs_path(path: &str, test: &str) {
 
 /// Crate route pattern for an inventory path, when this crate builds that route.
 ///
-/// `None` is a liquid asset route or `GET /address-prefix/:prefix`. Those are
-/// electrs paths from the inventory. They are not in the non-liquid route table.
+/// `None` is a liquid asset route. Those electrs paths are not in this
+/// route table. `GET /address-prefix/:prefix` is.
 fn non_liquid_pattern(path: &str) -> Option<&'static str> {
     let get = |call: IndexerCall| {
         let built = indexer_request(&call);
@@ -805,11 +806,16 @@ fn non_liquid_pattern(path: &str) -> Option<&'static str> {
             );
             Some("/address/:script/txs")
         }
-        "/address-prefix/:prefix"
-        | "/assets/registry"
-        | "/assets/registry/search"
-        | "/asset/:id"
-        | "/asset/:id/txs" => None,
+        "/address-prefix/:prefix" => {
+            assert_eq!(
+                get(IndexerCall::AddressPrefix {
+                    prefix: ":prefix".to_string(),
+                }),
+                address_prefix_path(":prefix")
+            );
+            Some("/address-prefix/:prefix")
+        }
+        "/assets/registry" | "/assets/registry/search" | "/asset/:id" | "/asset/:id/txs" => None,
         other => panic!("unknown electrs path {other}"),
     }
 }
@@ -997,8 +1003,8 @@ fn assert_tx_amounts() {
     let vin = vin_json("amount-prev", Some(&prev), false);
     let vout = vout_json("v0_p2wpkh", Some("bc1qout"), 240_000);
     let tx: Transaction = serde_json::from_str(&tx_json("amount-tx", &vin, &vout)).unwrap();
-    assert_eq!(tx.vin[0].prevout.as_ref().unwrap().value, 250_000);
-    assert_eq!(tx.vout[0].value, 240_000);
+    assert_eq!(tx.vin[0].prevout.as_ref().unwrap().value, Some(250_000));
+    assert_eq!(tx.vout[0].value, Some(240_000));
 }
 
 fn assert_tx_rows() {
@@ -1026,7 +1032,7 @@ fn assert_vout_sats(index: usize, sats: u64) {
     let vin = vin_json("prev", Some(&prev), false);
     let tx: Transaction = serde_json::from_str(&tx_json("amount-tx", &vin, &vout)).unwrap();
     assert!(tx.vout.len() > index);
-    assert_eq!(tx.vout[index].value, sats);
+    assert_eq!(tx.vout[index].value, Some(sats));
 }
 
 fn assert_tx_and_address() {
@@ -1241,7 +1247,7 @@ fn assert_recent_gain() {
     assert_eq!(after[0].txid, "sent-txid");
     assert_eq!(after[0].fee, 800);
     assert_eq!(after[0].vsize, 141);
-    assert_eq!(after[0].value, 99_000);
+    assert_eq!(after[0].value, Some(99_000));
 }
 
 fn assert_recent_stable() {
@@ -1251,7 +1257,7 @@ fn assert_recent_stable() {
     assert_eq!(first[0].txid, second[0].txid);
     assert_eq!(first[1].txid, "recent-tx-2");
     assert_eq!(first[0].fee, 800);
-    assert_eq!(first[1].value, 99_000);
+    assert_eq!(first[1].value, Some(99_000));
 }
 
 fn assert_recent_cap() {
@@ -1262,7 +1268,7 @@ fn assert_recent_cap() {
     assert_eq!(all[0].txid, "recent-0");
     assert_eq!(all[49].fee, 800);
     assert_eq!(all[49].vsize, 141);
-    assert_eq!(all[49].value, 99_000);
+    assert_eq!(all[49].value, Some(99_000));
     let capped_ids: Vec<&str> = refs.iter().copied().take(10).collect();
     let capped: Vec<RecentTransaction> = serde_json::from_str(&recent_json(&capped_ids)).unwrap();
     assert_eq!(capped.len(), 10);
@@ -1325,7 +1331,7 @@ fn assert_second_output(paths: &[&str]) {
     let vin = vin_json("prev", Some(&prev), false);
     let tx: Transaction = serde_json::from_str(&tx_json("asset-link", &vin, &vout)).unwrap();
     assert!(tx.vout.len() >= 2);
-    assert_eq!(tx.vout[1].value, 42_000);
+    assert_eq!(tx.vout[1].value, Some(42_000));
 }
 
 fn chain_blocks(count: u32) -> Vec<Block> {

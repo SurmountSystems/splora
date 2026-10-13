@@ -9,6 +9,7 @@
 5. Two slices run as two L2 coordinators at the same time. Separate coordinators. One does not own both. Each coordinator stays listed until its own report is written. Do not exit a coordinator after handing work to a specialist and leave one row on the list. Web and native are the usual pair.
 6. "Finished" means the approved plan's owed outcome, not a passing test on one slice. Before saying finished, read the session plan and name what landed and what that plan still owes. A green `cargo test` is evidence for that test. It is not the explorer.
 7. Do not leave `trunk serve` or a headless browser running. Do not start them unless the operator asks for that serve in the same message. If a check starts one, stop it in the same command. A killed serve stays killed.
+8. Do not stop while the approved plan still has agent-doable work. A residual paragraph is not the end. A coordinator that exits without its report is not finished. Keep three L2 coordinators open until that plan's acceptance is met: one Web, one Native, one Shared. No fewer. An L2 that exits after only spawning, or that dies repeating one sentence with no tool calls, gets replaced in the same turn. Do not invent mining, price, or Lightning routes to look busy. Do not start a page server to look busy.
 
 ## Before testing
 

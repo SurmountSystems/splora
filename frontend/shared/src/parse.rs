@@ -3,7 +3,7 @@
 //! Field names follow the serde structs the indexer emits. This module does
 //! not invent a second shape.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Why a response body did not match the indexer shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,7 +12,7 @@ pub struct ParseError {
 }
 
 impl ParseError {
-    fn new(detail: impl Into<String>) -> Self {
+    pub(crate) fn new(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
         }
@@ -167,7 +167,8 @@ struct ScriptStatsJson {
 /// One output from `GET /address/:script/utxo`.
 ///
 /// JSON keys from `UtxoValue` in `src/rest.rs`: `txid`, `vout`, `value`, and
-/// `status.confirmed` from `TransactionStatus`.
+/// `status.confirmed` from `TransactionStatus`. A missing `value` is an empty
+/// string, not `"0"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Utxo {
     pub txid: String,
@@ -180,7 +181,8 @@ pub struct Utxo {
 struct UtxoJson {
     txid: String,
     vout: u64,
-    value: u64,
+    #[serde(default)]
+    value: Option<u64>,
     status: StatusJson,
 }
 
@@ -196,12 +198,13 @@ pub struct RecentTx {
     pub value: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RecentJson {
     txid: String,
     fee: u64,
     vsize: u64,
-    value: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    value: Option<u64>,
 }
 
 /// One element of the `POST /txs/test` JSON array.
@@ -268,7 +271,7 @@ pub fn parse_address_utxos(body: &str) -> Result<Vec<Utxo>, ParseError> {
         .map(|row| Utxo {
             txid: row.txid,
             vout: row.vout.to_string(),
-            value: row.value.to_string(),
+            value: row.value.map(|amount| amount.to_string()).unwrap_or_default(),
             confirmed: yes_no(row.status.confirmed),
         })
         .collect())
@@ -282,7 +285,10 @@ pub fn parse_mempool_recent(body: &str) -> Result<Vec<RecentTx>, ParseError> {
             txid: row.txid,
             fee: row.fee.to_string(),
             vsize: row.vsize.to_string(),
-            value: row.value.to_string(),
+            value: match row.value {
+                Some(amount) => amount.to_string(),
+                None => String::new(),
+            },
         })
         .collect())
 }
@@ -427,4 +433,316 @@ pub fn parse_block_height(body: &str) -> Result<String, ParseError> {
         return Err(ParseError::new("block height result was empty"));
     }
     Ok(hash.to_string())
+}
+
+/// `GET /block/:hash/status` (`BlockStatus` in `src/util/block.rs`).
+pub fn parse_block_status(body: &str) -> Result<crate::wire::BlockStatus, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /tx/:txid/outspends`.
+pub fn parse_outspends(body: &str) -> Result<Vec<crate::wire::Outspend>, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /tx/:txid/outspend/:index`.
+pub fn parse_outspend(body: &str) -> Result<crate::wire::Outspend, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /tx/:txid/merkle-proof`.
+pub fn parse_merkle_proof(body: &str) -> Result<crate::wire::MerkleProof, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /tx/:txid/hex` returns the raw transaction as plain hex, not JSON.
+pub fn parse_tx_hex(body: &str) -> Result<String, ParseError> {
+    let hex = body.trim();
+    if hex.is_empty() {
+        return Err(ParseError::new("tx hex was empty"));
+    }
+    Ok(hex.to_string())
+}
+
+/// `GET /address/:script/txs/chain` and the `:last_seen_txid` page.
+///
+/// The body is the same transaction array as [`parse_address_txs`].
+pub fn parse_address_txs_chain(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `GET /address/:script/txs/mempool`.
+///
+/// The body is the same transaction array as [`parse_address_txs`].
+pub fn parse_address_txs_mempool(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `GET /address/:script/txs/summary` and the summary page.
+pub fn parse_address_txs_summary(body: &str) -> Result<Vec<crate::wire::TxSummary>, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /mempool/txids` and `GET /mempool/txids/page/:last_seen_txid`.
+pub fn parse_mempool_txids(body: &str) -> Result<Vec<String>, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /address-prefix/:prefix` returns a JSON array of address strings.
+pub fn parse_address_prefix(body: &str) -> Result<Vec<String>, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /scripthash/:hash`.
+///
+/// Same stats object as [`AddressStats`], with `scripthash` instead of
+/// `address`. `src/rest.rs` uses the script type as the object key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptHashStats {
+    pub scripthash: String,
+    pub chain_tx_count: String,
+    pub funded_sum: String,
+    pub mempool_tx_count: String,
+}
+
+#[derive(Deserialize)]
+struct ScriptHashJson {
+    scripthash: String,
+    chain_stats: ScriptStatsJson,
+    mempool_stats: ScriptStatsJson,
+}
+
+pub fn parse_scripthash(body: &str) -> Result<ScriptHashStats, ParseError> {
+    let raw: ScriptHashJson = serde_json::from_str(body)?;
+    let funded_sum = raw
+        .chain_stats
+        .funded_txo_sum
+        .ok_or_else(|| ParseError::new("missing chain_stats.funded_txo_sum"))?;
+    Ok(ScriptHashStats {
+        scripthash: raw.scripthash,
+        chain_tx_count: raw.chain_stats.tx_count.to_string(),
+        funded_sum: funded_sum.to_string(),
+        mempool_tx_count: raw.mempool_stats.tx_count.to_string(),
+    })
+}
+
+/// `GET /scripthash/:hash/txs`. Same body as [`parse_address_txs`].
+pub fn parse_scripthash_txs(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `GET /scripthash/:hash/txs/chain` and the `:last_seen_txid` page.
+pub fn parse_scripthash_txs_chain(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `GET /scripthash/:hash/txs/mempool`.
+pub fn parse_scripthash_txs_mempool(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `GET /scripthash/:hash/utxo`. Same body as [`parse_address_utxos`].
+pub fn parse_scripthash_utxos(body: &str) -> Result<Vec<Utxo>, ParseError> {
+    parse_address_utxos(body)
+}
+
+/// `POST /txs/package` (`SubmitPackageResult` in `src/daemon.rs`).
+pub fn parse_package(body: &str) -> Result<crate::wire::PackageResult, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /scripthash/:hash/txs/summary` and the summary page.
+///
+/// Same rows as [`parse_address_txs_summary`]. The row type stays [`crate::wire::TxSummary`].
+pub fn parse_scripthash_txs_summary(body: &str) -> Result<Vec<crate::wire::TxSummary>, ParseError> {
+    parse_address_txs_summary(body)
+}
+
+/// `POST /addresses/txs`. Same transaction array as [`parse_address_txs`].
+pub fn parse_addresses_txs(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `POST /scripthashes/txs`. Same transaction array as [`parse_address_txs`].
+pub fn parse_scripthashes_txs(body: &str) -> Result<Vec<Tx>, ParseError> {
+    parse_address_txs(body)
+}
+
+/// `POST /addresses/txs/summary` and the `:last_seen_txid` page.
+pub fn parse_addresses_txs_summary(body: &str) -> Result<Vec<crate::wire::TxSummary>, ParseError> {
+    parse_address_txs_summary(body)
+}
+
+/// `POST /scripthashes/txs/summary` and the `:last_seen_txid` page.
+pub fn parse_scripthashes_txs_summary(
+    body: &str,
+) -> Result<Vec<crate::wire::TxSummary>, ParseError> {
+    parse_address_txs_summary(body)
+}
+
+/// `GET /txs/outspends?txids=`.
+///
+/// One spend array per transaction id, in the requested order (`src/rest.rs`).
+/// The indexer accepts at most 50 ids.
+pub fn parse_txs_outspends(body: &str) -> Result<Vec<Vec<crate::wire::Outspend>>, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /tx/:txid/status` (`TransactionStatus` in `src/util/transaction.rs`).
+pub fn parse_tx_status(body: &str) -> Result<crate::wire::TxStatus, ParseError> {
+    Ok(serde_json::from_str(body)?)
+}
+
+/// `GET /block/:hash/txid/:index` returns one txid as plain text.
+pub fn parse_block_txid(body: &str) -> Result<String, ParseError> {
+    let txid = body.trim();
+    if txid.is_empty() {
+        return Err(ParseError::new("block txid was empty"));
+    }
+    Ok(txid.to_string())
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, ParseError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(ParseError::new("hex was not hexadecimal")),
+    }
+}
+
+fn decode_hex(text: &str) -> Result<Vec<u8>, ParseError> {
+    if text.len() % 2 != 0 {
+        return Err(ParseError::new("hex length was odd"));
+    }
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(text.len() / 2);
+    let mut index = 0;
+    while index < bytes.len() {
+        let high = hex_nibble(bytes[index])?;
+        let low = hex_nibble(bytes[index + 1])?;
+        out.push((high << 4) | low);
+        index += 2;
+    }
+    Ok(out)
+}
+
+fn hex_text(body: &str, empty_detail: &str) -> Result<String, ParseError> {
+    let text = body.trim();
+    if text.is_empty() {
+        return Err(ParseError::new(empty_detail));
+    }
+    decode_hex(text)?;
+    Ok(text.to_string())
+}
+
+/// `GET /block/:hash/header`. The indexer sends hex text (`hex::encode` in `src/rest.rs`).
+pub fn parse_block_header(body: &str) -> Result<String, ParseError> {
+    hex_text(body, "block header was empty")
+}
+
+/// Header hex decoded to bytes.
+pub fn parse_block_header_bytes(body: &str) -> Result<Vec<u8>, ParseError> {
+    decode_hex(&parse_block_header(body)?)
+}
+
+/// `GET /block/:hash/raw`. The indexer sends `application/octet-stream`.
+pub fn parse_block_raw(body: &[u8]) -> Result<Vec<u8>, ParseError> {
+    if body.is_empty() {
+        return Err(ParseError::new("block raw was empty"));
+    }
+    Ok(body.to_vec())
+}
+
+/// Hex text for the same raw block, when the caller already encoded it.
+pub fn parse_block_raw_hex(body: &str) -> Result<String, ParseError> {
+    hex_text(body, "block raw hex was empty")
+}
+
+/// `GET /tx/:txid/raw`. The indexer sends `application/octet-stream`.
+pub fn parse_tx_raw(body: &[u8]) -> Result<Vec<u8>, ParseError> {
+    if body.is_empty() {
+        return Err(ParseError::new("tx raw was empty"));
+    }
+    Ok(body.to_vec())
+}
+
+/// Hex text for the same raw transaction.
+pub fn parse_tx_raw_hex(body: &str) -> Result<String, ParseError> {
+    hex_text(body, "tx raw hex was empty")
+}
+
+/// `GET /tx/:txid/merkleblock-proof`. Hex text. Omitted when the liquid feature is on.
+pub fn parse_merkleblock_proof(body: &str) -> Result<String, ParseError> {
+    hex_text(body, "merkleblock proof was empty")
+}
+
+/// Merkleblock proof hex decoded to bytes.
+pub fn parse_merkleblock_proof_bytes(body: &str) -> Result<Vec<u8>, ParseError> {
+    decode_hex(&parse_merkleblock_proof(body)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RecentJson, parse_address_utxos};
+
+    #[test]
+    fn address_utxo_omitted_value_displays_empty_not_zero() {
+        let omitted = parse_address_utxos(
+            r#"[{"txid":"blind","vout":1,"status":{"confirmed":false},"valuecommitment":"aa"}]"#,
+        )
+        .expect("omitted value");
+        assert_eq!(omitted[0].value, "");
+        assert_ne!(omitted[0].value, "0");
+
+        let zero = parse_address_utxos(
+            r#"[{"txid":"z","vout":1,"value":0,"status":{"confirmed":true}}]"#,
+        )
+        .expect("explicit zero");
+        assert_eq!(zero[0].value, "0");
+
+        let present = parse_address_utxos(
+            r#"[{"txid":"n","vout":2,"value":42000,"status":{"confirmed":true}}]"#,
+        )
+        .expect("present value");
+        assert_eq!(present[0].value, "42000");
+
+        let null_value = parse_address_utxos(
+            r#"[{"txid":"n","vout":1,"value":null,"status":{"confirmed":false}}]"#,
+        )
+        .expect("json null");
+        assert_eq!(null_value[0].value, "");
+    }
+
+    #[test]
+    fn recent_json_null() {
+        let cleared: RecentJson =
+            serde_json::from_str(r#"{"txid":"cleared-row","fee":13,"vsize":143,"value":null}"#)
+                .expect("json null value is not a parse error");
+        assert_eq!(cleared.value, None);
+        let encoded = serde_json::to_string(&cleared).expect("serialize null");
+        assert!(
+            !encoded.contains("value"),
+            "null value must be omitted, got {encoded}"
+        );
+        assert!(
+            !encoded.contains("null"),
+            "null value must not be written, got {encoded}"
+        );
+
+        let zero: RecentJson =
+            serde_json::from_str(r#"{"txid":"explicit-zero","fee":11,"vsize":141,"value":0}"#)
+                .expect("explicit zero");
+        assert_eq!(zero.value, Some(0));
+        let zero_encoded = serde_json::to_string(&zero).expect("serialize zero");
+        assert!(
+            zero_encoded.contains("\"value\":0") || zero_encoded.contains("\"value\": 0"),
+            "explicit zero must stay on the wire, got {zero_encoded}"
+        );
+
+        let missing: RecentJson =
+            serde_json::from_str(r#"{"txid":"omitted-row","fee":10,"vsize":140}"#)
+                .expect("missing value key is not a parse error");
+        assert_eq!(missing.value, None);
+    }
 }

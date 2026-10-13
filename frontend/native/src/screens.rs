@@ -1,11 +1,30 @@
 //! View models for the desktop explorer. No GPUI types.
 
 use splora_api::{Network, api_prefix, api_root};
+use splora_frontend_shared::FiatCode::{Jpy, Usd};
 use splora_frontend_shared::{
-    BlockRow, TxRow, address_path, address_txs_path, address_utxo_path, block_height_path,
-    block_path, block_txids_path, block_txs_path, block_txs_start_index_path, blocks_path,
-    blocks_start_height_path, broadcast_path, fee_estimates_path, mempool_path,
-    mempool_recent_path, parse_block_height, parse_block_txids, test_txs_path, tx_path,
+    BlockRow, CalculatorForm, FiatCode, RegistryAsset, TxRow, address_path, address_prefix_path,
+    address_txs_chain_page_path, address_txs_mempool_path, address_txs_path,
+    address_txs_summary_path, address_utxo_path, addresses_txs_body, addresses_txs_path,
+    addresses_txs_summary_path, asset_path, asset_supply_decimal_path, asset_supply_path,
+    asset_txs_chain_path, asset_txs_mempool_path, asset_txs_path, assets_registry_path,
+    block_header_path, block_height_path, block_path, block_raw_path, block_status_path,
+    block_txid_path, block_txids_path, block_txs_path, block_txs_start_index_path, blocks_path,
+    blocks_start_height_path, broadcast_path, btc_fiat_jpy, btc_fiat_usd, btc_to_sats,
+    calculator_field_names, cap_btc_supply, enter_btc, enter_fiat, fee_estimates_path, format_fiat,
+    loaded_calculator, mempool_path, mempool_recent_path, mempool_txids_page_path,
+    mempool_txids_path, package_path, parse_address_prefix, parse_address_txs_summary,
+    parse_addresses_txs, parse_addresses_txs_summary, parse_asset_supply,
+    parse_asset_supply_decimal, parse_assets_registry, parse_assets_registry_search, parse_block,
+    parse_block_header, parse_block_height, parse_block_raw_hex, parse_block_status,
+    parse_block_txid, parse_block_txids, parse_mempool_txids, parse_merkle_proof,
+    parse_merkleblock_proof, parse_outspend, parse_outspends, parse_package, parse_scripthash,
+    parse_scripthashes_txs, parse_tx, parse_tx_hex, parse_tx_raw_hex, route_availability,
+    sat_per_vbyte_from_vsize, sat_per_vbyte_from_weight, sats_fiat_usd, sats_to_btc,
+    scripthash_path, scripthash_txs_chain_page_path, scripthash_txs_mempool_path,
+    scripthash_txs_path, scripthash_utxo_path, scripthashes_txs_body, scripthashes_txs_path,
+    switch_usd_jpy_usd, test_txs_path, truncate_btc_decimals, tx_hex_path, tx_merkle_proof_path,
+    tx_merkleblock_proof_path, tx_outspend_path, tx_outspends_path, tx_path, tx_raw_path,
 };
 
 use crate::api::{ClientError, ClientRequest, ExplorerClient, ExplorerGet, ExplorerPost};
@@ -31,6 +50,15 @@ pub enum Screen {
     Faq,
     ApiRest,
     ApiWebsocket,
+    Calculator,
+    Fiat,
+    Statistics,
+    Mining,
+    Graphs,
+    Hashrate,
+    PriceChart,
+    Lightning,
+    Pools,
 }
 
 impl Screen {
@@ -61,6 +89,15 @@ impl Screen {
             Self::Faq => "faq",
             Self::ApiRest => "api/rest",
             Self::ApiWebsocket => "api/websocket",
+            Self::Calculator => "calculator",
+            Self::Fiat => "fiat",
+            Self::Statistics => "statistics",
+            Self::Mining => "mining",
+            Self::Graphs => "graphs",
+            Self::Hashrate => "hashrate",
+            Self::PriceChart => "price chart",
+            Self::Lightning => "lightning",
+            Self::Pools => "pools",
         }
     }
 
@@ -83,6 +120,15 @@ impl Screen {
             Self::Faq => "faq",
             Self::ApiRest => "api-rest",
             Self::ApiWebsocket => "api-websocket",
+            Self::Calculator => "calculator",
+            Self::Fiat => "fiat",
+            Self::Statistics => "statistics",
+            Self::Mining => "mining",
+            Self::Graphs => "graphs",
+            Self::Hashrate => "hashrate",
+            Self::PriceChart => "price-chart",
+            Self::Lightning => "lightning",
+            Self::Pools => "pools",
         }
     }
 
@@ -100,6 +146,15 @@ impl Screen {
             "privacy" => Some(Self::Privacy),
             "trademark" => Some(Self::Trademark),
             "docs" => Some(Self::Docs),
+            "calculator" => Some(Self::Calculator),
+            "fiat" => Some(Self::Fiat),
+            "statistics" => Some(Self::Statistics),
+            "mining" => Some(Self::Mining),
+            "graphs" => Some(Self::Graphs),
+            "hashrate" => Some(Self::Hashrate),
+            "price chart" => Some(Self::PriceChart),
+            "lightning" => Some(Self::Lightning),
+            "pools" => Some(Self::Pools),
             _ => Self::from_doc_path(link),
         }
     }
@@ -174,6 +229,8 @@ pub fn network_label(network: Network) -> &'static str {
 pub struct Dashboard {
     pub tip_height: String,
     pub tip_hash: String,
+    /// Typed on the dashboard. Enter opens a block, transaction, address, or search result.
+    search: String,
     lines: String,
     rows: Vec<String>,
 }
@@ -183,12 +240,13 @@ impl Dashboard {
         Self {
             tip_height: String::new(),
             tip_hash: String::new(),
+            search: String::new(),
             lines: String::new(),
             rows: Vec::new(),
         }
     }
 
-    pub fn links(&self) -> [&'static str; 15] {
+    pub fn links(&self) -> [&'static str; 24] {
         [
             "block",
             "tx",
@@ -205,6 +263,15 @@ impl Dashboard {
             "faq",
             "api/rest",
             "api/websocket",
+            "calculator",
+            "fiat",
+            "statistics",
+            "mining",
+            "graphs",
+            "hashrate",
+            "price chart",
+            "lightning",
+            "pools",
         ]
     }
 
@@ -222,8 +289,20 @@ impl Dashboard {
         &mut self,
         client: &ExplorerClient<G>,
     ) -> Result<(), ClientError> {
-        self.tip_height = client.tip_height()?;
-        self.tip_hash = client.tip_hash()?;
+        match client.tip_height() {
+            Ok(height) => self.tip_height = height,
+            Err(ClientError::Http(message)) if message.starts_with("missing ") => {
+                self.tip_height.clear();
+            }
+            Err(err) => return Err(err),
+        }
+        match client.tip_hash() {
+            Ok(hash) => self.tip_hash = hash,
+            Err(ClientError::Http(message)) if message.starts_with("missing ") => {
+                self.tip_hash.clear();
+            }
+            Err(err) => return Err(err),
+        }
         Ok(())
     }
 
@@ -232,33 +311,47 @@ impl Dashboard {
     pub fn load<G: ExplorerGet>(&mut self, client: &ExplorerClient<G>) -> Result<(), ClientError> {
         let blocks_route = blocks_path();
         let recent_route = mempool_recent_path();
-        let (blocks, blocks_body) = client.get_path(blocks_route)?;
-        let (recent, recent_body) = client.get_path(recent_route)?;
-        if blocks.method != "GET" || blocks.path != blocks_route {
-            return Err(ClientError::BadPath);
-        }
-        if recent.method != "GET" || recent.path != recent_route {
-            return Err(ClientError::BadPath);
-        }
+        let blocks_body = read_home(client, blocks_route, "[]")?;
+        let recent_body = read_home(client, recent_route, "[]")?;
         self.load_tip(client)?;
         let fees_route = fee_estimates_path();
-        let (fees, fees_body) = client.get_path(fees_route)?;
-        if fees.method != "GET" || fees.path != fees_route {
-            return Err(ClientError::BadPath);
-        }
+        let fees_body = read_home(client, fees_route, "{}")?;
         let summary_route = mempool_path();
-        let (summary, summary_body) = client.get_path(summary_route)?;
-        if summary.method != "GET" || summary.path != summary_route {
-            return Err(ClientError::BadPath);
-        }
+        let summary_body = read_home(
+            client,
+            summary_route,
+            r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#,
+        )?;
         let block_lines = render_block_list(&blocks_body)?;
         let recent_lines = render_recent(&recent_body)?;
         let fee_lines = render_fee_estimates(&fees_body)?;
         let summary_lines = render_mempool_summary(&summary_body)?;
         let mut rows = block_row_lines(&blocks_body)?;
         rows.extend(recent_row_lines(&recent_body)?);
+        if !self.tip_hash.is_empty() {
+            rows.push(format!("row tip hash {}", self.tip_hash));
+        }
         self.rows = rows;
         self.lines = format!("{block_lines}\n{recent_lines}\n{fee_lines}\n{summary_lines}");
+        if client.network() == Network::Liquid {
+            if let Some(body) = read_optional(client, assets_registry_path())? {
+                let names = registry_issued_lines(&body);
+                if !names.is_empty() {
+                    self.lines.push('\n');
+                    self.lines.push_str(&names);
+                }
+                let cards = registry_featured_card_lines(&body);
+                if !cards.is_empty() {
+                    self.lines.push('\n');
+                    self.lines.push_str(&cards);
+                }
+                for id in registry_asset_ids(&body) {
+                    self.lines.push('\n');
+                    self.lines.push_str(&format!("asset id {id}"));
+                    self.rows.push(format!("row asset {id}"));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -283,8 +376,13 @@ pub struct BlockScreen {
     pub query: String,
     /// Empty means the block screen does not call the paged txs route.
     pub start_index: String,
+    /// After a space, further digits are the txs page index, not more of the hash.
+    typing_page: bool,
     pub body: String,
     rows: Vec<String>,
+    /// Fields already on the loaded block, shown by the details toggle.
+    details: String,
+    details_open: bool,
 }
 
 impl BlockScreen {
@@ -292,8 +390,11 @@ impl BlockScreen {
         Self {
             query: String::new(),
             start_index: String::new(),
+            typing_page: false,
             body: String::new(),
             rows: Vec::new(),
+            details: String::new(),
+            details_open: false,
         }
     }
 
@@ -306,18 +407,18 @@ impl BlockScreen {
     /// All-digit id: GET `/block-height/:height`, then those hash routes.
     pub fn load<G: ExplorerGet>(&mut self, client: &ExplorerClient<G>) -> Result<(), ClientError> {
         self.rows.clear();
+        self.details.clear();
+        self.details_open = false;
         let mut lines = Vec::new();
         let hash = if is_numeric_id(&self.query) {
-            let height: u64 = self.query.parse().map_err(|_| ClientError::BadPath)?;
-            let path = block_height_path(height);
-            let (request, body) = client.get_path(&path)?;
-            if request.method != "GET" || request.path != path {
-                return Err(ClientError::BadPath);
-            }
+            let path = match self.query.parse::<u64>() {
+                Ok(height) => block_height_path(height),
+                Err(_) => format!("/block-height/{}", self.query),
+            };
+            let body = read_required(client, &path)?;
             let hash = parse_block_height(&body).map_err(http_parse)?;
             lines.push(format!("block-height {} hash {hash}", self.query));
-            if !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                // Shared block-height text is not always hex. Keep the field on screen.
+            if hash.is_empty() || hash.contains('/') || hash.contains('?') || hash.contains(' ') {
                 self.body = lines.join("\n");
                 self.rows.clear();
                 return Err(ClientError::Http("block height hash".into()));
@@ -328,31 +429,58 @@ impl BlockScreen {
         } else {
             self.query.clone()
         };
-        let block_route = block_path(&hash);
-        let (block_request, block_body) = client.get_path(&block_route)?;
-        if block_request.method != "GET" || block_request.path != block_route {
-            return Err(ClientError::BadPath);
+        let block_body = read_required(client, &block_path(&hash))?;
+        let block = serde_json::from_str::<splora_frontend_shared::wire::Block>(&block_body)
+            .map_err(http_parse)?;
+        lines.push(render_block_line(&block));
+        lines.push(splora_frontend_shared::transaction_count_heading(
+            block.tx_count,
+        ));
+        let mut rows = vec![paint_block_row(&BlockRow::from(&block))];
+        if let Some(prev) = block
+            .previous_block_hash
+            .as_deref()
+            .filter(|prev| !prev.is_empty())
+        {
+            rows.push(format!("row previous_hash {prev}"));
         }
-        lines.push(render_block_value(&block_body)?);
-        let mut rows = vec![one_block_row(&block_body)?];
-        let txs_route = block_txs_path(&hash);
-        let (txs_request, txs_body) = client.get_path(&txs_route)?;
-        if txs_request.method != "GET" || txs_request.path != txs_route {
-            return Err(ClientError::BadPath);
-        }
-        let txs = render_tx_list(&txs_body)?;
+        rows.push("row block details".to_string());
+        self.details = block_details_text(&block);
+        let txs_body = read_required(client, &block_txs_path(&hash))?;
+        lines.push(render_tx_list(&txs_body)?);
         rows.extend(transaction_row_lines(&txs_body)?);
-        if !txs.is_empty() {
-            lines.push(txs);
+        let txids_body = read_required(client, &block_txids_path(&hash))?;
+        lines.push(render_txids(&txids_body)?);
+        if let Some(status_body) = read_optional(client, &block_status_path(&hash))? {
+            if let Ok(status) = parse_block_status(&status_body) {
+                let height = status
+                    .height
+                    .map(|value| value.to_string())
+                    .unwrap_or_default();
+                let next = status.next_best.as_deref().unwrap_or("");
+                lines.push(format!(
+                    "block status in_best_chain {} height {height} next_best {next}",
+                    yes_no(status.in_best_chain)
+                ));
+                if let Some(next) = status.next_best.as_deref().filter(|next| !next.is_empty()) {
+                    rows.push(format!("row next_best {next}"));
+                }
+            }
         }
-        let txids_route = block_txids_path(&hash);
-        let (txids_request, txids_body) = client.get_path(&txids_route)?;
-        if txids_request.method != "GET" || txids_request.path != txids_route {
-            return Err(ClientError::BadPath);
+        if let Some(header) = read_optional(client, &block_header_path(&hash))? {
+            if let Ok(hex) = parse_block_header(&header) {
+                lines.push(format!("block header {hex}"));
+            }
         }
-        let txids = render_txids(&txids_body)?;
-        if !txids.is_empty() {
-            lines.push(txids);
+        if let Some(raw) = read_optional(client, &block_raw_path(&hash))? {
+            if let Ok(hex) = parse_block_raw_hex(&raw) {
+                lines.push(format!("block raw {hex}"));
+            }
+        }
+        if let Some(txid_body) = read_optional(client, &block_txid_path(&hash, 0))? {
+            if let Ok(txid) = parse_block_txid(&txid_body) {
+                lines.push(txid);
+            }
         }
         if !self.start_index.is_empty() {
             if !is_numeric_id(&self.start_index) {
@@ -362,20 +490,38 @@ impl BlockScreen {
             if start % 25 != 0 {
                 return Err(ClientError::BadPath);
             }
-            let page_route = block_txs_start_index_path(&hash, start);
-            let (page_request, page_body) = client.get_path(&page_route)?;
-            if page_request.method != "GET" || page_request.path != page_route {
-                return Err(ClientError::BadPath);
-            }
-            let page = render_tx_list(&page_body)?;
+            let page_body = read_required(client, &block_txs_start_index_path(&hash, start))?;
+            lines.push(render_tx_list(&page_body)?);
             rows.extend(transaction_row_lines(&page_body)?);
-            if !page.is_empty() {
-                lines.push(page);
-            }
         }
+        lines.extend(phone_pager_lines(block.tx_count, &self.start_index));
+        let next_page = if self.start_index.is_empty() {
+            25
+        } else {
+            self.start_index
+                .parse::<u64>()
+                .unwrap_or(0)
+                .saturating_add(25)
+        };
+        rows.push(format!("row page {next_page}"));
         self.rows = rows;
         self.body = lines.join("\n");
         Ok(())
+    }
+
+    /// Show or hide the fields already stored from `GET /block/:hash`.
+    pub fn toggle_details(&mut self) {
+        self.details_open = !self.details_open;
+        const MARK: &str = "\nblock details\n";
+        if let Some(index) = self.body.find(MARK) {
+            self.body.truncate(index);
+        }
+        if self.details_open && !self.details.is_empty() {
+            if !self.body.is_empty() {
+                self.body.push('\n');
+            }
+            self.body.push_str(&self.details);
+        }
     }
 
     pub fn rendered(&self) -> String {
@@ -420,7 +566,17 @@ impl BlocksScreen {
         } else {
             return Err(ClientError::BadPath);
         };
-        let (request, body) = client.get_path(&path)?;
+        let (request, body) = match client.get_path(&path) {
+            Ok(pair) => pair,
+            Err(ClientError::Http(message))
+                if message.starts_with("missing ") && self.start_height.is_empty() =>
+            {
+                self.body = "blocks:".to_string();
+                self.rows.clear();
+                return Ok(());
+            }
+            Err(err) => return Err(err),
+        };
         if request.method != "GET" || request.path != path || request.path.contains("v1") {
             return Err(ClientError::BadPath);
         }
@@ -459,13 +615,93 @@ impl TxScreen {
         if self.txid.is_empty() || self.txid.contains('/') {
             return Err(ClientError::BadPath);
         }
-        let path = tx_path(&self.txid);
-        let (request, body) = client.get_path(&path)?;
-        if request.method != "GET" || request.path != path {
-            return Err(ClientError::BadPath);
+        let body = read_required(client, &tx_path(&self.txid))?;
+        let tx = serde_json::from_str::<splora_frontend_shared::wire::Transaction>(&body)
+            .map_err(http_parse)?;
+        let mut lines = vec![render_tx_row(&tx)];
+        let mut rows = vec![paint_tx_row(&TxRow::from(&tx))];
+        if let Some(hash) = tx
+            .status
+            .as_ref()
+            .and_then(|status| status.block_hash.as_deref())
+            .filter(|hash| !hash.is_empty())
+        {
+            rows.push(format!("row confirming {hash}"));
         }
-        self.body = render_one_tx(&body)?;
-        self.rows = vec![one_transaction_row(&body)?];
+        for input in &tx.vin {
+            if let Some(address) = input
+                .prevout
+                .as_ref()
+                .and_then(|prev| prev.script_pubkey_address.as_deref())
+                .filter(|address| !address.is_empty())
+            {
+                rows.push(format!("row input address {address}"));
+            }
+        }
+        for output in &tx.vout {
+            if let Some(address) = output
+                .script_pubkey_address
+                .as_deref()
+                .filter(|address| !address.is_empty())
+            {
+                rows.push(format!("row output address {address}"));
+            }
+        }
+        if let Some(spends_body) = read_optional(client, &tx_outspends_path(&self.txid))? {
+            if let Ok(spends) = parse_outspends(&spends_body) {
+                for spend in spends {
+                    push_spend(&mut lines, &mut rows, spend.spent, spend.txid.as_deref());
+                }
+            }
+        }
+        for (index, _) in tx.vout.iter().enumerate().take(50) {
+            let path = tx_outspend_path(&self.txid, index as u64);
+            if let Some(body) = read_optional(client, &path)? {
+                if let Ok(spend) = parse_outspend(&body) {
+                    push_spend(&mut lines, &mut rows, spend.spent, spend.txid.as_deref());
+                }
+            }
+        }
+        if let Some(proof_body) = read_optional(client, &tx_merkle_proof_path(&self.txid))? {
+            if let Ok(proof) = parse_merkle_proof(&proof_body) {
+                lines.push(format!(
+                    "merkle block_height {} pos {}",
+                    proof.block_height, proof.pos
+                ));
+                for hash in proof.merkle {
+                    if !hash.is_empty() {
+                        lines.push(hash.clone());
+                        rows.push(format!("row merkle {hash}"));
+                    }
+                }
+            }
+        }
+        if let Some(hex_body) = read_optional(client, &tx_hex_path(&self.txid))? {
+            if let Ok(hex) = parse_tx_hex(&hex_body) {
+                if even_hex(&hex) {
+                    lines.push(format!("tx hex {hex}"));
+                } else {
+                    lines.push(hex);
+                }
+            }
+        }
+        if let Some(raw_body) = read_optional(client, &tx_raw_path(&self.txid))? {
+            if let Ok(hex) = parse_tx_raw_hex(&raw_body) {
+                lines.push(format!("tx raw {hex}"));
+            }
+        }
+        if let Some(proof_body) = read_optional(client, &tx_merkleblock_proof_path(&self.txid))? {
+            if let Ok(hex) = parse_merkleblock_proof(&proof_body) {
+                lines.push(format!("merkleblock {hex}"));
+            }
+        }
+        lines.extend(peg_lines(&body));
+        lines.extend(poison_lines_for_tx(
+            &tx,
+            poison_network_name(client.network()),
+        ));
+        self.body = lines.join("\n");
+        self.rows = rows;
         Ok(())
     }
 
@@ -489,6 +725,12 @@ impl Default for TxScreen {
 pub struct AddressScreen {
     pub address: String,
     pub body: String,
+    /// Confirmed history cursor for `GET /address/:script/txs/chain/:last_seen_txid`.
+    last_seen: String,
+    /// After a space, further characters are the chain cursor, not more of the address.
+    typing_page: bool,
+    /// A 64-hex scripthash uses `/scripthash/` instead of `/address/`.
+    use_scripthash: bool,
     rows: Vec<String>,
 }
 
@@ -497,6 +739,9 @@ impl AddressScreen {
         Self {
             address: String::new(),
             body: String::new(),
+            last_seen: String::new(),
+            typing_page: false,
+            use_scripthash: false,
             rows: Vec::new(),
         }
     }
@@ -510,33 +755,67 @@ impl AddressScreen {
             return Err(ClientError::BadPath);
         }
         let script = &self.address;
-        let stats_path = address_path(script);
-        let txs_path = address_txs_path(script);
-        let utxo_path = address_utxo_path(script);
-        let (stats_request, stats_body) = client.get_path(&stats_path)?;
-        let (txs_request, txs_body) = client.get_path(&txs_path)?;
-        let (utxo_request, utxo_body) = client.get_path(&utxo_path)?;
-        if stats_request.method != "GET"
-            || txs_request.method != "GET"
-            || utxo_request.method != "GET"
-            || stats_request.path != stats_path
-            || txs_request.path != txs_path
-            || utxo_request.path != utxo_path
-        {
-            return Err(ClientError::BadPath);
-        }
+        let stats_path = if self.use_scripthash {
+            scripthash_path(script)
+        } else {
+            address_path(script)
+        };
+        let utxo_path = if self.use_scripthash {
+            scripthash_utxo_path(script)
+        } else {
+            address_utxo_path(script)
+        };
+        let mempool_route = if self.use_scripthash {
+            scripthash_txs_mempool_path(script)
+        } else {
+            address_txs_mempool_path(script)
+        };
+        let txs_path = if self.last_seen.is_empty() {
+            if self.use_scripthash {
+                scripthash_txs_path(script)
+            } else {
+                address_txs_path(script)
+            }
+        } else if self.use_scripthash {
+            scripthash_txs_chain_page_path(script, &self.last_seen)
+        } else {
+            address_txs_chain_page_path(script, &self.last_seen)
+        };
+        let stats_body = read_required(client, &stats_path)?;
+        let txs_body = read_required(client, &txs_path)?;
+        let utxo_body = read_required(client, &utxo_path)?;
+        let mempool_body = read_optional(client, &mempool_route)?;
         let mut lines = vec![render_address_stats(&stats_body)?];
         let mut rows = vec![address_funded_row(&stats_body)?];
-        let txs = render_address_txs(&txs_body)?;
-        rows.extend(transaction_row_lines(&txs_body)?);
-        if !txs.is_empty() {
-            lines.push(txs);
+        rows.push(format!("row script {script}"));
+        if let Some(last) = paint_address_tx_page(&txs_body, &mut lines, &mut rows)? {
+            rows.push(format!("row chain {last}"));
         }
-        let utxos = render_utxos(&utxo_body)?;
+        lines.push(render_utxos(&utxo_body)?);
         rows.extend(utxo_value_rows(&utxo_body)?);
-        if !utxos.is_empty() {
-            lines.push(utxos);
+        if let Some(body) = mempool_body {
+            if body.trim() != "[]" {
+                if let Ok(text) = render_tx_list(&body) {
+                    if text != "The transaction list is empty." {
+                        lines.push(text);
+                    }
+                }
+                if let Ok(extra) = transaction_row_lines(&body) {
+                    rows.extend(extra);
+                }
+            }
         }
+        if !self.use_scripthash {
+            if let Some(summary_body) = read_optional(client, &address_txs_summary_path(script))? {
+                let _ = paint_address_tx_page(&summary_body, &mut lines, &mut rows)?;
+            }
+        }
+        lines.extend(highlight_lines(&txs_body, script));
+        lines.extend(peg_lines(&txs_body));
+        lines.extend(poison_lines_for_txs(
+            &txs_body,
+            poison_network_name(client.network()),
+        ));
         self.rows = rows;
         self.body = lines.join("\n");
         Ok(())
@@ -562,6 +841,7 @@ impl Default for AddressScreen {
 pub struct MempoolScreen {
     pub body: String,
     rows: Vec<String>,
+    last_seen: String,
 }
 
 impl MempoolScreen {
@@ -569,6 +849,7 @@ impl MempoolScreen {
         Self {
             body: String::new(),
             rows: Vec::new(),
+            last_seen: String::new(),
         }
     }
 
@@ -590,8 +871,31 @@ impl MempoolScreen {
         }
         let summary_lines = render_mempool_summary(&summary_body)?;
         let recent_lines = render_recent(&recent_body)?;
-        self.rows = recent_row_lines(&recent_body)?;
-        self.body = format!("{summary_lines}\n{recent_lines}");
+        let mut rows = recent_row_lines(&recent_body)?;
+        let mut lines = vec![summary_lines, recent_lines];
+        if let Some(body) = read_optional(client, mempool_txids_path())? {
+            if let Ok(txids) = parse_mempool_txids(&body) {
+                if let Some(last) = txids.last() {
+                    rows.push(format!("row mempool page {last}"));
+                }
+                for txid in &txids {
+                    rows.push(format!("row mempool txid {txid}"));
+                }
+            }
+        }
+        if !self.last_seen.is_empty() {
+            let page = mempool_txids_page_path(&self.last_seen);
+            if let Some(body) = read_optional(client, &page)? {
+                if let Ok(txids) = parse_mempool_txids(&body) {
+                    for txid in txids {
+                        lines.push(txid.clone());
+                        rows.push(format!("row mempool txid {txid}"));
+                    }
+                }
+            }
+        }
+        self.rows = rows;
+        self.body = lines.join("\n");
         Ok(())
     }
 
@@ -619,7 +923,9 @@ pub fn split_addresses(input: &str) -> Vec<&str> {
 }
 
 /// One `GET /address/:script` and one `GET /address/:script/utxo` per entered address.
-/// No batch endpoint.
+/// `POST /addresses/txs` for addresses and `POST /scripthashes/txs` for 64-hex scripthashes.
+/// Also `POST /addresses/txs/summary` when at least one value was entered.
+/// A missing history or summary does not drop the per-address reads.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MultiAddressScreen {
     pub input: String,
@@ -652,7 +958,10 @@ impl MultiAddressScreen {
         }
     }
 
-    pub fn load<G: ExplorerGet>(&mut self, client: &ExplorerClient<G>) -> Result<(), ClientError> {
+    pub fn load<G: ExplorerGet + ExplorerPost>(
+        &mut self,
+        client: &ExplorerClient<G>,
+    ) -> Result<(), ClientError> {
         let entered = self
             .entered()
             .into_iter()
@@ -695,6 +1004,67 @@ impl MultiAddressScreen {
             bodies.push(body);
             bodies.push(utxo_body);
         }
+        if !entered.is_empty() {
+            let refs: Vec<&str> = entered.iter().map(String::as_str).collect();
+            let body = addresses_txs_body(&refs);
+            if let Some(response) = post_optional(
+                client,
+                addresses_txs_summary_path(),
+                "application/json",
+                body,
+            )? {
+                if let Ok(summaries) = parse_addresses_txs_summary(&response) {
+                    for summary in summaries {
+                        rows.push(format!(
+                            "row summary txid {} height {} value {} time {} tx_position {}",
+                            summary.txid,
+                            summary.height,
+                            summary.value,
+                            summary.time,
+                            summary.tx_position
+                        ));
+                    }
+                }
+            }
+            let mut address_refs = Vec::new();
+            let mut hash_refs = Vec::new();
+            for value in &entered {
+                if is_64_hex(value) {
+                    hash_refs.push(value.to_ascii_lowercase());
+                } else {
+                    address_refs.push(value.clone());
+                }
+            }
+            if !address_refs.is_empty() {
+                let refs: Vec<&str> = address_refs.iter().map(String::as_str).collect();
+                let body = addresses_txs_body(&refs);
+                if let Some(response) =
+                    post_optional(client, addresses_txs_path(), "application/json", body)?
+                {
+                    if let Ok(txs) = parse_addresses_txs(&response) {
+                        for tx in txs {
+                            rows.push(format!("row tx txid {} fee {}", tx.txid, tx.fee));
+                        }
+                    }
+                }
+            }
+            if !hash_refs.is_empty() {
+                let refs: Vec<&str> = hash_refs.iter().map(String::as_str).collect();
+                let body = scripthashes_txs_body(&refs);
+                if let Some(response) =
+                    post_optional(client, scripthashes_txs_path(), "application/json", body)?
+                {
+                    if let Ok(txs) = parse_scripthashes_txs(&response) {
+                        for tx in txs {
+                            rows.push(format!("row tx txid {} fee {}", tx.txid, tx.fee));
+                        }
+                    }
+                }
+            }
+        }
+        for address in &entered {
+            rows.push(format!("row entered {address}"));
+        }
         self.requests = requests;
         self.bodies = bodies;
         self.rows = rows;
@@ -717,6 +1087,7 @@ pub struct BroadcastScreen {
     pub raw_tx: String,
     pub result: String,
     pub request: Option<ClientRequest>,
+    rows: Vec<String>,
 }
 
 impl BroadcastScreen {
@@ -738,26 +1109,53 @@ impl BroadcastScreen {
         &mut self,
         client: &ExplorerClient<G>,
     ) -> Result<(), ClientError> {
-        let (request, result) = client.broadcast(&self.raw_tx)?;
-        if request.method != "POST" || request.path != broadcast_path() {
+        let parts = broadcast_parts(&self.raw_tx);
+        let (request, result) = if parts.len() > 1 {
+            client.broadcast_package(&parts)?
+        } else {
+            client.broadcast(&self.raw_tx)?
+        };
+        if request.method != "POST" {
+            return Err(ClientError::BadPath);
+        }
+        if parts.len() > 1 {
+            if request.path != package_path() {
+                return Err(ClientError::BadPath);
+            }
+        } else if request.path != broadcast_path() {
             return Err(ClientError::BadPath);
         }
         self.request = Some(request);
         self.result = result;
+        self.rows = if parts.len() > 1 {
+            package_txid_rows(&self.result)
+        } else {
+            Vec::new()
+        };
         Ok(())
     }
 
     pub fn rendered(&self) -> String {
-        if self
-            .request
-            .as_ref()
-            .is_some_and(|request| request.method == "POST" && request.path == broadcast_path())
-            && !self.result.is_empty()
-        {
-            render_broadcast_result(&self.result).unwrap_or_else(|_| self.summary())
-        } else {
-            self.summary()
+        if let Some(request) = &self.request {
+            if request.method == "POST"
+                && request.path == broadcast_path()
+                && !self.result.is_empty()
+            {
+                return render_broadcast_result(&self.result).unwrap_or_else(|_| self.summary());
+            }
+            if request.method == "POST" && request.path == package_path() && !self.result.is_empty()
+            {
+                return render_package(&self.result).unwrap_or_else(|_| {
+                    let trimmed = self.result.trim();
+                    if trimmed.is_empty() {
+                        "broadcast package".to_string()
+                    } else {
+                        trimmed.to_string()
+                    }
+                });
+            }
         }
+        self.summary()
     }
 }
 
@@ -900,7 +1298,7 @@ Broadcast is a POST of /tx. The body is the raw transaction hex, as text. \
 Test transactions are a POST of /txs/test. \
 The body is a JSON array of raw transaction hex, at most 25 items. \
 Signet is not a backend in this shell. \
-This shell does not submit a transaction package.";
+Two raw transactions use POST /txs/package.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticScreen {
@@ -1035,12 +1433,400 @@ fn is_numeric_id(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+fn is_64_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn even_hex(text: &str) -> bool {
+    !text.is_empty() && text.len() % 2 == 0 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Bech32-style addresses are longer than 26 and are not a pure 64-hex id.
+fn looks_like_address(value: &str) -> bool {
+    value.len() >= 26
+        && !is_64_hex(value)
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        && value.bytes().any(|byte| !byte.is_ascii_hexdigit())
+}
+
+const INDEXER_SENTENCES: &[&str] = &[
+    "Transaction not found or is unconfirmed",
+    "Transaction not found",
+    "Block not found",
+    "address search disabled",
+    "Asset id not found",
+    "endpoint does not exist",
+];
+
+fn indexer_sentence(body: &str) -> Option<&'static str> {
+    let trimmed = body.trim();
+    INDEXER_SENTENCES
+        .iter()
+        .copied()
+        .find(|sentence| trimmed.starts_with(sentence))
+}
+
+/// Shell notice. An indexer sentence is shown without the `http:` prefix.
+pub fn notice_from_error(err: &ClientError) -> String {
+    match err {
+        ClientError::BadPath => "bad path".to_string(),
+        ClientError::Http(message) => {
+            if let Some(sentence) = indexer_sentence(message) {
+                sentence.to_string()
+            } else {
+                format!("http: {message}")
+            }
+        }
+    }
+}
+
+fn read_home<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+    path: &str,
+    empty: &str,
+) -> Result<String, ClientError> {
+    match client.get_path(path) {
+        Ok((request, body)) => {
+            if request.method != "GET" || request.path != path {
+                return Err(ClientError::BadPath);
+            }
+            if let Some(sentence) = indexer_sentence(&body) {
+                return Err(ClientError::Http(sentence.to_string()));
+            }
+            Ok(body)
+        }
+        Err(ClientError::Http(message)) if message.starts_with("missing ") => Ok(empty.to_string()),
+        Err(err) => Err(err),
+    }
+}
+
+fn read_required<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+    path: &str,
+) -> Result<String, ClientError> {
+    let (request, body) = client.get_path(path)?;
+    if request.method != "GET" || request.path != path {
+        return Err(ClientError::BadPath);
+    }
+    if let Some(sentence) = indexer_sentence(&body) {
+        return Err(ClientError::Http(sentence.to_string()));
+    }
+    Ok(body)
+}
+
+fn read_optional<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+    path: &str,
+) -> Result<Option<String>, ClientError> {
+    match client.get_path(path) {
+        Ok((request, body)) => {
+            if request.method != "GET" || request.path != path {
+                return Err(ClientError::BadPath);
+            }
+            if indexer_sentence(&body).is_some() {
+                return Ok(None);
+            }
+            Ok(Some(body))
+        }
+        Err(ClientError::BadPath) => Err(ClientError::BadPath),
+        Err(ClientError::Http(_)) => Ok(None),
+    }
+}
+
+fn post_optional<G: ExplorerGet + ExplorerPost>(
+    client: &ExplorerClient<G>,
+    path: &str,
+    content_type: &'static str,
+    body: String,
+) -> Result<Option<String>, ClientError> {
+    match client.post_path(path, content_type, body) {
+        Ok((request, response)) => {
+            if request.method != "POST" || request.path != path {
+                return Err(ClientError::BadPath);
+            }
+            Ok(Some(response))
+        }
+        Err(ClientError::Http(_)) => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+enum ProbeBody {
+    Hit(String),
+    Miss,
+}
+
+fn read_probe<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+    path: &str,
+) -> Result<ProbeBody, ClientError> {
+    match client.get_path(path) {
+        Ok((request, body)) => {
+            if request.method != "GET" || request.path != path {
+                return Err(ClientError::BadPath);
+            }
+            Ok(ProbeBody::Hit(body))
+        }
+        Err(ClientError::Http(message)) if message.starts_with("missing ") => Ok(ProbeBody::Miss),
+        Err(err) => Err(err),
+    }
+}
+
+enum HexHit {
+    Tx(String),
+    Block(String),
+    Script(String),
+    Asset {
+        name: String,
+        ticker: String,
+        asset_id: String,
+        txs: String,
+        chain: String,
+        mempool: String,
+        supply: String,
+        supply_decimal: String,
+        stats: String,
+        issuance_txid: String,
+    },
+    Sentence(String),
+    NotServed,
+    Miss,
+}
+
+fn asset_name_ticker(body: &str) -> Option<(String, String)> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let name = value.get("name")?.as_str()?.to_string();
+    let ticker = value.get("ticker")?.as_str()?.to_string();
+    if name.is_empty() || ticker.is_empty() {
+        return None;
+    }
+    Some((name, ticker))
+}
+
+fn asset_document_id(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let id = value.get("asset_id")?.as_str()?;
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+fn classify_hex<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+    token: &str,
+) -> Result<HexHit, ClientError> {
+    if let ProbeBody::Hit(body) = read_probe(client, &tx_path(token))? {
+        if indexer_sentence(&body).is_none() && parse_tx(&body).is_ok() {
+            return Ok(HexHit::Tx(token.to_string()));
+        }
+    }
+    if let ProbeBody::Hit(body) = read_probe(client, &block_path(token))? {
+        if indexer_sentence(&body).is_none() && parse_block(&body).is_ok() {
+            return Ok(HexHit::Block(token.to_string()));
+        }
+    }
+    if client.network() == Network::Liquid {
+        let path = asset_path(token);
+        if let ProbeBody::Hit(body) = read_probe(client, &path)? {
+            if indexer_sentence(&body).is_some_and(|sentence| sentence == "endpoint does not exist")
+            {
+                return Ok(HexHit::NotServed);
+            }
+            if indexer_sentence(&body).is_none() {
+                let named = asset_name_ticker(&body);
+                // A pegged asset has chain stats and no name. An issued asset
+                // may have a name. Either document is this route.
+                if named.is_some() || one_registry_asset(&body).is_some() {
+                    let (name, ticker) = named.unwrap_or_else(|| (String::new(), String::new()));
+                    let (stats, issuance_txid) = asset_stats_lines(&body);
+                    let txs_path = asset_txs_path(token);
+                    let txs = match read_probe(client, &txs_path)? {
+                        ProbeBody::Hit(txs) if indexer_sentence(&txs).is_none() => txs,
+                        _ => String::new(),
+                    };
+                    let asset_id = asset_document_id(&body).unwrap_or_else(|| token.to_string());
+                    return Ok(HexHit::Asset {
+                        name,
+                        ticker,
+                        asset_id,
+                        txs,
+                        chain: optional_text(client, &asset_txs_chain_path(token))?,
+                        mempool: optional_text(client, &asset_txs_mempool_path(token))?,
+                        supply: optional_text(client, &asset_supply_path(token))?,
+                        supply_decimal: optional_text(client, &asset_supply_decimal_path(token))?,
+                        stats,
+                        issuance_txid,
+                    });
+                }
+            }
+        }
+    }
+    let path = scripthash_path(token);
+    match read_probe(client, &path)? {
+        ProbeBody::Hit(body) => {
+            if let Some(sentence) = indexer_sentence(&body) {
+                return Ok(HexHit::Sentence(sentence.to_string()));
+            }
+            if parse_scripthash(&body).is_ok() {
+                return Ok(HexHit::Script(token.to_string()));
+            }
+            Ok(HexHit::Miss)
+        }
+        ProbeBody::Miss => Ok(HexHit::Miss),
+    }
+}
+
+fn broadcast_parts(raw: &str) -> Vec<String> {
+    raw.split([',', '\n', '\r', '\t', ' '])
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn page_index_in_row(row: &str) -> Option<&str> {
+    let token = row.strip_prefix("row page ")?.split_whitespace().next()?;
+    if is_numeric_id(token) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+fn chain_cursor_in_row(row: &str) -> Option<&str> {
+    let token = row.strip_prefix("row chain ")?.split_whitespace().next()?;
+    if token.is_empty() || token.contains('/') {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn block_hash_in_row(row: &str) -> Option<&str> {
+    if let Some(rest) = row.strip_prefix("row previous_hash ") {
+        return rest.split_whitespace().next();
+    }
+    if let Some(rest) = row.strip_prefix("row confirming ") {
+        return rest.split_whitespace().next();
+    }
+    if let Some(rest) = row.strip_prefix("row next_best ") {
+        return rest.split_whitespace().next();
+    }
+    if let Some(rest) = row.strip_prefix("row block ") {
+        let rest = rest.split_once(" hash ")?.1;
+        return rest.split_whitespace().next();
+    }
+    None
+}
+
+fn bare_height_in_row(row: &str) -> Option<&str> {
+    if row.contains(" hash ") {
+        return None;
+    }
+    let token = row
+        .strip_prefix("row block height ")?
+        .split_whitespace()
+        .next()?;
+    if is_numeric_id(token) {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+fn mempool_page_in_row(row: &str) -> Option<&str> {
+    let token = row
+        .strip_prefix("row mempool page ")?
+        .split_whitespace()
+        .next()?;
+    if token.is_empty() || token.contains('/') {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn tip_hash_in_row(row: &str) -> Option<&str> {
+    row.strip_prefix("row tip hash ")?.split_whitespace().next()
+}
+
+fn merkle_hash_in_row(row: &str) -> Option<&str> {
+    let token = row.strip_prefix("row merkle ")?.split_whitespace().next()?;
+    if token.is_empty() || token.contains('/') {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn address_in_row(row: &str) -> Option<&str> {
+    let rest = if let Some(rest) = row.strip_prefix("row input address ") {
+        rest
+    } else if let Some(rest) = row.strip_prefix("row output address ") {
+        rest
+    } else if let Some(rest) = row.strip_prefix("row prefix ") {
+        rest
+    } else if let Some(rest) = row.strip_prefix("row entered ") {
+        rest
+    } else {
+        row.strip_prefix("row script ")?
+    };
+    let token = rest.split_whitespace().next()?;
+    if token.is_empty() || token == "funded_sum" {
+        None
+    } else {
+        Some(token)
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
 
 fn height_text(height: Option<u64>) -> String {
     height.map(|value| value.to_string()).unwrap_or_default()
+}
+
+/// Satoshis when the transaction JSON has a value. A missing amount stays blank.
+fn amount_text(value: Option<u64>) -> String {
+    value.map(|amount| amount.to_string()).unwrap_or_default()
+}
+
+/// Confidential is the label for a missing value that still has a commitment.
+/// A published value stays that number. A missing value with no commitment
+/// stays blank. The commitment hex is not an amount.
+fn blinded_value_text(output: &splora_frontend_shared::wire::TxOutput) -> String {
+    let commitment = output
+        .valuecommitment
+        .as_deref()
+        .is_some_and(|text| !text.is_empty())
+        || output
+            .assetcommitment
+            .as_deref()
+            .is_some_and(|text| !text.is_empty());
+    if output.value.is_none() && commitment {
+        "Confidential".to_string()
+    } else {
+        amount_text(output.value)
+    }
+}
+
+/// Same amount rule as [`blinded_value_text`], for a UTXO rather than an output.
+fn utxo_amount_text(utxo: &splora_frontend_shared::wire::Utxo) -> String {
+    let commitment = utxo
+        .valuecommitment
+        .as_deref()
+        .is_some_and(|text| !text.is_empty())
+        || utxo
+            .assetcommitment
+            .as_deref()
+            .is_some_and(|text| !text.is_empty());
+    if utxo.value.is_none() && commitment {
+        "Confidential".to_string()
+    } else {
+        amount_text(utxo.value)
+    }
 }
 
 /// Decimal text for a JSON number. Whole values stay integers (`3`, not `3.0`).
@@ -1052,9 +1838,88 @@ fn plain_number(value: f64) -> String {
     }
 }
 
+/// Pages of 25. Zero transactions is not a page.
+fn tx_page_count(tx_count: u32) -> u32 {
+    if tx_count == 0 {
+        0
+    } else {
+        tx_count.div_ceil(25)
+    }
+}
+
+/// Phone window: at most three page numbers. `page` and the results are 1-based.
+fn phone_page_numbers(page: u32, page_count: u32) -> Vec<u32> {
+    const MAX_SIZE: u32 = 3;
+    if page_count == 0 {
+        return Vec::new();
+    }
+    let page = page.clamp(1, page_count);
+    let mut start = 0u32;
+    let mut end = page_count;
+    if page_count > MAX_SIZE {
+        let left_offset = MAX_SIZE / 2;
+        let right_offset = left_offset;
+        if page <= left_offset {
+            end = MAX_SIZE;
+        } else if page_count - page < left_offset {
+            start = page_count - MAX_SIZE;
+        } else {
+            start = page - left_offset - 1;
+            end = page + right_offset;
+        }
+    }
+    (start..end).map(|index| index + 1).collect()
+}
+
+/// First, previous, the visible page numbers, next, and last.
+/// Five pages paint all five numbers, nine children.
+/// Every other page count uses the phone window of at most three numbers.
+fn phone_pager_lines(tx_count: u32, start_index: &str) -> Vec<String> {
+    let pages = tx_page_count(tx_count);
+    let current_start = if start_index.is_empty() {
+        0
+    } else {
+        start_index.parse::<u32>().unwrap_or(0)
+    };
+    let active = if pages == 0 {
+        1
+    } else {
+        (current_start / 25 + 1).clamp(1, pages)
+    };
+    let numbers = if pages == 5 {
+        (1..=pages).collect()
+    } else {
+        phone_page_numbers(active, pages)
+    };
+    let children = if pages == 0 {
+        0
+    } else {
+        numbers.len() as u32 + 4
+    };
+    let mut lines = vec![format!("pagination children {children}")];
+    if pages == 0 {
+        return lines;
+    }
+    lines.push("pagination control first".to_string());
+    lines.push("pagination control previous".to_string());
+    for number in numbers {
+        let start = (number - 1) * 25;
+        if number == active {
+            lines.push(format!(
+                "pagination control page {number} start {start} active"
+            ));
+        } else {
+            lines.push(format!("pagination control page {number} start {start}"));
+        }
+    }
+    lines.push("pagination control next".to_string());
+    lines.push("pagination control last".to_string());
+    lines
+}
+
 fn render_block_line(block: &splora_frontend_shared::wire::Block) -> String {
     format!(
-        "block hash {} height {} tx_count {} timestamp {} size {} weight {} previous_hash {} median_time {}",
+        "block hash {} height {} tx_count {} timestamp {} size {} weight {} previous_hash {} median_time {} version {} merkle_root {} nonce {} bits {} difficulty {}",
         block.id,
         block.height,
         block.tx_count,
@@ -1062,7 +1927,12 @@ fn render_block_line(block: &splora_frontend_shared::wire::Block) -> String {
         block.size,
         block.weight,
         block.previous_block_hash.as_deref().unwrap_or(""),
-        block.median_time
+        block.median_time,
+        block.version,
+        block.merkle_root,
+        block.nonce,
+        block.bits,
+        plain_number(block.difficulty)
     )
 }
 
@@ -1077,12 +1947,6 @@ fn render_block_list(body: &str) -> Result<String, ClientError> {
         .map(render_block_line)
         .collect::<Vec<_>>()
         .join("\n"))
-}
-
-fn render_block_value(body: &str) -> Result<String, ClientError> {
-    let block =
-        serde_json::from_str::<splora_frontend_shared::wire::Block>(body).map_err(http_parse)?;
-    Ok(render_block_line(&block))
 }
 
 /// One row per block. Height, hash (`BlockRow.id`), tx count, and time.
@@ -1107,26 +1971,29 @@ fn block_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
         .collect())
 }
 
-fn one_block_row(body: &str) -> Result<String, ClientError> {
-    let block =
-        serde_json::from_str::<splora_frontend_shared::wire::Block>(body).map_err(http_parse)?;
-    Ok(paint_block_row(&BlockRow::from(block)))
-}
-
-/// Recent mempool entries carry txid and fee. They have no block height.
+/// Recent mempool entries carry txid and fee. They have no version, weight, or block height.
 fn tx_row_from_recent(tx: splora_frontend_shared::wire::RecentTransaction) -> TxRow {
     TxRow {
         txid: tx.txid,
+        version: 0,
+        lock_time: 0,
+        size: 0,
+        weight: 0,
+        sigops: 0,
         fee: tx.fee,
+        confirmed: false,
         block_height: None,
+        block_hash: None,
+        block_time: None,
     }
 }
 
 fn recent_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
     let txs = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(body)
         .map_err(http_parse)?;
-    Ok(txs
-        .into_iter()
+    Ok(splora_frontend_shared::cap_recent_transactions(&txs)
+        .iter()
+        .cloned()
         .map(|tx| paint_tx_row(&tx_row_from_recent(tx)))
         .collect())
 }
@@ -1140,18 +2007,12 @@ fn transaction_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
         .collect())
 }
 
-fn one_transaction_row(body: &str) -> Result<String, ClientError> {
-    let tx = serde_json::from_str::<splora_frontend_shared::wire::Transaction>(body)
-        .map_err(http_parse)?;
-    Ok(paint_tx_row(&TxRow::from(tx)))
-}
-
 fn utxo_value_rows(body: &str) -> Result<Vec<String>, ClientError> {
-    let utxos =
-        serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body).map_err(http_parse)?;
+    let utxos = serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body)
+        .map_err(http_parse)?;
     Ok(utxos
         .iter()
-        .map(|utxo| format!("row utxo value {}", utxo.value))
+        .map(|utxo| format!("row utxo value {}", utxo_amount_text(utxo)))
         .collect())
 }
 
@@ -1167,6 +2028,7 @@ fn address_funded_row(body: &str) -> Result<String, ClientError> {
 fn render_recent(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(body)
         .map_err(http_parse)?;
+    let rows = splora_frontend_shared::cap_recent_transactions(&rows);
     if rows.is_empty() {
         return Ok("recent:".to_string());
     }
@@ -1174,8 +2036,12 @@ fn render_recent(body: &str) -> Result<String, ClientError> {
         .iter()
         .map(|tx| {
             format!(
-                "recent txid {} fee {} vsize {} value {}",
-                tx.txid, tx.fee, tx.vsize, tx.value
+                "recent txid {} fee {} vsize {} value {}{}",
+                tx.txid,
+                tx.fee,
+                tx.vsize,
+                splora_frontend_shared::wire::recent_value_text(tx.value, ""),
+                fee_rate_suffix(sat_per_vbyte_from_vsize(tx.fee, tx.vsize))
             )
         })
         .collect::<Vec<_>>()
@@ -1209,13 +2075,14 @@ fn render_mempool_summary(body: &str) -> Result<String, ClientError> {
             plain_number(f64::from(rate))
         ));
     }
+    lines.push("The incoming virtual-bytes-per-second rate is not in the payload.".to_string());
     Ok(lines.join("\n"))
 }
 
 fn render_txids(body: &str) -> Result<String, ClientError> {
     let txids = parse_block_txids(body).map_err(http_parse)?;
     if txids.is_empty() {
-        return Ok(String::new());
+        return Ok("The txid list is empty.".to_string());
     }
     Ok(txids
         .iter()
@@ -1247,32 +2114,122 @@ fn block_hash_and_time(status: Option<&splora_frontend_shared::wire::TxStatus>) 
     }
 }
 
+fn fee_rate_suffix(rate: Option<f64>) -> String {
+    match rate {
+        Some(rate) => format!(" fee_rate {}", plain_number(rate)),
+        None => String::new(),
+    }
+}
+
+fn tx_extra_fields(tx: &splora_frontend_shared::wire::Transaction) -> String {
+    format!(
+        " version {} locktime {} sigops {}{}",
+        tx.version,
+        tx.lock_time,
+        tx.sigops,
+        fee_rate_suffix(sat_per_vbyte_from_weight(tx.fee, tx.weight))
+    )
+}
+
 fn render_tx_parties(tx: &splora_frontend_shared::wire::Transaction) -> Vec<String> {
     let mut lines = Vec::new();
     for input in &tx.vin {
+        lines.push(format!("input outpoint {}:{}", input.txid, input.vout));
         if let Some(prevout) = &input.prevout {
             let address = prevout.script_pubkey_address.as_deref().unwrap_or("");
-            lines.push(format!("input address {address} value {}", prevout.value));
+            lines.push(format!(
+                "input address {address} value {}",
+                blinded_value_text(prevout)
+            ));
+        }
+        if let Some(issuance) = &input.issuance {
+            lines.extend(issuance_lines(issuance));
         }
     }
     for output in &tx.vout {
         let address = output.script_pubkey_address.as_deref().unwrap_or("");
-        lines.push(format!("output address {address} value {}", output.value));
+        lines.push(format!(
+            "output address {address} value {}",
+            blinded_value_text(output)
+        ));
     }
     lines
+}
+
+/// Fields from `TxInput.issuance`, after that input's prevout line.
+///
+/// A missing amount is not zero. A commitment hex is not an amount and is
+/// not painted. An empty string omits that line. `is_reissuance` is always
+/// painted when the object is present.
+fn issuance_lines(issuance: &splora_frontend_shared::wire::Issuance) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !issuance.asset_id.is_empty() {
+        lines.push(format!("issuance asset {}", issuance.asset_id));
+    }
+    lines.push(format!(
+        "issuance reissuance {}",
+        yes_no(issuance.is_reissuance)
+    ));
+    if let Some(hash) = issuance
+        .contract_hash
+        .as_deref()
+        .filter(|hash| !hash.is_empty())
+    {
+        lines.push(format!("issuance contract {hash}"));
+    }
+    if !issuance.asset_entropy.is_empty() {
+        lines.push(format!("issuance entropy {}", issuance.asset_entropy));
+    }
+    if let Some(nonce) = issuance
+        .asset_blinding_nonce
+        .as_deref()
+        .filter(|nonce| !nonce.is_empty())
+    {
+        lines.push(format!("issuance blinding nonce {nonce}"));
+    }
+    if let Some(line) = issuance_amount_line(
+        "asset",
+        issuance.assetamount,
+        issuance.assetamountcommitment.as_deref(),
+    ) {
+        lines.push(line);
+    }
+    if let Some(line) = issuance_amount_line(
+        "token",
+        issuance.tokenamount,
+        issuance.tokenamountcommitment.as_deref(),
+    ) {
+        lines.push(line);
+    }
+    lines
+}
+
+fn issuance_amount_line(
+    kind: &str,
+    amount: Option<u64>,
+    commitment: Option<&str>,
+) -> Option<String> {
+    if let Some(amount) = amount {
+        return Some(format!("issuance {kind} amount {amount}"));
+    }
+    if commitment.is_some_and(|text| !text.is_empty()) {
+        return Some(format!("issuance {kind} amount Confidential"));
+    }
+    None
 }
 
 fn render_tx_row(tx: &splora_frontend_shared::wire::Transaction) -> String {
     let (confirmed, block_height) = tx_confirmed_and_height(tx);
     let mut lines = vec![format!(
-        "tx txid {} fee {} confirmed {} block_height {} size {} weight {}{}",
+        "tx txid {} fee {} confirmed {} block_height {} size {} weight {}{}{}",
         tx.txid,
         tx.fee,
         confirmed,
         block_height,
         tx.size,
         tx.weight,
-        block_hash_and_time(tx.status.as_ref())
+        block_hash_and_time(tx.status.as_ref()),
+        tx_extra_fields(tx)
     )];
     lines.extend(render_tx_parties(tx));
     lines.join("\n")
@@ -1282,19 +2239,13 @@ fn render_tx_list(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
         .map_err(http_parse)?;
     if rows.is_empty() {
-        return Ok(String::new());
+        return Ok("The transaction list is empty.".to_string());
     }
     Ok(rows
         .iter()
         .map(render_tx_row)
         .collect::<Vec<_>>()
         .join("\n"))
-}
-
-fn render_one_tx(body: &str) -> Result<String, ClientError> {
-    let tx = serde_json::from_str::<splora_frontend_shared::wire::Transaction>(body)
-        .map_err(http_parse)?;
-    Ok(render_tx_row(&tx))
 }
 
 fn render_address_stats(body: &str) -> Result<String, ClientError> {
@@ -1306,31 +2257,41 @@ fn render_address_stats(body: &str) -> Result<String, ClientError> {
         .or(stats.scripthash.as_deref())
         .unwrap_or("");
     Ok(format!(
-        "address {} chain_tx_count {} funded_sum {} mempool_tx_count {} mempool_funded_sum {}",
+        "address {} chain_tx_count {} funded_sum {} mempool_tx_count {} mempool_funded_sum {} chain_funded_txo_count {} chain_spent_txo_count {} chain_spent_txo_sum {} mempool_funded_txo_count {} mempool_spent_txo_count {} mempool_spent_txo_sum {}",
         address,
         stats.chain_stats.tx_count,
         stats.chain_stats.funded_txo_sum,
         stats.mempool_stats.tx_count,
-        stats.mempool_stats.funded_txo_sum
+        stats.mempool_stats.funded_txo_sum,
+        stats.chain_stats.funded_txo_count,
+        stats.chain_stats.spent_txo_count,
+        stats.chain_stats.spent_txo_sum,
+        stats.mempool_stats.funded_txo_count,
+        stats.mempool_stats.spent_txo_count,
+        stats.mempool_stats.spent_txo_sum
     ))
 }
 
 fn render_address_txs(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
         .map_err(http_parse)?;
+    if rows.is_empty() {
+        return Ok("The address transaction list is empty.".to_string());
+    }
     Ok(rows
         .iter()
         .map(|tx| {
             let (confirmed, block_height) = tx_confirmed_and_height(tx);
             let mut lines = vec![format!(
-                "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}{}",
+                "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}{}{}",
                 tx.txid,
                 confirmed,
                 block_height,
                 tx.fee,
                 tx.size,
                 tx.weight,
-                block_hash_and_time(tx.status.as_ref())
+                block_hash_and_time(tx.status.as_ref()),
+                tx_extra_fields(tx)
             )];
             lines.extend(render_tx_parties(tx));
             lines.join("\n")
@@ -1339,9 +2300,43 @@ fn render_address_txs(body: &str) -> Result<String, ClientError> {
         .join("\n"))
 }
 
+fn paint_address_tx_page(
+    body: &str,
+    lines: &mut Vec<String>,
+    rows: &mut Vec<String>,
+) -> Result<Option<String>, ClientError> {
+    if body.contains("\"tx_position\"") {
+        let summaries = parse_address_txs_summary(body).map_err(http_parse)?;
+        if summaries.is_empty() {
+            lines.push("The address transaction list is empty.".to_string());
+            return Ok(None);
+        }
+        let mut last = None;
+        for summary in &summaries {
+            rows.push(format!(
+                "row summary txid {} height {} value {} time {} tx_position {}",
+                summary.txid, summary.height, summary.value, summary.time, summary.tx_position
+            ));
+            last = Some(summary.txid.clone());
+        }
+        return Ok(last);
+    }
+    lines.push(render_address_txs(body)?);
+    if body.trim() == "[]" {
+        return Ok(None);
+    }
+    rows.extend(transaction_row_lines(body)?);
+    let txs = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
+        .map_err(http_parse)?;
+    Ok(txs.last().map(|tx| tx.txid.clone()))
+}
+
 fn render_utxos(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body)
         .map_err(http_parse)?;
+    if rows.is_empty() {
+        return Ok("The utxo list is empty.".to_string());
+    }
     Ok(rows
         .iter()
         .map(|utxo| {
@@ -1349,7 +2344,7 @@ fn render_utxos(body: &str) -> Result<String, ClientError> {
                 "utxo txid {} vout {} value {} confirmed {} block_height {}{}",
                 utxo.txid,
                 utxo.vout,
-                utxo.value,
+                utxo_amount_text(utxo),
                 yes_no(utxo.status.confirmed),
                 height_text(utxo.status.block_height),
                 block_hash_and_time(Some(&utxo.status))
@@ -1359,8 +2354,479 @@ fn render_utxos(body: &str) -> Result<String, ClientError> {
         .join("\n"))
 }
 
+fn push_spend(lines: &mut Vec<String>, rows: &mut Vec<String>, spent: bool, txid: Option<&str>) {
+    if !spent {
+        lines.push("spent false".to_string());
+        return;
+    }
+    if let Some(txid) = txid.filter(|txid| !txid.is_empty()) {
+        lines.push(format!("spend txid {txid}"));
+        rows.push(format!("row spend txid {txid}"));
+    }
+}
+
+fn optional_text<G: ExplorerGet>(
+    client: &ExplorerClient<G>,
+    path: &str,
+) -> Result<String, ClientError> {
+    Ok(read_optional(client, path)?.unwrap_or_default())
+}
+
+fn append_tx_body(lines: &mut String, body: &str) {
+    if body.is_empty() {
+        return;
+    }
+    if let Ok(rendered) = render_tx_list(body) {
+        if rendered != "The transaction list is empty." {
+            lines.push('\n');
+            lines.push_str(&rendered);
+        }
+    }
+}
+
+fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
+    format!(
+        "block details\nid {}\nheight {}\nversion {}\ntimestamp {}\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\npreviousblockhash {}\nmediantime {}\nnonce {}\nbits {}\ndifficulty {}",
+        block.id,
+        block.height,
+        block.version,
+        block.timestamp,
+        block.tx_count,
+        block.size,
+        block.weight,
+        block.merkle_root,
+        block.previous_block_hash.as_deref().unwrap_or(""),
+        block.median_time,
+        block.nonce,
+        block.bits,
+        plain_number(block.difficulty)
+    )
+}
+
+/// Peg-in and Liquid Peg Out from the parsed transaction.
+///
+/// A missing `is_pegin` is false. A missing `pegout` is none. The body is one
+/// transaction or a list. Each label is emitted once for that body.
+fn peg_lines(body: &str) -> Vec<String> {
+    let txs = peg_transactions(body);
+    let mut lines = Vec::new();
+    if txs
+        .iter()
+        .any(|tx| tx.vin.iter().any(|input| input.is_pegin))
+    {
+        lines.push("Peg-in".to_string());
+    }
+    if txs
+        .iter()
+        .any(|tx| tx.vout.iter().any(|output| output.pegout.is_some()))
+    {
+        lines.push("Liquid Peg Out".to_string());
+    }
+    lines
+}
+
+fn peg_transactions(body: &str) -> Vec<splora_frontend_shared::wire::Transaction> {
+    if let Ok(txs) = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body) {
+        return txs;
+    }
+    match serde_json::from_str::<splora_frontend_shared::wire::Transaction>(body) {
+        Ok(tx) => vec![tx],
+        Err(_) => Vec::new(),
+    }
+}
+
+/// One object from `GET /asset/:id`, the same untagged document as a registry row.
+fn one_registry_asset(body: &str) -> Option<RegistryAsset> {
+    let wrapped = format!("[{}]", body.trim());
+    parse_assets_registry(&wrapped).ok()?.into_iter().next()
+}
+
+fn stats_amount(blinded: bool, amount: u64) -> String {
+    if blinded {
+        "Confidential".to_string()
+    } else {
+        amount.to_string()
+    }
+}
+
+/// Precision, issuer, issuance transaction, and chain amounts from `GET /asset/:id`.
+///
+/// Chain stats only. A blinded issuance stays Confidential and is not an amount.
+/// A zero issued or pegged figure stays off the row the asset page hides.
+/// The integers stay the document values.
+fn asset_stats_lines(body: &str) -> (String, String) {
+    match one_registry_asset(body) {
+        Some(RegistryAsset::Issued(issued)) => issued_asset_stats(&issued),
+        Some(RegistryAsset::Native(native)) => (pegged_asset_stats(&native), String::new()),
+        None => (String::new(), String::new()),
+    }
+}
+
+fn issued_asset_stats(issued: &splora_frontend_shared::IssuedRegistryAsset) -> (String, String) {
+    let blinded =
+        issued.chain_stats.has_blinded_issuances || issued.mempool_stats.has_blinded_issuances;
+    let mut lines = Vec::new();
+    if let Some(precision) = issued.precision {
+        lines.push(format!("Precision {precision}"));
+    }
+    if let Some(domain) = issued
+        .entity
+        .get("domain")
+        .and_then(|value| value.as_str())
+        .filter(|domain| !domain.is_empty())
+    {
+        lines.push(format!("Issuer {domain}"));
+    }
+    let issuance = issued.issuance_txin.txid.clone();
+    if !issuance.is_empty() {
+        lines.push(format!("Issuance TX {issuance}"));
+    }
+    let chain = &issued.chain_stats;
+    if chain.issued_amount != 0 {
+        lines.push(format!(
+            "Issued amount {}",
+            stats_amount(blinded, chain.issued_amount)
+        ));
+    }
+    lines.push(format!(
+        "Burned amount {}",
+        stats_amount(blinded, chain.burned_amount)
+    ));
+    if chain.issued_amount != 0 {
+        let circulating = chain.issued_amount.saturating_sub(chain.burned_amount);
+        lines.push(format!(
+            "Circulating amount {}",
+            stats_amount(blinded, circulating)
+        ));
+    }
+    (lines.join("\n"), issuance)
+}
+
+fn pegged_asset_stats(native: &splora_frontend_shared::NativeRegistryAsset) -> String {
+    let chain = &native.chain_stats;
+    let mut lines = Vec::new();
+    if chain.peg_in_amount != 0 {
+        lines.push(format!("Pegged in {}", chain.peg_in_amount));
+    }
+    if chain.peg_out_amount != 0 {
+        lines.push(format!("Pegged out {}", chain.peg_out_amount));
+    }
+    lines.push(format!("Burned amount {}", chain.burned_amount));
+    if chain.peg_in_amount != 0 {
+        let circulating = chain
+            .peg_in_amount
+            .saturating_sub(chain.peg_out_amount)
+            .saturating_sub(chain.burned_amount);
+        lines.push(format!("Circulating amount {circulating}"));
+    }
+    lines.join("\n")
+}
+
+/// Liquid Bitcoin on liquid. Liquid testnet and every other asset use issuance.
+fn asset_transaction_heading(asset_id: &str) -> &'static str {
+    const NATIVE_LIQUID_ASSET: &str =
+        "6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d";
+    if asset_id == NATIVE_LIQUID_ASSET {
+        "Peg In/Out and Burn Transactions"
+    } else {
+        "Issuance and Burn Transactions"
+    }
+}
+
+/// Input and output rows for `GET /asset/:id/txs`. Not an asset box.
+fn asset_peg_burn_lines(asset_id: &str, txs_body: &str) -> String {
+    let mut lines = vec![asset_transaction_heading(asset_id).to_string()];
+    for tx in peg_transactions(txs_body) {
+        if tx.vin.is_empty() && tx.vout.is_empty() {
+            continue;
+        }
+        for input in &tx.vin {
+            lines.push(asset_party_line("table-tx-vin", input.prevout.as_ref()));
+        }
+        for output in &tx.vout {
+            lines.push(asset_party_line("table-tx-vout", Some(output)));
+        }
+    }
+    lines.join("\n")
+}
+
+/// A missing amount stays blank. Confidential is not a commitment and not an amount.
+fn asset_party_line(
+    class: &str,
+    output: Option<&splora_frontend_shared::wire::TxOutput>,
+) -> String {
+    let Some(output) = output else {
+        return format!("{class}  value ");
+    };
+    let address = output.script_pubkey_address.as_deref().unwrap_or("");
+    let amount = amount_text(output.value);
+    let mut line = format!("{class} {address} value {amount}");
+    let commitment = output
+        .valuecommitment
+        .as_deref()
+        .is_some_and(|text| !text.is_empty())
+        || output
+            .assetcommitment
+            .as_deref()
+            .is_some_and(|text| !text.is_empty());
+    if output.value.is_none() && commitment {
+        line.push_str(" Confidential");
+    }
+    if let Some(asset) = output.asset.as_deref().filter(|text| !text.is_empty()) {
+        line.push_str(" asset ");
+        line.push_str(asset);
+    }
+    line
+}
+
+fn highlight_lines(body: &str, viewed: &str) -> Vec<String> {
+    let Ok(txs) = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
+    else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for count in splora_frontend_shared::highlight_counts(viewed, &txs) {
+        for _ in 0..count.inputs {
+            lines.push(format!("highlight input {viewed}"));
+        }
+        for _ in 0..count.outputs {
+            lines.push(format!("highlight output {viewed}"));
+        }
+    }
+    lines
+}
+
+fn poison_network_name(network: Network) -> &'static str {
+    match network {
+        Network::Mainnet => "mainnet",
+        Network::Testnet3 => "testnet",
+        Network::Testnet4 => "testnet4",
+        Network::Mutinynet => "signet",
+        Network::Liquid => "liquid",
+    }
+}
+
+fn poison_lines_for_tx(
+    tx: &splora_frontend_shared::wire::Transaction,
+    network: &str,
+) -> Vec<String> {
+    let alerts = splora_frontend_shared::poison_alerts(tx, network);
+    let mut found = Vec::new();
+    let mut seen_groups = Vec::new();
+    for alert in &alerts {
+        if seen_groups.contains(&alert.group) {
+            continue;
+        }
+        seen_groups.push(alert.group);
+        let mut members: Vec<&splora_frontend_shared::PoisonAlert> = Vec::new();
+        for row in alerts.iter().filter(|row| row.group == alert.group) {
+            if members.iter().all(|kept| kept.address != row.address) {
+                members.push(row);
+            }
+        }
+        if members.len() < 2 {
+            continue;
+        }
+        push_poison_line(
+            &mut found,
+            &members[0].address,
+            &members[1].address,
+            &members[0].script_type,
+            network,
+        );
+    }
+    let parties = poison_parties(tx);
+    for left in 0..parties.len() {
+        for right in (left + 1)..parties.len() {
+            if parties[left].1 != parties[right].1 {
+                continue;
+            }
+            push_poison_line(
+                &mut found,
+                &parties[left].0,
+                &parties[right].0,
+                &parties[left].1,
+                network,
+            );
+        }
+    }
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let mut lines =
+        vec!["Warning! This transaction involves deceptively similar addresses.".to_string()];
+    lines.extend(found);
+    lines
+}
+
+fn poison_parties(tx: &splora_frontend_shared::wire::Transaction) -> Vec<(String, String)> {
+    let mut parties = Vec::new();
+    for input in &tx.vin {
+        if let Some(prev) = &input.prevout {
+            if let Some(address) = prev
+                .script_pubkey_address
+                .as_deref()
+                .filter(|address| !address.is_empty())
+            {
+                parties.push((address.to_string(), prev.script_pubkey_type.clone()));
+            }
+        }
+    }
+    for output in &tx.vout {
+        if let Some(address) = output
+            .script_pubkey_address
+            .as_deref()
+            .filter(|address| !address.is_empty())
+        {
+            parties.push((address.to_string(), output.script_pubkey_type.clone()));
+        }
+    }
+    parties
+}
+
+fn push_poison_line(
+    found: &mut Vec<String>,
+    left: &str,
+    right: &str,
+    script_type: &str,
+    network: &str,
+) {
+    let Some(left_parts) =
+        splora_frontend_shared::address_parts(left, right, script_type, network, 1)
+    else {
+        return;
+    };
+    let Some(right_parts) =
+        splora_frontend_shared::address_parts(right, left, script_type, network, 1)
+    else {
+        return;
+    };
+    let suffix = if left_parts.postfix.is_empty() {
+        right_parts.postfix.as_str()
+    } else {
+        left_parts.postfix.as_str()
+    };
+    let line = if suffix.is_empty() {
+        format!(
+            "poison prefix {} infix {} infix {}",
+            left_parts.prefix, left_parts.infix, right_parts.infix
+        )
+    } else {
+        format!(
+            "poison prefix {} infix {} infix {} suffix {suffix}",
+            left_parts.prefix, left_parts.infix, right_parts.infix
+        )
+    };
+    if !found.contains(&line) {
+        found.push(line);
+    }
+}
+
+fn poison_lines_for_txs(body: &str, network: &str) -> Vec<String> {
+    let Ok(txs) = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
+    else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for tx in &txs {
+        for line in poison_lines_for_tx(tx, network) {
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
+
+fn asset_id_in_row(row: &str) -> Option<&str> {
+    let token = row.strip_prefix("row asset ")?.split_whitespace().next()?;
+    if is_64_hex(token) { Some(token) } else { None }
+}
+
+fn registry_asset_ids(body: &str) -> Vec<String> {
+    let Ok(assets) = parse_assets_registry(body) else {
+        return Vec::new();
+    };
+    assets
+        .into_iter()
+        .filter_map(|asset| {
+            let id = match asset {
+                RegistryAsset::Issued(issued) => issued.asset_id,
+                RegistryAsset::Native(native) => native.asset_id,
+            };
+            if id.is_empty() { None } else { Some(id) }
+        })
+        .collect()
+}
+
+fn registry_issued_lines(body: &str) -> String {
+    let Ok(assets) = parse_assets_registry(body) else {
+        return String::new();
+    };
+    let mut lines = Vec::new();
+    for asset in assets {
+        if let RegistryAsset::Issued(issued) = asset {
+            if let Some(name) = issued.name.filter(|name| !name.is_empty()) {
+                lines.push(name);
+            }
+            if let Some(ticker) = issued.ticker.filter(|ticker| !ticker.is_empty()) {
+                lines.push(ticker);
+            }
+        }
+    }
+    lines.join("\n")
+}
+
+/// One featured card per named issued row from `GET /assets/registry`.
+/// A pegged row has no name and is not a card. The line is the name and the
+/// ticker. Amounts, prices, and block graphics stay off the card.
+fn registry_featured_card_lines(body: &str) -> String {
+    let Ok(assets) = parse_assets_registry(body) else {
+        return String::new();
+    };
+    let mut lines = Vec::new();
+    for asset in assets {
+        let RegistryAsset::Issued(issued) = asset else {
+            continue;
+        };
+        let Some(name) = issued.name.filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        let mut line = format!("featured card {name}");
+        if let Some(ticker) = issued.ticker.filter(|ticker| !ticker.is_empty()) {
+            line.push(' ');
+            line.push_str(&ticker);
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
+fn package_txid_rows(body: &str) -> Vec<String> {
+    match parse_package(body) {
+        Ok(parsed) => parsed
+            .tx_results
+            .values()
+            .filter(|tx| !tx.txid.is_empty())
+            .map(|tx| {
+                let mut row = format!("row tx txid {}", tx.txid);
+                // Missing and "" are not a witness id. Do not copy txid into that spot.
+                if let Some(wtxid) = tx.other_wtxid.as_deref().filter(|wtxid| !wtxid.is_empty()) {
+                    row.push_str(" wtxid ");
+                    row.push_str(wtxid);
+                }
+                row
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 fn render_broadcast_result(body: &str) -> Result<String, ClientError> {
     let trimmed = body.trim();
+    if let Some(sentence) = indexer_sentence(trimmed) {
+        return Ok(sentence.to_string());
+    }
     if let Ok(result) =
         serde_json::from_str::<splora_frontend_shared::wire::BroadcastResult>(trimmed)
     {
@@ -1369,10 +2835,27 @@ fn render_broadcast_result(body: &str) -> Result<String, ClientError> {
         }
     }
     // POST /tx returns the txid as text/plain. A JSON object uses BroadcastResult above.
+    // A sentence with a space stays the indexer text.
     if trimmed.is_empty() || trimmed.starts_with('{') || trimmed.starts_with('[') {
         return Err(ClientError::Http("broadcast result was empty".into()));
     }
+    if trimmed.contains(char::is_whitespace) {
+        return Ok(trimmed.to_string());
+    }
     Ok(format!("broadcast txid {trimmed}"))
+}
+
+fn render_package(body: &str) -> Result<String, ClientError> {
+    let parsed = parse_package(body).map_err(http_parse)?;
+    let mut lines = vec![format!("broadcast package {}", parsed.package_msg)];
+    for tx in parsed.tx_results.values() {
+        lines.push(tx.txid.clone());
+        // Missing and "" are not a witness id. Do not copy txid into that spot.
+        if let Some(wtxid) = tx.other_wtxid.as_deref().filter(|wtxid| !wtxid.is_empty()) {
+            lines.push(wtxid.to_string());
+        }
+    }
+    Ok(lines.join("\n"))
 }
 
 fn render_test_accept(body: &str) -> Result<String, ClientError> {
@@ -1411,6 +2894,109 @@ fn render_test_accept(body: &str) -> Result<String, ClientError> {
         .join("\n"))
 }
 
+/// USD per BTC fixture. Shown only through [`format_fiat`].
+pub const USD_PER_BTC: &str = "123456";
+
+/// JPY per BTC fixture. Shown only through [`format_fiat`].
+pub const JPY_PER_BTC: &str = "11057757";
+
+pub fn one_btc_sats_text() -> String {
+    btc_to_sats("1").expect("one btc converts").to_string()
+}
+
+pub fn truncated_btc_text(input: &str) -> String {
+    truncate_btc_decimals(input)
+}
+
+pub fn capped_btc_text(input: &str) -> String {
+    cap_btc_supply(input).btc
+}
+
+pub fn usd_fixture_text() -> String {
+    format_fiat(Usd, USD_PER_BTC)
+}
+
+pub fn jpy_fixture_text() -> String {
+    format_fiat(Jpy, JPY_PER_BTC)
+}
+
+pub fn switched_fiat_symbols() -> [char; 3] {
+    let shown = switch_usd_jpy_usd("1500");
+    [
+        shown[0].chars().next().expect("usd symbol"),
+        shown[1].chars().next().expect("jpy symbol"),
+        shown[2].chars().next().expect("usd symbol"),
+    ]
+}
+
+pub fn statistics_page_text() -> &'static str {
+    route_availability("/api/v1/statistics")
+}
+
+pub fn mining_page_text() -> &'static str {
+    route_availability("/v1/mining")
+}
+
+pub fn lightning_page_text() -> &'static str {
+    route_availability("/lightning")
+}
+
+pub fn graphs_page_text() -> &'static str {
+    route_availability("/api/v1/statistics")
+}
+
+pub fn hashrate_page_text() -> &'static str {
+    route_availability("/v1/mining")
+}
+
+pub fn pools_page_text() -> &'static str {
+    route_availability("/v1/mining")
+}
+
+pub fn price_chart_page_text() -> &'static str {
+    route_availability("/api/v1/historical-price")
+}
+
+/// Calculator body the GPUI shell paints through [`ScreenHost::rendered`].
+pub fn calculator_screen_text() -> String {
+    format!(
+        "Calculator
+Copy
+Copy
+Copy
+₿
+{}
+{}
+{}
+fiat {}
+fiat {}
+BTC {}
+sats {}
+{}
+A live price feed is not served.",
+        one_btc_sats_text(),
+        truncated_btc_text("1.123456789"),
+        capped_btc_text("25000000"),
+        btc_fiat_usd("0.33"),
+        btc_fiat_usd("0.00000001"),
+        btc_fiat_jpy("1"),
+        sats_fiat_usd(10_000),
+        route_availability("/v1/prices"),
+    )
+}
+
+/// Fiat body the GPUI shell paints through [`ScreenHost::rendered`].
+pub fn fiat_screen_text() -> String {
+    format!("{}\n{}", usd_fixture_text(), jpy_fixture_text())
+}
+
+fn calculator_entered_lines(form: &CalculatorForm) -> String {
+    format!(
+        "entered fiat {}\nentered bitcoin {}\nentered satoshis {}\nchosen {}",
+        form.fiat, form.btc, form.sats, form.fiat_text
+    )
+}
+
 /// The GPUI shell calls `activate`, `reload`, and `submit`. Tests use the same entry.
 pub struct ScreenHost<G> {
     pub screen: Screen,
@@ -1423,6 +3009,9 @@ pub struct ScreenHost<G> {
     pub multi_address: MultiAddressScreen,
     pub broadcast: BroadcastScreen,
     pub test_txs: TestTransactionsScreen,
+    pub calculator: CalculatorForm,
+    /// Characters the shell key path has typed but not submitted.
+    calculator_draft: String,
     client: ExplorerClient<G>,
     pub notice: String,
 }
@@ -1440,13 +3029,66 @@ impl<G> ScreenHost<G> {
             multi_address: MultiAddressScreen::new(),
             broadcast: BroadcastScreen::new(),
             test_txs: TestTransactionsScreen::new(),
+            calculator: loaded_calculator(Usd),
+            calculator_draft: String::new(),
             client,
             notice: String::new(),
         }
     }
 
+    pub fn enter_calculator_amount(&mut self, field: &str, amount: &str) {
+        let names = calculator_field_names();
+        if field == names[0] {
+            if let Some(next) = enter_fiat(&self.calculator, amount) {
+                self.calculator = next;
+            }
+        } else if field == names[1] {
+            self.calculator = enter_btc(&self.calculator, amount);
+        } else if field == names[2] {
+            if let Ok(sats) = amount.parse::<u64>() {
+                let btc = sats_to_btc(sats);
+                self.calculator = enter_btc(&self.calculator, &btc);
+            }
+        }
+    }
+
+    pub fn choose_calculator_fiat(&mut self, code: FiatCode) {
+        let btc = self.calculator.btc.clone();
+        self.calculator = loaded_calculator(code);
+        self.calculator = enter_btc(&self.calculator, &btc);
+    }
+
+    /// Commit the shell draft. `jpy` selects yen. `fiat`, `bitcoin`, or `satoshis`
+    /// plus an amount calls the shared calculator functions. No currency-rate match.
+    fn apply_calculator_draft(&mut self) {
+        let draft = std::mem::take(&mut self.calculator_draft);
+        let draft = draft.trim();
+        if draft.is_empty() {
+            return;
+        }
+        if draft.eq_ignore_ascii_case("jpy") {
+            self.choose_calculator_fiat(Jpy);
+            return;
+        }
+        let names = calculator_field_names();
+        let mut parts = draft.split_whitespace();
+        let Some(field) = parts.next() else {
+            return;
+        };
+        let Some(amount) = parts.next() else {
+            return;
+        };
+        if parts.next().is_some() {
+            return;
+        }
+        if names.contains(&field) {
+            self.enter_calculator_amount(field, amount);
+        }
+    }
+
     pub fn query_text(&self) -> String {
         match self.screen {
+            Screen::Dashboard => self.dashboard.search.clone(),
             Screen::Block => self.block.query.clone(),
             Screen::Blocks => self.blocks.start_height.clone(),
             Screen::Tx => self.tx.txid.clone(),
@@ -1454,6 +3096,7 @@ impl<G> ScreenHost<G> {
             Screen::MultiAddress => self.multi_address.input.clone(),
             Screen::Broadcast => self.broadcast.raw_tx.clone(),
             Screen::TestTransactions => self.test_txs.input.clone(),
+            Screen::Calculator => self.calculator_draft.clone(),
             _ => String::new(),
         }
     }
@@ -1461,14 +3104,17 @@ impl<G> ScreenHost<G> {
     pub fn set_query(&mut self, text: &str) {
         let trimmed = text.trim();
         match self.screen {
+            Screen::Dashboard => self.dashboard.search = trimmed.to_string(),
             Screen::Block => {
                 let mut parts = trimmed.split_whitespace();
                 self.block.query = parts.next().unwrap_or("").to_string();
                 let page = parts.next().unwrap_or("");
                 if page.is_empty() || !is_numeric_id(page) || parts.next().is_some() {
                     self.block.start_index.clear();
+                    self.block.typing_page = false;
                 } else {
                     self.block.start_index = page.to_string();
+                    self.block.typing_page = true;
                 }
             }
             Screen::Blocks => {
@@ -1476,19 +3122,35 @@ impl<G> ScreenHost<G> {
                     trimmed.chars().filter(|ch| ch.is_ascii_digit()).collect();
             }
             Screen::Tx => self.tx.txid = one_query_token(trimmed),
-            Screen::Address => self.address.address = one_query_token(trimmed),
-            Screen::MultiAddress => self.multi_address.input = trimmed.to_string(),
-            Screen::Broadcast => {
-                self.broadcast.raw_tx = trimmed.chars().filter(|ch| !ch.is_whitespace()).collect();
+            Screen::Address => {
+                self.address.address = one_query_token(trimmed);
+                self.address.last_seen.clear();
+                self.address.typing_page = false;
             }
+            Screen::MultiAddress => self.multi_address.input = trimmed.to_string(),
+            Screen::Broadcast => self.broadcast.raw_tx = trimmed.to_string(),
             Screen::TestTransactions => self.test_txs.input = trimmed.to_string(),
+            Screen::Calculator => self.calculator_draft = trimmed.to_string(),
             _ => {}
         }
     }
 
     pub fn push_str(&mut self, text: &str) {
         match self.screen {
-            Screen::Block => self.block.query.push_str(text),
+            Screen::Dashboard => self.dashboard.search.push_str(text),
+            Screen::Block => {
+                for ch in text.chars() {
+                    if ch.is_whitespace() {
+                        self.block.typing_page = true;
+                    } else if self.block.typing_page {
+                        if ch.is_ascii_digit() {
+                            self.block.start_index.push(ch);
+                        }
+                    } else {
+                        self.block.query.push(ch);
+                    }
+                }
+            }
             Screen::Blocks => {
                 for ch in text.chars() {
                     if ch.is_ascii_digit() {
@@ -1497,24 +3159,38 @@ impl<G> ScreenHost<G> {
                 }
             }
             Screen::Tx => self.tx.txid.push_str(text),
-            Screen::Address => self.address.address.push_str(text),
-            Screen::MultiAddress => self.multi_address.input.push_str(text),
-            Screen::Broadcast => {
+            Screen::Address => {
                 for ch in text.chars() {
-                    if !ch.is_whitespace() {
-                        self.broadcast.raw_tx.push(ch);
+                    if ch.is_whitespace() {
+                        self.address.typing_page = true;
+                    } else if self.address.typing_page {
+                        self.address.last_seen.push(ch);
+                    } else {
+                        self.address.address.push(ch);
                     }
                 }
             }
+            Screen::MultiAddress => self.multi_address.input.push_str(text),
+            Screen::Broadcast => self.broadcast.raw_tx.push_str(text),
             Screen::TestTransactions => self.test_txs.input.push_str(text),
+            Screen::Calculator => self.calculator_draft.push_str(text),
             _ => {}
         }
     }
 
     pub fn backspace(&mut self) {
         match self.screen {
+            Screen::Dashboard => {
+                self.dashboard.search.pop();
+            }
             Screen::Block => {
-                self.block.query.pop();
+                if self.block.typing_page {
+                    if self.block.start_index.pop().is_none() {
+                        self.block.typing_page = false;
+                    }
+                } else {
+                    self.block.query.pop();
+                }
             }
             Screen::Blocks => {
                 self.blocks.start_height.pop();
@@ -1523,7 +3199,13 @@ impl<G> ScreenHost<G> {
                 self.tx.txid.pop();
             }
             Screen::Address => {
-                self.address.address.pop();
+                if self.address.typing_page {
+                    if self.address.last_seen.pop().is_none() {
+                        self.address.typing_page = false;
+                    }
+                } else {
+                    self.address.address.pop();
+                }
             }
             Screen::MultiAddress => {
                 self.multi_address.input.pop();
@@ -1533,6 +3215,9 @@ impl<G> ScreenHost<G> {
             }
             Screen::TestTransactions => {
                 self.test_txs.input.pop();
+            }
+            Screen::Calculator => {
+                self.calculator_draft.pop();
             }
             _ => {}
         }
@@ -1553,19 +3238,160 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
     }
 
     pub fn activate(&mut self, screen: Screen) -> Result<(), ClientError> {
+        if screen == Screen::Dashboard {
+            self.dashboard.search.clear();
+        }
         self.screen = screen;
         self.reload()
     }
 
+    /// Open `GET /tx/:txid` from a painted row. Empty and slash-bearing ids are rejected.
+    pub fn open_transaction(&mut self, txid: &str) -> Result<(), ClientError> {
+        let token = one_query_token(txid);
+        if token.is_empty() || token.contains('/') {
+            return self.finish(Err(ClientError::BadPath));
+        }
+        self.tx.txid = token;
+        self.screen = Screen::Tx;
+        let loaded = self.tx.load(&self.client);
+        if let Err(ClientError::Http(message)) = &loaded {
+            if message.starts_with("missing ") {
+                self.tx.body.clear();
+                self.tx.rows.clear();
+                return self.finish(Ok(()));
+            }
+        }
+        self.finish(loaded)
+    }
+
+    /// Open `GET /block/:hash`, or `GET /block-height/:height` when `id` is all digits.
+    pub fn open_block(&mut self, id: &str) -> Result<(), ClientError> {
+        let token = one_query_token(id);
+        if token.is_empty() || token.contains('/') {
+            return self.finish(Err(ClientError::BadPath));
+        }
+        self.block.query = token;
+        self.block.start_index.clear();
+        self.block.typing_page = false;
+        self.activate(Screen::Block)
+    }
+
+    /// Open `GET /address/:script` plus its transactions, utxos, and mempool transactions.
+    pub fn open_address(&mut self, script: &str) -> Result<(), ClientError> {
+        let token = one_query_token(script);
+        if token.is_empty() || token.contains('/') {
+            return self.finish(Err(ClientError::BadPath));
+        }
+        self.address.use_scripthash = is_64_hex(&token);
+        self.address.address = token;
+        self.address.last_seen.clear();
+        self.address.typing_page = false;
+        self.activate(Screen::Address)
+    }
+
+    /// One painted row. Transaction ids still use [`Self::open_transaction`].
+    /// A row that is not a block, address, page, or chain cursor does nothing.
+    pub fn open_row(&mut self, row: &str) -> Result<(), ClientError> {
+        if let Some(cursor) = mempool_page_in_row(row) {
+            let cursor = cursor.to_string();
+            self.mempool.last_seen = cursor;
+            return self.activate(Screen::Mempool);
+        }
+        if let Some(hash) = tip_hash_in_row(row) {
+            let hash = hash.to_string();
+            return self.open_block(&hash);
+        }
+        if let Some(hash) = merkle_hash_in_row(row) {
+            let hash = hash.to_string();
+            return self.open_transaction(&hash);
+        }
+        if let Some(index) = page_index_in_row(row) {
+            let index = index.to_string();
+            return self.open_block_page(&index);
+        }
+        if let Some(cursor) = chain_cursor_in_row(row) {
+            let cursor = cursor.to_string();
+            return self.open_chain_page(&cursor);
+        }
+        if let Some(txid) = transaction_id_in_row(row) {
+            let txid = txid.to_string();
+            return self.open_transaction(&txid);
+        }
+        if let Some(hash) = block_hash_in_row(row) {
+            let hash = hash.to_string();
+            return self.open_block(&hash);
+        }
+        if let Some(height) = bare_height_in_row(row) {
+            let height = height.to_string();
+            return self.open_block(&height);
+        }
+        if let Some(address) = address_in_row(row) {
+            let address = address.to_string();
+            return self.open_address(&address);
+        }
+        if row == "row block details" {
+            self.block.toggle_details();
+            return self.finish(Ok(()));
+        }
+        if let Some(asset) = asset_id_in_row(row) {
+            let asset = asset.to_string();
+            if self.client.network() == Network::Liquid {
+                let hit = classify_hex(&self.client, &asset)?;
+                return self.apply_hex_hit(hit);
+            }
+        }
+        self.finish(Ok(()))
+    }
+
+    fn open_block_page(&mut self, index: &str) -> Result<(), ClientError> {
+        if self.block.query.is_empty() || !is_numeric_id(index) {
+            return self.finish(Err(ClientError::BadPath));
+        }
+        let start: u64 = match index.parse() {
+            Ok(start) => start,
+            Err(_) => return self.finish(Err(ClientError::BadPath)),
+        };
+        if start % 25 != 0 {
+            return self.finish(Err(ClientError::BadPath));
+        }
+        self.block.start_index = index.to_string();
+        self.block.typing_page = true;
+        self.activate(Screen::Block)
+    }
+
+    fn open_chain_page(&mut self, txid: &str) -> Result<(), ClientError> {
+        if self.address.address.is_empty() || txid.is_empty() || txid.contains('/') {
+            return self.finish(Err(ClientError::BadPath));
+        }
+        self.address.last_seen = txid.to_string();
+        self.address.typing_page = true;
+        self.activate(Screen::Address)
+    }
+
     pub fn reload(&mut self) -> Result<(), ClientError> {
+        let result = self.reload_current();
+        self.finish(result)
+    }
+
+    fn reload_current(&mut self) -> Result<(), ClientError> {
         match self.screen {
-            Screen::Dashboard => self.dashboard.load(&self.client),
+            Screen::Dashboard => {
+                if self.dashboard.search.trim().is_empty() {
+                    self.dashboard.load(&self.client)
+                } else {
+                    self.search_dashboard()
+                }
+            }
             Screen::Blocks => self.blocks.load(&self.client),
             Screen::Block => self.block.load(&self.client),
             Screen::Tx => self.tx.load(&self.client),
             Screen::Address => self.address.load(&self.client),
             Screen::Mempool => self.mempool.load(&self.client),
             Screen::MultiAddress => self.multi_address.load(&self.client),
+            Screen::Calculator => {
+                self.apply_calculator_draft();
+                Ok(())
+            }
             Screen::Broadcast
             | Screen::TestTransactions
             | Screen::Popup
@@ -1575,16 +3401,204 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             | Screen::Docs
             | Screen::Faq
             | Screen::ApiRest
-            | Screen::ApiWebsocket => Ok(()),
+            | Screen::ApiWebsocket
+            | Screen::Fiat
+            | Screen::Statistics
+            | Screen::Mining
+            | Screen::Graphs
+            | Screen::Hashrate
+            | Screen::PriceChart
+            | Screen::Lightning
+            | Screen::Pools => Ok(()),
         }
     }
 
+    fn search_dashboard(&mut self) -> Result<(), ClientError> {
+        let query = self.dashboard.search.trim().to_string();
+        // All digits are a block height, including 64 digits that do not fit in u64.
+        // A 64-digit id whose height lookup is missing can still be a tx, block,
+        // asset, or scripthash. A 64-hex id that is not all digits takes that path too.
+        if is_numeric_id(&query) && query.len() != 64 {
+            return self.open_block(&query);
+        }
+        if is_numeric_id(&query) && query.len() == 64 {
+            let path = format!("/block-height/{query}");
+            if let ProbeBody::Hit(body) = read_probe(&self.client, &path)? {
+                if indexer_sentence(&body).is_none() && parse_block_height(&body).is_ok() {
+                    return self.open_block(&query);
+                }
+            }
+        }
+        if is_64_hex(&query) {
+            let hit = classify_hex(&self.client, &query)?;
+            return self.apply_hex_hit(hit);
+        }
+        if looks_like_address(&query) {
+            return self.open_address(&query);
+        }
+        if self.client.network() == Network::Liquid {
+            if let Ok(()) = self.show_liquid_search() {
+                return Ok(());
+            }
+        }
+        self.show_prefix(&query)
+    }
+
+    fn apply_hex_hit(&mut self, hit: HexHit) -> Result<(), ClientError> {
+        match hit {
+            HexHit::Tx(txid) => self.open_transaction(&txid),
+            HexHit::Block(hash) => self.open_block(&hash),
+            HexHit::Script(hash) => self.open_address(&hash),
+            HexHit::Asset {
+                name,
+                ticker,
+                asset_id,
+                txs,
+                chain,
+                mempool,
+                supply,
+                supply_decimal,
+                stats,
+                issuance_txid,
+            } => {
+                let mut lines = format!("asset id {asset_id}\n");
+                if !name.is_empty() {
+                    lines.push_str(&format!("asset name {name}\n"));
+                }
+                if !ticker.is_empty() {
+                    lines.push_str(&format!("ticker {ticker}\n"));
+                }
+                if !stats.is_empty() {
+                    lines.push_str(&stats);
+                    lines.push('\n');
+                }
+                lines.push_str(&asset_peg_burn_lines(&asset_id, &txs));
+                append_tx_body(&mut lines, &txs);
+                append_tx_body(&mut lines, &chain);
+                append_tx_body(&mut lines, &mempool);
+                if let Ok(text) = parse_asset_supply(&supply) {
+                    lines.push('\n');
+                    lines.push_str(&text);
+                }
+                if let Ok(text) = parse_asset_supply_decimal(&supply_decimal) {
+                    lines.push('\n');
+                    lines.push_str(&text);
+                }
+                self.dashboard.lines = lines;
+                self.dashboard.rows = if issuance_txid.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![format!("row tx txid {issuance_txid}")]
+                };
+                self.screen = Screen::Dashboard;
+                Ok(())
+            }
+            HexHit::Sentence(sentence) => {
+                self.dashboard.lines = sentence;
+                self.dashboard.rows.clear();
+                self.screen = Screen::Dashboard;
+                Ok(())
+            }
+            HexHit::NotServed => {
+                self.dashboard.lines = route_availability("/v1/mining").to_string();
+                self.dashboard.rows.clear();
+                self.screen = Screen::Dashboard;
+                Ok(())
+            }
+            HexHit::Miss => Err(ClientError::Http("missing search".into())),
+        }
+    }
+
+    fn show_prefix(&mut self, prefix: &str) -> Result<(), ClientError> {
+        // The address index stores bech32 mainnet prefixes in lowercase.
+        let folded = prefix.to_ascii_lowercase();
+        let requested = if folded.starts_with("bc1") {
+            folded.as_str()
+        } else {
+            prefix
+        };
+        let path = address_prefix_path(requested);
+        match read_probe(&self.client, &path)? {
+            ProbeBody::Hit(body) => {
+                if let Some(sentence) = indexer_sentence(&body) {
+                    self.dashboard.lines = sentence.to_string();
+                    self.dashboard.rows.clear();
+                    self.screen = Screen::Dashboard;
+                    return Ok(());
+                }
+                let addresses = parse_address_prefix(&body).map_err(http_parse)?;
+                self.dashboard.lines = addresses.join("\n");
+                self.dashboard.rows = addresses
+                    .iter()
+                    .map(|address| format!("row prefix {address}"))
+                    .collect();
+                self.screen = Screen::Dashboard;
+                Ok(())
+            }
+            ProbeBody::Miss => Err(ClientError::Http(format!("missing {path}"))),
+        }
+    }
+
+    /// Liquid registry search. The shared helper appends `?q=`, and this client
+    /// rejects `?`, so the request is `GET /assets/registry/search` with no query.
+    fn show_liquid_search(&mut self) -> Result<(), ClientError> {
+        let path = "/assets/registry/search";
+        match read_probe(&self.client, path)? {
+            ProbeBody::Hit(body) => {
+                if let Some(sentence) = indexer_sentence(&body) {
+                    self.dashboard.lines = sentence.to_string();
+                    self.dashboard.rows.clear();
+                    self.screen = Screen::Dashboard;
+                    return Ok(());
+                }
+                let hits = parse_assets_registry_search(&body).map_err(http_parse)?;
+                let mut lines = Vec::new();
+                let mut rows = Vec::new();
+                // One typeahead window for the whole hit list. An empty body paints none.
+                // Each hit is one button. The row is not a second window.
+                if !hits.is_empty() {
+                    lines.push("suggestion window".to_string());
+                }
+                for hit in &hits {
+                    if !hit.name.is_empty() {
+                        lines.push(hit.name.clone());
+                    }
+                    if let Some(ticker) = hit.ticker.as_deref().filter(|ticker| !ticker.is_empty())
+                    {
+                        lines.push(ticker.to_string());
+                    }
+                    if is_64_hex(&hit.asset_id) {
+                        rows.push(format!("row asset {}", hit.asset_id));
+                    }
+                }
+                self.dashboard.lines = lines.join("\n");
+                self.dashboard.rows = rows;
+                self.screen = Screen::Dashboard;
+                Ok(())
+            }
+            ProbeBody::Miss => Err(ClientError::Http(format!("missing {path}"))),
+        }
+    }
+
+    fn finish(&mut self, result: Result<(), ClientError>) -> Result<(), ClientError> {
+        self.notice = match &result {
+            Ok(()) => String::new(),
+            Err(err) => notice_from_error(err),
+        };
+        result
+    }
+
     pub fn submit(&mut self) -> Result<(), ClientError> {
-        match self.screen {
+        let result = match self.screen {
             Screen::Broadcast => self.broadcast.submit(&self.client),
             Screen::TestTransactions => self.test_txs.submit(&self.client),
+            Screen::Calculator => {
+                self.apply_calculator_draft();
+                Ok(())
+            }
             _ => Err(ClientError::BadPath),
-        }
+        };
+        self.finish(result)
     }
 
     pub fn rendered(&self) -> String {
@@ -1605,6 +3619,19 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             Screen::Faq => resolve_doc_route("faq").body.to_string(),
             Screen::ApiRest => resolve_doc_route("api/rest").body.to_string(),
             Screen::ApiWebsocket => resolve_doc_route("api/websocket").body.to_string(),
+            Screen::Calculator => format!(
+                "{}\n{}",
+                calculator_screen_text(),
+                calculator_entered_lines(&self.calculator)
+            ),
+            Screen::Fiat => fiat_screen_text(),
+            Screen::Statistics => statistics_page_text().to_string(),
+            Screen::Mining => mining_page_text().to_string(),
+            Screen::Graphs => graphs_page_text().to_string(),
+            Screen::Hashrate => hashrate_page_text().to_string(),
+            Screen::PriceChart => price_chart_page_text().to_string(),
+            Screen::Lightning => lightning_page_text().to_string(),
+            Screen::Pools => pools_page_text().to_string(),
             Screen::Popup => String::new(),
         }
     }
@@ -1620,8 +3647,8 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             Screen::Address => self.address.rows.clone(),
             Screen::Mempool => self.mempool.rows.clone(),
             Screen::MultiAddress => self.multi_address.rows.clone(),
-            Screen::Broadcast
-            | Screen::TestTransactions
+            Screen::Broadcast => self.broadcast.rows.clone(),
+            Screen::TestTransactions
             | Screen::Popup
             | Screen::Terms
             | Screen::Privacy
@@ -1629,7 +3656,16 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             | Screen::Docs
             | Screen::Faq
             | Screen::ApiRest
-            | Screen::ApiWebsocket => Vec::new(),
+            | Screen::ApiWebsocket
+            | Screen::Calculator
+            | Screen::Fiat
+            | Screen::Statistics
+            | Screen::Mining
+            | Screen::Graphs
+            | Screen::Hashrate
+            | Screen::PriceChart
+            | Screen::Lightning
+            | Screen::Pools => Vec::new(),
         }
     }
 }
@@ -1637,6 +3673,12 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
 /// Rows `Shell::render` paints, one element per block, transaction, or utxo value.
 pub fn painted_rows<G: ExplorerGet + ExplorerPost>(host: &ScreenHost<G>) -> Vec<String> {
     host.painted_rows()
+}
+
+/// Token after `txid ` in a painted row. Block rows and utxo value rows have none.
+pub fn transaction_id_in_row(row: &str) -> Option<&str> {
+    let rest = row.split_once("txid ")?.1;
+    rest.split_whitespace().next()
 }
 
 /// Text `Shell::render` passes to `.child` for the screen body.
@@ -1669,6 +3711,62 @@ mod tests {
         Network, SIGNET_PATH, api_prefix, api_root, is_backend_network, signet_is_backend,
     };
     use std::collections::BTreeMap;
+
+    #[test]
+    fn utxo_omitted_value_paints_confidential_blank_or_zero() {
+        let commitment = "a".repeat(66);
+        let body = format!(
+            r#"[
+                {{"txid":"blind","vout":1,"status":{{"confirmed":false}},"valuecommitment":"{commitment}"}},
+                {{"txid":"plain","vout":1,"status":{{"confirmed":false}}}},
+                {{"txid":"emptyc","vout":1,"status":{{"confirmed":false}},"valuecommitment":"","assetcommitment":""}},
+                {{"txid":"zeroed","vout":1,"status":{{"confirmed":true}},"value":0}}
+            ]"#
+        );
+        let painted = render_utxos(&body).expect("paint utxos");
+        let rows = utxo_value_rows(&body).expect("utxo rows");
+        let line = |txid: &str| {
+            painted
+                .lines()
+                .find(|line| line.contains(&format!("txid {txid} ")))
+                .unwrap_or_else(|| panic!("{txid} missing from {painted}"))
+                .to_string()
+        };
+
+        let blind = line("blind");
+        assert!(blind.contains("value Confidential"), "{blind}");
+        assert!(!blind.contains(&commitment), "{blind}");
+        assert!(!blind.contains('0'), "{blind}");
+        assert!(!blind.contains("Some("), "{blind}");
+        assert!(!blind.contains("0.001"), "{blind}");
+        assert!(
+            rows.iter().any(|row| row == "row utxo value Confidential"),
+            "{rows:?}"
+        );
+
+        let plain = line("plain");
+        assert!(!plain.contains("Confidential"), "{plain}");
+        assert!(plain.contains("value  confirmed"), "{plain}");
+        assert!(!plain.contains('0'), "{plain}");
+
+        let emptyc = line("emptyc");
+        assert!(!emptyc.contains("Confidential"), "{emptyc}");
+        assert!(emptyc.contains("value  confirmed"), "{emptyc}");
+        assert!(!emptyc.contains('0'), "{emptyc}");
+        assert!(
+            rows.iter().any(|row| row == "row utxo value "),
+            "{rows:?}"
+        );
+
+        let zeroed = line("zeroed");
+        assert!(zeroed.contains("value 0 confirmed"), "{zeroed}");
+        assert!(!zeroed.contains("Confidential"), "{zeroed}");
+        assert!(!zeroed.contains("Some("), "{zeroed}");
+        assert!(
+            rows.iter().any(|row| row == "row utxo value 0"),
+            "{rows:?}"
+        );
+    }
 
     struct MapExplorer {
         map: BTreeMap<String, String>,
@@ -1851,7 +3949,7 @@ mod tests {
             assert_eq!(screen.label(), link);
         }
         assert!(Screen::from_link("signet").is_none());
-        assert!(Screen::from_link("mining").is_none());
+        assert_eq!(Screen::from_link("mining"), Some(Screen::Mining));
         assert_eq!(NetworkSwitcher::networks().len(), 5);
         assert!(!signet_is_backend());
     }
@@ -1866,7 +3964,12 @@ mod tests {
         screen.load(&client).expect("load");
         assert_eq!(screen.requests.len(), 6);
         assert_eq!(rec.gets.borrow().len(), 6);
-        assert!(rec.posts.borrow().is_empty());
+        assert_eq!(rec.posts.borrow().len(), 2);
+        assert_eq!(rec.posts.borrow()[0].0, "POST");
+        assert_eq!(rec.posts.borrow()[0].1, "/addresses/txs/summary");
+        assert_eq!(rec.posts.borrow()[1].0, "POST");
+        assert_eq!(rec.posts.borrow()[1].1, "/addresses/txs");
+        assert!(!rec.posts.borrow()[1].1.contains('?'));
         for (index, address) in ["addrA", "addrB", "addrC"].iter().enumerate() {
             let request = &screen.requests[index * 2];
             assert_eq!(request.method, "GET");
@@ -1950,6 +4053,9 @@ mod tests {
             assert!(!text.is_empty());
             assert_eq!(screen.summary().starts_with(page.title()), true);
             for banned in BANNED_URL_PARTS {
+                if page == StaticPage::Docs && *banned == "/txs/package" {
+                    continue;
+                }
                 assert!(!text.contains(banned), "{} contains {banned}", page.title());
             }
         }
@@ -1960,6 +4066,8 @@ mod tests {
         assert!(docs.contains("POST of /txs/test"));
         assert!(docs.contains("GET of /address/"));
         assert!(docs.contains("Signet is not a backend"));
+        assert!(docs.contains("Two raw transactions use POST /txs/package."));
+        assert!(!docs.contains("This shell does not submit a transaction package."));
     }
 
     #[derive(Clone, Default)]
@@ -2332,6 +4440,10 @@ mod tests {
                 format!("/block/{BLOCK_HASH}"),
                 format!("/block/{BLOCK_HASH}/txs"),
                 format!("/block/{BLOCK_HASH}/txids"),
+                format!("/block/{BLOCK_HASH}/status"),
+                format!("/block/{BLOCK_HASH}/header"),
+                format!("/block/{BLOCK_HASH}/raw"),
+                format!("/block/{BLOCK_HASH}/txid/0"),
             ]
         );
         assert!(
@@ -2384,6 +4496,10 @@ mod tests {
                 format!("/block/{BLOCK_HASH}"),
                 format!("/block/{BLOCK_HASH}/txs"),
                 format!("/block/{BLOCK_HASH}/txids"),
+                format!("/block/{BLOCK_HASH}/status"),
+                format!("/block/{BLOCK_HASH}/header"),
+                format!("/block/{BLOCK_HASH}/raw"),
+                format!("/block/{BLOCK_HASH}/txid/0"),
             ]
         );
         assert_paths_allowed(&rec.get_paths());
@@ -2411,7 +4527,17 @@ mod tests {
         );
         host.tx.txid = "txidabc".to_string();
         host.activate(Screen::Tx).expect("tx");
-        assert_eq!(rec.get_paths(), vec!["/tx/txidabc".to_string()]);
+        assert_eq!(
+            rec.get_paths(),
+            vec![
+                "/tx/txidabc".to_string(),
+                "/tx/txidabc/outspends".to_string(),
+                "/tx/txidabc/merkle-proof".to_string(),
+                "/tx/txidabc/hex".to_string(),
+                "/tx/txidabc/raw".to_string(),
+                "/tx/txidabc/merkleblock-proof".to_string(),
+            ]
+        );
         assert!(rec.post_paths().is_empty());
         assert_paths_allowed(&rec.get_paths());
         assert_painted_screen(&host, "tx");
@@ -2449,6 +4575,8 @@ mod tests {
                 format!("/address/{script}"),
                 format!("/address/{script}/txs"),
                 format!("/address/{script}/utxo"),
+                format!("/address/{script}/txs/mempool"),
+                format!("/address/{script}/txs/summary"),
             ]
         );
         assert_paths_allowed(&rec.get_paths());
@@ -2495,7 +4623,13 @@ mod tests {
                 "/address/addrB/utxo".to_string(),
             ]
         );
-        assert!(rec.post_paths().is_empty());
+        assert_eq!(
+            rec.post_paths(),
+            vec![
+                "/addresses/txs/summary".to_string(),
+                "/addresses/txs".to_string(),
+            ]
+        );
         assert!(rec.get_paths().iter().all(|path| !path.contains(',')));
         assert_paths_allowed(&rec.get_paths());
         assert_painted_screen(&host, "addresses");
@@ -2788,6 +4922,7 @@ mod tests {
             vec![
                 splora_frontend_shared::mempool_path().to_string(),
                 splora_frontend_shared::mempool_recent_path().to_string(),
+                splora_frontend_shared::mempool_txids_path().to_string(),
             ]
         );
         assert!(rec.post_paths().is_empty());
@@ -2800,6 +4935,10 @@ mod tests {
                 "fee_histogram 2 100",
                 "recent txid txidrecent222 fee 321 vsize 111 value 999",
             ],
+        );
+        assert!(
+            painted_of(&host)
+                .contains("The incoming virtual-bytes-per-second rate is not in the payload.")
         );
         assert_no_banned_products(&painted_of(&host));
     }
@@ -2873,8 +5012,17 @@ mod tests {
         assert_local_page(
             Screen::Docs,
             "docs",
-            "This shell does not submit a transaction package.",
+            "Two raw transactions use POST /txs/package.",
         );
+        let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+        host.activate(Screen::Docs).expect("docs");
+        let painted = painted_of(&host);
+        assert!(
+            !painted.contains("This shell does not submit a transaction package."),
+            "{painted}"
+        );
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty(), "{:?}", rec.post_paths());
     }
 
     #[test]
@@ -3199,6 +5347,285 @@ mod tests {
     }
 
     #[test]
+    fn indexer_fields_paint_block_tx_address_mempool_and_txid_opens_tx() {
+        let rate_tx = r#"{
+            "txid":"rate-tx",
+            "version":2,
+            "locktime":9,
+            "vin":[{
+                "txid":"prev",
+                "vout":1,
+                "prevout":{
+                    "scriptpubkey":"0014scriptpubkeyhex",
+                    "scriptpubkey_asm":"asmspecial",
+                    "scriptpubkey_type":"v0_p2wpkh",
+                    "scriptpubkey_address":"bc1qinput",
+                    "value":610677
+                },
+                "scriptsig":"scriptsigsecret",
+                "scriptsig_asm":"asmspecial",
+                "witness":["abcdwitnesshex"],
+                "is_coinbase":false,
+                "sequence":1
+            }],
+            "vout":[{
+                "scriptpubkey":"0014outputscriptpubkeyhex",
+                "scriptpubkey_asm":"asmspecial",
+                "scriptpubkey_type":"v0_p2wpkh",
+                "scriptpubkey_address":"bc1qoutput",
+                "value":344697
+            }],
+            "size":200,
+            "weight":400,
+            "sigops":3,
+            "fee":50,
+            "status":{"confirmed":true,"block_height":800000,"block_hash":"blockhash1","block_time":1700001111}
+        }"#;
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{BLOCK_HASH}"), BLOCK_JSON.to_string()),
+                (format!("/block/{BLOCK_HASH}/txs"), format!("[{rate_tx}]")),
+                (
+                    format!("/block/{BLOCK_HASH}/txids"),
+                    r#"["rate-tx"]"#.to_string(),
+                ),
+                ("/tx/rate-tx".to_string(), rate_tx.to_string()),
+            ]),
+        );
+        host.block.query = BLOCK_HASH.to_string();
+        host.activate(Screen::Block).expect("block");
+        assert_painted_screen(&host, "block");
+        assert_view(
+            &host,
+            &[
+                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp median_time 1700000000 version 1 merkle_root mm nonce 1 bits 2 difficulty 3",
+                "tx txid rate-tx",
+            ],
+        );
+        let block_painted = painted_of(&host);
+        assert!(!block_painted.contains("difficulty 3.0"), "{block_painted}");
+        let block_lower = block_painted.to_ascii_lowercase();
+        for word in ["chart", "canvas", "svg"] {
+            assert!(!block_lower.contains(word), "{block_painted}");
+        }
+        assert_no_private_key(&block_painted);
+
+        let rows = host.painted_rows();
+        let tx_row = rows
+            .iter()
+            .find(|row| row.starts_with("row tx "))
+            .expect("tx row");
+        assert_eq!(tx_row, "row tx txid rate-tx fee 50");
+        assert_eq!(transaction_id_in_row(tx_row), Some("rate-tx"));
+        assert_eq!(transaction_id_in_row("row tx txid abc fee 10"), Some("abc"));
+        let block_row = rows
+            .iter()
+            .find(|row| row.starts_with("row block "))
+            .expect("block row");
+        assert_eq!(transaction_id_in_row(block_row), None);
+        assert_eq!(
+            transaction_id_in_row("row block height 10 hash aaaa tx_count 2 time 1000"),
+            None
+        );
+        assert_eq!(transaction_id_in_row("row utxo value 5000"), None);
+        assert_eq!(host.screen, Screen::Block);
+        assert!(host.open_transaction("").is_err());
+        assert!(host.open_transaction("aa/bb").is_err());
+        assert_eq!(host.screen, Screen::Block);
+        let txid = transaction_id_in_row(tx_row).expect("txid").to_string();
+        host.open_transaction(&txid).expect("open tx");
+        assert_eq!(host.screen, Screen::Tx);
+        assert_ne!(host.screen, Screen::Block);
+        assert!(rec.get_paths().iter().any(|path| path == "/tx/rate-tx"));
+        assert_painted_screen(&host, "tx");
+        assert_view(
+            &host,
+            &[
+                "tx txid rate-tx fee 50 confirmed true block_height 800000 size 200 weight 400 block_hash blockhash1 block_time 1700001111 version 2 locktime 9 sigops 3 fee_rate 0.5",
+                "input outpoint prev:1",
+                "input address bc1qinput value 610677",
+                "output address bc1qoutput value 344697",
+            ],
+        );
+        let tx_painted = painted_of(&host);
+        for secret in [
+            "0014scriptpubkeyhex",
+            "0014outputscriptpubkeyhex",
+            "abcdwitnesshex",
+            "scriptsigsecret",
+            "asmspecial",
+            "scriptpubkey",
+            "witness",
+        ] {
+            assert!(!tx_painted.contains(secret), "{secret} in {tx_painted}");
+        }
+        assert_no_private_key(&tx_painted);
+
+        let zero_tx = r#"{
+            "txid":"zerowt",
+            "version":1,
+            "locktime":0,
+            "vin":[{
+                "txid":"lonely",
+                "vout":4,
+                "prevout":null,
+                "scriptsig":"",
+                "scriptsig_asm":"",
+                "is_coinbase":true,
+                "sequence":0
+            }],
+            "vout":[],
+            "size":10,
+            "weight":0,
+            "sigops":0,
+            "fee":25,
+            "status":{"confirmed":false}
+        }"#;
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/tx/zerowt".to_string(), zero_tx.to_string())]),
+        );
+        host.tx.txid = "zerowt".to_string();
+        host.activate(Screen::Tx).expect("zero weight");
+        assert_painted_screen(&host, "tx");
+        assert_view(
+            &host,
+            &[
+                "tx txid zerowt",
+                "weight 0",
+                "fee 25",
+                "input outpoint lonely:4",
+            ],
+        );
+        let zero_painted = painted_of(&host);
+        assert!(!zero_painted.contains("fee_rate"), "{zero_painted}");
+        assert!(!zero_painted.contains("input address"), "{zero_painted}");
+        assert_no_private_key(&zero_painted);
+
+        let stats = r#"{"address":"DDogAddress111","chain_stats":{"tx_count":7,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":9000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":3,"funded_txo_count":8,"spent_txo_count":2,"funded_txo_sum":2500,"spent_txo_sum":600}}"#;
+        let script = "DDogAddress111";
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{script}"), stats.to_string()),
+                (format!("/address/{script}/txs"), format!("[{rate_tx}]")),
+                (
+                    format!("/address/{script}/utxo"),
+                    r#"[{"txid":"utxotx444","vout":1,"status":{"confirmed":true,"block_height":10},"value":5000}]"#.to_string(),
+                ),
+            ]),
+        );
+        host.address.address = script.to_string();
+        host.activate(Screen::Address).expect("address");
+        assert_painted_screen(&host, "address");
+        assert_view(
+            &host,
+            &[
+                "address DDogAddress111 chain_tx_count 7 funded_sum 9000 mempool_tx_count 3 mempool_funded_sum 2500 chain_funded_txo_count 4 chain_spent_txo_count 1 chain_spent_txo_sum 1000 mempool_funded_txo_count 8 mempool_spent_txo_count 2 mempool_spent_txo_sum 600",
+                "address tx txid rate-tx confirmed true block_height 800000 fee 50 size 200 weight 400 block_hash blockhash1 block_time 1700001111 version 2 locktime 9 sigops 3 fee_rate 0.5",
+                "utxo txid utxotx444 vout 1 value 5000 confirmed true",
+            ],
+        );
+        let address_painted = painted_of(&host);
+        assert!(
+            address_painted.contains(
+                "address DDogAddress111 chain_tx_count 7 funded_sum 9000 mempool_tx_count 3"
+            ),
+            "{address_painted}"
+        );
+        assert!(
+            address_painted.contains("mempool_funded_sum 2500"),
+            "{address_painted}"
+        );
+        assert!(
+            host.painted_rows()
+                .iter()
+                .any(|row| row == "row utxo value 5000")
+        );
+        assert!(host.painted_rows().iter().all(|row| {
+            if row.starts_with("row utxo ") {
+                transaction_id_in_row(row).is_none()
+            } else {
+                true
+            }
+        }));
+        assert_no_private_key(&address_painted);
+
+        let recent = r#"[{"txid":"recent-fast","fee":200,"vsize":50,"value":9},{"txid":"recent-zero","fee":80,"vsize":0,"value":1}]"#;
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (
+                    "/mempool".to_string(),
+                    r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[10.5,200]]}"#
+                        .to_string(),
+                ),
+                ("/mempool/recent".to_string(), recent.to_string()),
+            ]),
+        );
+        host.activate(Screen::Mempool).expect("mempool");
+        assert_painted_screen(&host, "mempool");
+        assert_view(
+            &host,
+            &[
+                "mempool count 4 vsize 500 total_fee 90",
+                "fee_histogram 10.5 200",
+                "The incoming virtual-bytes-per-second rate is not in the payload.",
+                "recent txid recent-fast fee 200 vsize 50 value 9 fee_rate 4",
+            ],
+        );
+        let mempool_painted = painted_of(&host);
+        let zero_recent: Vec<_> = mempool_painted
+            .lines()
+            .filter(|line| line.starts_with("recent ") && line.contains("recent-zero"))
+            .collect();
+        assert_eq!(
+            zero_recent,
+            vec!["recent txid recent-zero fee 80 vsize 0 value 1"]
+        );
+        assert_eq!(
+            lines_with(&mempool_painted, "row tx "),
+            vec![
+                "row tx txid recent-fast fee 200",
+                "row tx txid recent-zero fee 80",
+            ]
+        );
+        for line in lines_with(&mempool_painted, "row tx ") {
+            assert!(!line.contains("fee_rate"), "{line}");
+        }
+        assert_no_private_key(&mempool_painted);
+
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/blocks/tip/height".to_string(), "100".to_string()),
+                ("/blocks/tip/hash".to_string(), "abc".to_string()),
+                ("/blocks".to_string(), "[]".to_string()),
+                ("/mempool/recent".to_string(), "[]".to_string()),
+                (
+                    "/fee-estimates".to_string(),
+                    r#"{"1":12.5,"6":5}"#.to_string(),
+                ),
+                (
+                    "/mempool".to_string(),
+                    r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+                ),
+            ]),
+        );
+        host.activate(Screen::Dashboard).expect("dashboard");
+        assert_painted_screen(&host, "dashboard");
+        assert_view(&host, &["fee target 1 rate 12.5", "fee target 6 rate 5"]);
+        assert_no_private_key(&painted_of(&host));
+
+        let render = source_fn(include_str!("main.rs"), "fn render(", "\nfn main");
+        assert!(
+            render.contains("open_transaction"),
+            "shell row click does not open the transaction: {render}"
+        );
+    }
+
+    #[test]
     fn indexer_field_multi_address_paints_mempool_funded_sum() {
         let stats = r#"{"address":"addrA","chain_stats":{"tx_count":2,"funded_txo_count":2,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":2500,"spent_txo_sum":0}}"#;
         let (mut host, rec) = host_with(
@@ -3310,7 +5737,9 @@ mod tests {
     }
 
     fn lines_with<'a>(text: &'a str, prefix: &str) -> Vec<&'a str> {
-        text.lines().filter(|line| line.starts_with(prefix)).collect()
+        text.lines()
+            .filter(|line| line.starts_with(prefix))
+            .collect()
     }
 
     fn assert_no_private_key(text: &str) {
@@ -3388,14 +5817,17 @@ mod tests {
             BTreeMap::from([
                 ("/block/aaaa".to_string(), block.to_string()),
                 ("/block/aaaa/txs".to_string(), txs.to_string()),
-                ("/block/aaaa/txids".to_string(), r#"["one","two"]"#.to_string()),
+                (
+                    "/block/aaaa/txids".to_string(),
+                    r#"["one","two"]"#.to_string(),
+                ),
             ]),
         );
         host.block.query = "aaaa".to_string();
         host.activate(Screen::Block).expect("block");
         let painted = painted_of(&host);
         assert_eq!(
-            lines_with(&painted, "row block "),
+            lines_with(&painted, "row block height "),
             vec!["row block height 10 hash aaaa tx_count 2 time 1000"],
             "block screen is one flat sentence: {painted}"
         );
@@ -3485,10 +5917,7 @@ mod tests {
         );
         assert_eq!(
             lines_with(&painted, "row address "),
-            vec![
-                "row address funded_sum 20",
-                "row address funded_sum 40",
-            ],
+            vec!["row address funded_sum 20", "row address funded_sum 40",],
             "{painted}"
         );
         assert_no_private_key(&painted);
@@ -3513,6 +5942,7 @@ mod tests {
             vec![
                 splora_frontend_shared::mempool_path().to_string(),
                 splora_frontend_shared::mempool_recent_path().to_string(),
+                splora_frontend_shared::mempool_txids_path().to_string(),
             ]
         );
         let painted = painted_of(&host);
@@ -3535,5 +5965,973 @@ mod tests {
         );
         assert!(!render.contains("private-key"), "{render}");
         assert!(!render.contains("nsec"), "{render}");
+    }
+    #[test]
+    fn calculator_typing_updates_bitcoin_satoshis_and_yen() {
+        let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+        host.activate(Screen::Calculator).expect("calculator");
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty());
+        assert_eq!(host.screen, Screen::Calculator);
+
+        let usd = splora_frontend_shared::loaded_calculator(splora_frontend_shared::FiatCode::Usd);
+        let from_fiat = splora_frontend_shared::enter_fiat(&usd, "100").expect("100 usd");
+        let fixed = calculator_screen_text();
+        assert!(
+            !fixed.contains(&format!("entered bitcoin {}", from_fiat.btc)),
+            "fixed calculator already paints typed bitcoin"
+        );
+
+        host.enter_calculator_amount("fiat", "100");
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("entered bitcoin {}", from_fiat.btc)),
+            "entering fiat did not change bitcoin: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("entered satoshis {}", from_fiat.sats)),
+            "entering fiat did not change satoshis: {painted}"
+        );
+        assert_ne!(from_fiat.btc, usd.btc);
+        assert_ne!(from_fiat.sats, usd.sats);
+
+        let from_btc = splora_frontend_shared::enter_btc(&from_fiat, "2");
+        host.enter_calculator_amount("bitcoin", "2");
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("entered fiat {}", from_btc.fiat)),
+            "entering bitcoin did not change fiat: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("entered satoshis {}", from_btc.sats)),
+            "entering bitcoin did not change satoshis: {painted}"
+        );
+        assert_ne!(from_btc.fiat, from_fiat.fiat);
+        assert_ne!(from_btc.sats, from_fiat.sats);
+
+        let btc_from_sats = splora_frontend_shared::sats_to_btc(50_000);
+        let from_sats = splora_frontend_shared::enter_btc(&from_btc, &btc_from_sats);
+        host.enter_calculator_amount("satoshis", "50000");
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("entered bitcoin {}", from_sats.btc)),
+            "entering satoshis did not change bitcoin: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("entered fiat {}", from_sats.fiat)),
+            "entering satoshis did not change fiat: {painted}"
+        );
+        assert_ne!(from_sats.btc, from_btc.btc);
+        assert_ne!(from_sats.fiat, from_btc.fiat);
+
+        host.choose_calculator_fiat(splora_frontend_shared::FiatCode::Jpy);
+        host.enter_calculator_amount("bitcoin", "1");
+        let yen = splora_frontend_shared::btc_fiat_jpy("1");
+        assert_eq!(yen, "\u{00A5}11,057,757");
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("chosen {yen}")),
+            "JPY choice did not use the fixture yen rate: {painted}"
+        );
+        assert!(
+            !calculator_screen_text().contains("chosen "),
+            "chosen line must come from typing, not the fixed calculator string"
+        );
+        assert!(!painted.contains("Fiat price last updated"), "{painted}");
+        assert_no_private_key(&painted);
+        assert_eq!(host.screen, Screen::Calculator);
+
+        let source = production_screens_source();
+        assert!(
+            source.contains("enter_fiat("),
+            "native calculator does not call enter_fiat"
+        );
+        assert!(
+            source.contains("enter_btc("),
+            "native calculator does not call enter_btc"
+        );
+        assert!(
+            source.contains("sats_to_btc("),
+            "satoshi entry does not convert through sats_to_btc"
+        );
+        assert!(
+            !source.contains("fn enter_fiat(") && !source.contains("fn enter_btc("),
+            "shared enter functions were copied into the native shell"
+        );
+        assert!(
+            !source.contains("FiatCode::Usd") && !source.contains("FiatCode::Jpy"),
+            "native crate copied the USD versus JPY match"
+        );
+    }
+
+    /// Shell keys call `push_str` for characters and `submit` to commit.
+    /// Draft tokens are `fiat <amount>`, `bitcoin <amount>`, `satoshis <amount>`, and `jpy`.
+    /// The `jpy` token calls `choose_calculator_fiat` for the fixture yen rate.
+    #[test]
+    fn calculator_shell_submit_updates_bitcoin_satoshis_and_yen() {
+        let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+        host.activate(Screen::Calculator).expect("calculator");
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty());
+        assert_eq!(host.screen, Screen::Calculator);
+
+        let usd = splora_frontend_shared::loaded_calculator(splora_frontend_shared::FiatCode::Usd);
+        let from_fiat = splora_frontend_shared::enter_fiat(&usd, "100").expect("100 usd");
+        host.push_str("fiat 100");
+        let _ = host.submit();
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("entered bitcoin {}", from_fiat.btc)),
+            "shell submit of fiat did not change bitcoin: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("entered satoshis {}", from_fiat.sats)),
+            "shell submit of fiat did not change satoshis: {painted}"
+        );
+
+        let from_btc = splora_frontend_shared::enter_btc(&from_fiat, "2");
+        host.push_str("bitcoin 2");
+        let _ = host.submit();
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("entered fiat {}", from_btc.fiat)),
+            "shell submit of bitcoin did not change fiat: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("entered satoshis {}", from_btc.sats)),
+            "shell submit of bitcoin did not change satoshis: {painted}"
+        );
+
+        let btc_from_sats = splora_frontend_shared::sats_to_btc(50_000);
+        let from_sats = splora_frontend_shared::enter_btc(&from_btc, &btc_from_sats);
+        host.push_str("satoshis 50000");
+        let _ = host.submit();
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("entered bitcoin {}", from_sats.btc)),
+            "shell submit of satoshis did not change bitcoin: {painted}"
+        );
+        assert!(
+            painted.contains(&format!("entered fiat {}", from_sats.fiat)),
+            "shell submit of satoshis did not change fiat: {painted}"
+        );
+
+        host.push_str("jpy");
+        let _ = host.submit();
+        host.push_str("bitcoin 1");
+        let _ = host.submit();
+        let yen = splora_frontend_shared::btc_fiat_jpy("1");
+        assert_eq!(yen, "\u{00A5}11,057,757");
+        let painted = host.rendered();
+        assert!(
+            painted.contains(&format!("chosen {yen}")),
+            "shell jpy token did not use the fixture yen rate: {painted}"
+        );
+        assert!(!painted.contains("Fiat price last updated"), "{painted}");
+        assert_no_private_key(&painted);
+        assert_eq!(host.screen, Screen::Calculator);
+
+        let main = include_str!("main.rs");
+        let start = main.find("on_key_down").expect("key handler");
+        let end = main[start..]
+            .find("cx.notify()")
+            .expect("end of key handler");
+        let handler = &main[start..start + end];
+        assert!(
+            handler.contains("Screen::Calculator"),
+            "main.rs key handler does not reach the calculator: {handler}"
+        );
+        assert!(
+            handler.contains("submit()"),
+            "main.rs key handler does not submit the calculator: {handler}"
+        );
+    }
+
+    #[test]
+    fn calculator_fiat_screens_call_shared_functions() {
+        let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+        host.activate(Screen::Calculator).expect("calculator");
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty());
+        assert_painted_screen(&host, "calculator");
+        assert_view(&host, &["100000000", "1.12345678", "21000000"]);
+        assert_no_private_key(&painted_of(&host));
+
+        host.activate(Screen::Fiat).expect("fiat");
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty());
+        assert_painted_screen(&host, "fiat");
+        assert_view(&host, &["$123456", "\u{00A5}11057757"]);
+        let jpy = jpy_fixture_text();
+        assert_eq!(jpy.chars().next(), Some('¥'));
+        assert!(!jpy.contains('.'));
+        assert!(!jpy.contains('\u{FFE5}'));
+        assert_eq!(jpy, "\u{00A5}11057757");
+        assert_eq!(switched_fiat_symbols(), ['$', '\u{00A5}', '$']);
+        assert_eq!(usd_fixture_text(), "$123456");
+        assert_no_private_key(&painted_of(&host));
+
+        for (screen, label, page) in [
+            (Screen::Statistics, "statistics", statistics_page_text()),
+            (Screen::Mining, "mining", mining_page_text()),
+            (Screen::Lightning, "lightning", lightning_page_text()),
+        ] {
+            let (mut page_host, page_rec) = host_with(Network::Mainnet, BTreeMap::new());
+            page_host.activate(screen).expect(label);
+            assert!(
+                page_rec.get_paths().is_empty(),
+                "{label} {:?}",
+                page_rec.get_paths()
+            );
+            assert!(page_rec.post_paths().is_empty(), "{label}");
+            assert_eq!(page, "not-served");
+            assert_painted_screen(&page_host, label);
+            assert_view(&page_host, &["not-served"]);
+            let painted = painted_of(&page_host);
+            assert_no_private_key(&painted);
+            let lower = page_host.rendered().to_ascii_lowercase();
+            for banned in ["chart", "canvas", "svg", "channel"] {
+                assert!(!lower.contains(banned), "{label} contains {banned}");
+            }
+        }
+
+        let source = production_screens_source();
+        for name in [
+            "btc_to_sats",
+            "truncate_btc_decimals",
+            "cap_btc_supply",
+            "format_fiat",
+            "btc_fiat_usd",
+            "btc_fiat_jpy",
+            "sats_fiat_usd",
+            "switch_usd_jpy_usd",
+            "route_availability",
+        ] {
+            assert!(
+                source.contains(&format!("{name}(")),
+                "{name} is not called from the shell screens"
+            );
+            assert!(
+                !source.contains(&format!("fn {name}(")),
+                "{name} is copied into the native shell"
+            );
+        }
+        let render = source_fn(include_str!("main.rs"), "fn render(", "\nfn main");
+        let render_compact: String = render.chars().filter(|ch| !ch.is_whitespace()).collect();
+        assert!(render_compact.contains(".child(self.body_text())"));
+        assert!(render.contains("screen_choices"));
+        assert!(!render.to_ascii_lowercase().contains("private key"));
+        assert!(!render.contains("private-key"));
+    }
+
+    #[test]
+    fn painted_calculator_includes_shared_fixture_fiat_amounts() {
+        let third = splora_frontend_shared::btc_fiat_usd("0.33");
+        let one_sat = splora_frontend_shared::btc_fiat_usd("0.00000001");
+        let yen = splora_frontend_shared::btc_fiat_jpy("1");
+        let ten_thousand_sats = splora_frontend_shared::sats_fiat_usd(10_000);
+        assert_eq!(third, "$40,740.48");
+        assert_eq!(one_sat, "$0.00");
+        assert_eq!(yen, "\u{00A5}11,057,757");
+        assert_eq!(ten_thousand_sats, "$12.35");
+
+        let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+        host.activate(Screen::Calculator).expect("calculator");
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty());
+        assert_painted_screen(&host, "calculator");
+        let painted = painted_of(&host);
+        let rendered = host.rendered();
+        for amount in [&third, &one_sat, &yen, &ten_thousand_sats] {
+            assert!(
+                painted.contains(amount.as_str()),
+                "painted calculator missing shared fiat {amount}: {painted}"
+            );
+            assert!(
+                rendered.contains(amount.as_str()),
+                "calculator render missing shared fiat {amount}: {rendered}"
+            );
+        }
+        assert_no_private_key(&painted);
+        assert!(
+            painted.contains("A live price feed is not served."),
+            "{painted}"
+        );
+        assert!(painted.contains("Copy"), "{painted}");
+        assert!(painted.contains("₿"), "{painted}");
+
+        let body = source_fn(
+            production_screens_source(),
+            "fn calculator_screen_text(",
+            "fn fiat_screen_text(",
+        );
+        for call in [
+            "btc_fiat_usd(",
+            "btc_fiat_jpy(",
+            "sats_fiat_usd(",
+            "route_availability(\"/v1/prices\")",
+        ] {
+            assert!(
+                body.contains(call),
+                "calculator_screen_text does not call {call}"
+            );
+        }
+        for literal in ["$40,740.48", "$0.00", "11,057,757", "$12.35"] {
+            assert!(
+                !body.contains(literal),
+                "calculator_screen_text copies {literal} instead of calling shared fiat"
+            );
+        }
+    }
+
+    fn page_fn_body<'a>(source: &'a str, name: &str) -> &'a str {
+        let signature = format!("fn {name}(");
+        let start = source
+            .find(&signature)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let rest = &source[start..];
+        let end = rest
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("missing end of {name}"));
+        &rest[..end]
+    }
+
+    #[test]
+    fn later_routes_show_the_shared_not_served_sentence() {
+        let cases = [
+            (
+                Screen::Statistics,
+                "statistics",
+                statistics_page_text(),
+                "/api/v1/statistics",
+            ),
+            (Screen::Mining, "mining", mining_page_text(), "/v1/mining"),
+            (
+                Screen::Graphs,
+                "graphs",
+                graphs_page_text(),
+                "/api/v1/statistics",
+            ),
+            (
+                Screen::Hashrate,
+                "hashrate",
+                hashrate_page_text(),
+                "/v1/mining",
+            ),
+            (
+                Screen::PriceChart,
+                "price chart",
+                price_chart_page_text(),
+                "/api/v1/historical-price",
+            ),
+            (
+                Screen::Lightning,
+                "lightning",
+                lightning_page_text(),
+                "/lightning",
+            ),
+        ];
+        for (screen, label, page, path) in cases {
+            let shared = splora_frontend_shared::route_availability(path);
+            assert_eq!(page, shared, "{label}");
+            let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+            host.activate(screen).expect(label);
+            assert!(
+                rec.get_paths().is_empty(),
+                "{label} fetched {:?}",
+                rec.get_paths()
+            );
+            assert!(rec.post_paths().is_empty(), "{label}");
+            assert_eq!(host.query_text(), "", "{label}");
+            assert!(host.painted_rows().is_empty(), "{label}");
+            assert_painted_screen(&host, label);
+            assert_eq!(host.rendered(), shared, "{label}");
+            assert_view(&host, &[shared]);
+            let painted = painted_of(&host);
+            assert_no_private_key(&painted);
+            assert!(!painted.contains("mempool.space"), "{painted}");
+            let body = host.rendered();
+            let lower = body.to_ascii_lowercase();
+            for banned in ["canvas", "svg", "polyline", "channel", "mempool.space"] {
+                assert!(!lower.contains(banned), "{label} contains {banned}: {body}");
+            }
+            assert!(
+                !lower.contains("chart"),
+                "{label} body paints a chart: {body}"
+            );
+            if label == "price chart" {
+                let without_label = painted.replace("screen: price chart", "screen: price");
+                assert!(
+                    !without_label.to_ascii_lowercase().contains("chart"),
+                    "{painted}"
+                );
+            } else {
+                assert!(!painted.to_ascii_lowercase().contains("chart"), "{painted}");
+            }
+        }
+
+        assert_eq!(statistics_page_text(), "not-served");
+        assert_eq!(mining_page_text(), "not-served");
+        assert_eq!(graphs_page_text(), "not-served");
+        assert_eq!(hashrate_page_text(), "not-served");
+        assert_eq!(lightning_page_text(), "not-served");
+        assert_eq!(price_chart_page_text(), "not-checked");
+
+        let links = Dashboard::new().links();
+        for link in [
+            "statistics",
+            "mining",
+            "graphs",
+            "hashrate",
+            "price chart",
+            "lightning",
+        ] {
+            assert!(links.contains(&link), "{link}");
+            let screen = Screen::from_link(link).expect(link);
+            assert_eq!(screen.label(), link);
+        }
+
+        let source = production_screens_source();
+        assert!(!source.contains("fn route_availability("));
+        for (name, path) in [
+            ("graphs_page_text", "/api/v1/statistics"),
+            ("hashrate_page_text", "/v1/mining"),
+            ("price_chart_page_text", "/api/v1/historical-price"),
+            ("statistics_page_text", "/api/v1/statistics"),
+            ("mining_page_text", "/v1/mining"),
+            ("lightning_page_text", "/lightning"),
+        ] {
+            let body = page_fn_body(source, name);
+            assert!(
+                body.contains("route_availability("),
+                "{name} does not call route_availability"
+            );
+            assert!(body.contains(path), "{name} does not pass {path}");
+            assert!(
+                !body.contains("\"not-served\""),
+                "{name} hardcodes the sentence"
+            );
+            assert!(
+                !body.contains("\"not-checked\""),
+                "{name} hardcodes the sentence"
+            );
+            let lower = body.to_ascii_lowercase();
+            for banned in [
+                "canvas",
+                "svg",
+                "polyline",
+                "nsec",
+                "private-key",
+                "private key",
+            ] {
+                assert!(!lower.contains(banned), "{name} contains {banned}");
+            }
+        }
+        assert!(source.contains("Screen::Graphs => graphs_page_text()"));
+        assert!(source.contains("Screen::Hashrate => hashrate_page_text()"));
+        assert!(source.contains("Screen::PriceChart => price_chart_page_text()"));
+    }
+
+    #[test]
+    fn painted_pools_shows_route_availability_for_mining() {
+        let path = "/v1/mining";
+        let shared = splora_frontend_shared::route_availability(path);
+        assert_eq!(pools_page_text(), shared, "pools paint");
+        let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+        host.activate(Screen::Pools).expect("pools");
+        assert!(rec.get_paths().is_empty(), "{:?}", rec.get_paths());
+        assert!(rec.post_paths().is_empty());
+        assert_painted_screen(&host, "pools");
+        assert_eq!(host.rendered(), shared);
+        assert_view(&host, &[shared]);
+        let painted = painted_of(&host);
+        assert_no_private_key(&painted);
+        assert!(!painted.contains("mempool.space"), "{painted}");
+        assert!(!painted.to_ascii_lowercase().contains("chart"), "{painted}");
+        let source = production_screens_source();
+        let body = page_fn_body(source, "pools_page_text");
+        assert!(body.contains("route_availability("));
+        assert!(body.contains(path));
+        assert!(!body.contains("\"not-served\""));
+        assert!(!body.contains("\"not-checked\""));
+        assert!(source.contains("Screen::Pools => pools_page_text()"));
+    }
+
+    fn hex64(byte: &str) -> String {
+        byte.repeat(32)
+    }
+
+    /// Row clicks, dashboard search, pages, spends, package broadcast, and liquid assets.
+    #[test]
+    fn row_click_opens_block_address_search_pages_spends_and_package() {
+        let block_hash = "abc123def456";
+        let prev_hash = "prevhash1";
+        let next_best = "nextbest1";
+        let confirming = "confhash1";
+        let block = format!(
+            r#"{{"id":"{block_hash}","height":800000,"version":1,"timestamp":1700000000,"tx_count":1,"size":200,"weight":800,"merkle_root":"mm","previousblockhash":"{prev_hash}","mediantime":1700000000,"nonce":1,"bits":2,"difficulty":3.0}}"#
+        );
+        let prev_block = format!(
+            r#"{{"id":"{prev_hash}","height":799999,"version":1,"timestamp":1699999999,"tx_count":1,"size":10,"weight":40,"merkle_root":"pm","previousblockhash":"genesis","mediantime":1699999999,"nonce":1,"bits":2,"difficulty":1.0}}"#
+        );
+        let next_block = format!(
+            r#"{{"id":"{next_best}","height":800001,"version":1,"timestamp":1700000001,"tx_count":1,"size":10,"weight":40,"merkle_root":"nm","previousblockhash":"{block_hash}","mediantime":1700000001,"nonce":1,"bits":2,"difficulty":1.0}}"#
+        );
+        let conf_block = format!(
+            r#"{{"id":"{confirming}","height":800000,"version":1,"timestamp":1700000000,"tx_count":1,"size":10,"weight":40,"merkle_root":"cm","previousblockhash":"older","mediantime":1700000000,"nonce":1,"bits":2,"difficulty":1.0}}"#
+        );
+        let empty_txs = "[]";
+        let status =
+            format!(r#"{{"in_best_chain":true,"height":800000,"next_best":"{next_best}"}}"#);
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{block_hash}"), block.clone()),
+                (format!("/block/{block_hash}/txs"), empty_txs.to_string()),
+                (format!("/block/{block_hash}/txids"), empty_txs.to_string()),
+                (format!("/block/{block_hash}/status"), status),
+                (format!("/block/{prev_hash}"), prev_block),
+                (format!("/block/{prev_hash}/txs"), empty_txs.to_string()),
+                (format!("/block/{prev_hash}/txids"), empty_txs.to_string()),
+                (format!("/block/{next_best}"), next_block),
+                (format!("/block/{next_best}/txs"), empty_txs.to_string()),
+                (format!("/block/{next_best}/txids"), empty_txs.to_string()),
+                (format!("/block/{confirming}"), conf_block),
+                (format!("/block/{confirming}/txs"), empty_txs.to_string()),
+                (format!("/block/{confirming}/txids"), empty_txs.to_string()),
+                ("/block-height/800000".to_string(), block_hash.to_string()),
+                ("/block/800000".to_string(), block.clone()),
+            ]),
+        );
+        host.open_row("row block height 800000 hash abc123def456 tx_count 1 time 1700000000")
+            .expect("open block row");
+        assert_eq!(host.screen, Screen::Block);
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path == "/block/abc123def456")
+        );
+        let painted = painted_of(&host);
+        assert!(
+            painted.contains("The transaction list is empty."),
+            "{painted}"
+        );
+        assert!(painted.contains("The txid list is empty."), "{painted}");
+        assert!(painted.contains("next_best nextbest1"), "{painted}");
+        let rows = host.painted_rows();
+        let previous = rows
+            .iter()
+            .find(|row| row.starts_with("row previous_hash "))
+            .expect("previous hash row")
+            .clone();
+        host.open_row(&previous).expect("open previous");
+        assert_eq!(host.block.query, prev_hash);
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path == "/block/prevhash1")
+        );
+        let next_row = host
+            .painted_rows()
+            .into_iter()
+            .find(|row| row.starts_with("row next_best "))
+            .unwrap_or_else(|| "row next_best nextbest1".to_string());
+        host.open_block("abc123def456").expect("back");
+        host.open_row(&next_row).expect("open next best");
+        assert_eq!(host.block.query, next_best);
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path == "/block/nextbest1")
+        );
+        host.open_row("row confirming confhash1")
+            .expect("confirming");
+        assert_eq!(host.screen, Screen::Block);
+        assert_eq!(host.block.query, confirming);
+        host.open_row("row block height 800000")
+            .expect("bare height");
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path == "/block-height/800000"),
+            "{:?}",
+            rec.get_paths()
+        );
+
+        let script = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+        let stats = format!(
+            r#"{{"address":"{script}","chain_stats":{{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":10,"spent_txo_sum":0}},"mempool_stats":{{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":2,"spent_txo_sum":0}}}}"#
+        );
+        let addr_tx = r#"{"txid":"addrconfirmed","version":1,"locktime":0,"vin":[],"vout":[],"size":10,"weight":40,"sigops":0,"fee":1,"status":{"confirmed":true,"block_height":3,"block_hash":"confhash1","block_time":9}}"#;
+        let mempool_tx = r#"{"txid":"addrmempool","version":1,"locktime":0,"vin":[],"vout":[],"size":10,"weight":40,"sigops":0,"fee":2,"status":{"confirmed":false}}"#;
+        let chain_summary =
+            r#"[{"txid":"chainsummary","height":4,"value":15,"time":11,"tx_position":2}]"#;
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{script}"), stats),
+                (format!("/address/{script}/txs"), format!("[{addr_tx}]")),
+                (format!("/address/{script}/utxo"), "[]".to_string()),
+                (
+                    format!("/address/{script}/txs/mempool"),
+                    format!("[{mempool_tx}]"),
+                ),
+                (
+                    format!("/address/{script}/txs/chain/addrconfirmed"),
+                    chain_summary.to_string(),
+                ),
+                (
+                    "/tx/chainsummary".to_string(),
+                    r#"{"txid":"chainsummary","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":3,"status":{"confirmed":true}}"#.to_string(),
+                ),
+                (
+                    "/block/confhash1".to_string(),
+                    r#"{"id":"confhash1","height":3,"version":1,"timestamp":9,"tx_count":1,"size":1,"weight":4,"merkle_root":"m","previousblockhash":"p","mediantime":9,"nonce":1,"bits":1,"difficulty":1.0}"#.to_string(),
+                ),
+                ("/block/confhash1/txs".to_string(), "[]".to_string()),
+                ("/block/confhash1/txids".to_string(), "[]".to_string()),
+            ]),
+        );
+        host.open_row(&format!("row input address {script}"))
+            .expect("input address");
+        assert_eq!(host.screen, Screen::Address);
+        assert!(rec.get_paths().contains(&format!("/address/{script}")));
+        assert!(rec.get_paths().contains(&format!("/address/{script}/txs")));
+        assert!(rec.get_paths().contains(&format!("/address/{script}/utxo")));
+        assert!(
+            rec.get_paths()
+                .contains(&format!("/address/{script}/txs/mempool"))
+        );
+        let painted = painted_of(&host);
+        assert!(painted.contains("The utxo list is empty."), "{painted}");
+        assert!(painted.contains("addrmempool"), "{painted}");
+        host.open_row("row output address bc1qotheroutputaddress000000000000000")
+            .expect_err("missing output address still requests");
+        host.open_address(script).expect("address again");
+        host.open_row("row chain addrconfirmed")
+            .expect("chain page");
+        assert!(rec.get_paths().iter().any(|path| {
+            path == "/address/bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4/txs/chain/addrconfirmed"
+        }));
+        let summary = host
+            .painted_rows()
+            .into_iter()
+            .find(|row| row.contains("chainsummary"))
+            .expect("summary row");
+        assert!(summary.contains("height 4"), "{summary}");
+        assert!(summary.contains("value 15"), "{summary}");
+        assert!(summary.contains("time 11"), "{summary}");
+        assert!(summary.contains("tx_position 2"), "{summary}");
+        assert!(!summary.contains('?'), "{summary}");
+        host.open_row(&summary).expect("summary txid");
+        assert_eq!(host.screen, Screen::Tx);
+        assert_eq!(host.tx.txid, "chainsummary");
+        host.open_address(script).expect("address for keys");
+        host.push_str(" ");
+        host.push_str("addrconfirmed");
+        host.reload().expect("chain from keys");
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path.ends_with("/txs/chain/addrconfirmed"))
+        );
+
+        let page_tx = r#"{"txid":"page25tx","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":8,"status":{"confirmed":true}}"#;
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{block_hash}"), block),
+                (format!("/block/{block_hash}/txs"), empty_txs.to_string()),
+                (
+                    format!("/block/{block_hash}/txids"),
+                    "[\"onlyone\"]".to_string(),
+                ),
+                (
+                    format!("/block/{block_hash}/txs/25"),
+                    format!("[{page_tx}]"),
+                ),
+                ("/blocks/800000".to_string(), "[]".to_string()),
+            ]),
+        );
+        host.open_block(block_hash).expect("block");
+        host.open_row("row page 25").expect("page click");
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path == "/block/abc123def456/txs/25")
+        );
+        assert!(
+            painted_of(&host).contains("page25tx"),
+            "{}",
+            painted_of(&host)
+        );
+        host.block.start_index.clear();
+        host.push_str(" ");
+        host.push_str("25");
+        host.reload().expect("page keys");
+        assert!(
+            rec.get_paths()
+                .iter()
+                .filter(|path| path.as_str() == "/block/abc123def456/txs/25")
+                .count()
+                >= 2
+        );
+        host.activate(Screen::Blocks).expect("blocks");
+        host.push_str("800000");
+        host.reload().expect("blocks height");
+        assert!(rec.get_paths().iter().any(|path| path == "/blocks/800000"));
+
+        let tx_hex = hex64("ab");
+        let block_hex = hex64("cd");
+        let script_hex = hex64("ef");
+        let script_stats = format!(
+            r#"{{"scripthash":"{script_hex}","chain_stats":{{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}},"mempool_stats":{{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}}}"#
+        );
+        let found_tx = format!(
+            r#"{{"txid":"{tx_hex}","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+        );
+        let found_block = format!(
+            r#"{{"id":"{block_hex}","height":9,"version":1,"timestamp":1,"tx_count":0,"size":1,"weight":4,"merkle_root":"m","previousblockhash":"p","mediantime":1,"nonce":1,"bits":1,"difficulty":1.0}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/tx/{tx_hex}"), found_tx),
+                (format!("/block/{block_hex}"), found_block),
+                ("/block-height/42".to_string(), block_hex.clone()),
+                (format!("/block/{block_hex}/txs"), "[]".to_string()),
+                (format!("/block/{block_hex}/txids"), "[]".to_string()),
+                (
+                    format!("/tx/{block_hex}"),
+                    "Transaction not found".to_string(),
+                ),
+                (format!("/scripthash/{script_hex}"), script_stats),
+                (format!("/scripthash/{script_hex}/txs"), "[]".to_string()),
+                (format!("/scripthash/{script_hex}/utxo"), "[]".to_string()),
+                (
+                    "/address-prefix/bc1qzz".to_string(),
+                    "address search disabled".to_string(),
+                ),
+                (
+                    format!("/address/{script}"),
+                    format!(
+                        r#"{{"address":"{script}","chain_stats":{{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}},"mempool_stats":{{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}}}"#
+                    ),
+                ),
+                (format!("/address/{script}/txs"), "[]".to_string()),
+                (format!("/address/{script}/utxo"), "[]".to_string()),
+            ]),
+        );
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.push_str(&tx_hex);
+        host.reload().expect("search tx");
+        assert_eq!(host.screen, Screen::Tx);
+        assert_eq!(host.tx.txid, tx_hex);
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.push_str(&block_hex);
+        host.reload().expect("search block");
+        assert_eq!(host.screen, Screen::Block);
+        assert_eq!(host.block.query, block_hex);
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.push_str("42");
+        host.reload().expect("search height");
+        assert_eq!(host.screen, Screen::Block);
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| path == "/block-height/42")
+        );
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.push_str(script);
+        host.reload().expect("search address");
+        assert_eq!(host.screen, Screen::Address);
+        assert_eq!(host.address.address, script);
+        let painted = painted_of(&host);
+        assert!(
+            painted.contains("The address transaction list is empty."),
+            "{painted}"
+        );
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.push_str(&script_hex);
+        host.reload().expect("search scripthash");
+        assert_eq!(host.screen, Screen::Address);
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| *path == format!("/scripthash/{script_hex}"))
+        );
+        assert!(rec.get_paths().iter().all(|path| !path.contains('?')));
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.push_str("bc1qzz");
+        host.reload().expect("prefix");
+        let painted = painted_of(&host);
+        assert!(painted.contains("address search disabled"), "{painted}");
+        assert_ne!(host.notice, "bad path");
+        assert!(!painted.contains("asset name"), "{painted}");
+
+        let spend_tx = "spendtx111";
+        let raw_hex = "deadbeef";
+        let tx_body = r#"{"txid":"rate-tx","version":2,"locktime":9,"vin":[{"txid":"prev","vout":1,"prevout":{"scriptpubkey":"0014scriptpubkeyhex","scriptpubkey_asm":"asmspecial","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qinput","value":610677},"scriptsig":"scriptsigsecret","scriptsig_asm":"asmspecial","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}],"vout":[{"scriptpubkey":"0014outputscriptpubkeyhex","scriptpubkey_asm":"asmspecial","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qoutput","value":344697}],"size":200,"weight":400,"sigops":3,"fee":50,"status":{"confirmed":true,"block_height":800000,"block_hash":"confhash1","block_time":1700001111}}"#;
+        let (mut host, _rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/tx/rate-tx".to_string(), tx_body.to_string()),
+                (
+                    "/tx/rate-tx/outspends".to_string(),
+                    format!(
+                        r#"[{{"spent":true,"txid":"{spend_tx}","vin":0,"status":{{"confirmed":true,"block_height":4,"block_hash":"confhash1","block_time":8}}}}]"#
+                    ),
+                ),
+                (
+                    "/tx/rate-tx/merkle-proof".to_string(),
+                    r#"{"block_height":800000,"merkle":["abcd"],"pos":1}"#.to_string(),
+                ),
+                ("/tx/rate-tx/hex".to_string(), raw_hex.to_string()),
+                (
+                    format!("/tx/{spend_tx}"),
+                    format!(
+                        r#"{{"txid":"{spend_tx}","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":1,"status":{{"confirmed":true}}}}"#
+                    ),
+                ),
+                (
+                    "/block/confhash1".to_string(),
+                    r#"{"id":"confhash1","height":800000,"version":1,"timestamp":1,"tx_count":1,"size":1,"weight":4,"merkle_root":"m","previousblockhash":"p","mediantime":1,"nonce":1,"bits":1,"difficulty":1.0}"#.to_string(),
+                ),
+                ("/block/confhash1/txs".to_string(), "[]".to_string()),
+                ("/block/confhash1/txids".to_string(), "[]".to_string()),
+            ]),
+        );
+        host.open_transaction("rate-tx").expect("tx");
+        let painted = painted_of(&host);
+        assert!(painted.contains("spend txid spendtx111"), "{painted}");
+        assert!(
+            painted.contains("merkle block_height 800000 pos 1"),
+            "{painted}"
+        );
+        assert!(painted.contains("tx hex deadbeef"), "{painted}");
+        let short = host
+            .painted_rows()
+            .into_iter()
+            .find(|row| row.starts_with("row tx "))
+            .expect("short row");
+        assert_eq!(short, "row tx txid rate-tx fee 50");
+        assert!(!short.contains(raw_hex), "{short}");
+        assert!(!short.contains("0014scriptpubkeyhex"), "{short}");
+        assert!(!short.contains("abcdwitnesshex"), "{short}");
+        host.open_row("row spend txid spendtx111").expect("spend");
+        assert_eq!(host.screen, Screen::Tx);
+        assert_eq!(host.tx.txid, spend_tx);
+        host.open_row("row confirming confhash1")
+            .expect("confirming from tx");
+        assert_eq!(host.screen, Screen::Block);
+
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/block/nope".to_string(), "Block not found".to_string()),
+                ("/tx/nope".to_string(), "Transaction not found".to_string()),
+            ]),
+        );
+        let err = host.open_block("nope").expect_err("block missing");
+        assert!(
+            err.to_string().contains("Block not found") || host.notice.contains("Block not found")
+        );
+        let painted = painted_of(&host);
+        assert!(painted.contains("Block not found"), "{painted}");
+        assert_ne!(painted.trim(), "bad path");
+        assert_ne!(host.notice, "bad path");
+        assert_ne!(host.notice, "http:");
+        let err = host.open_transaction("nope").expect_err("tx missing");
+        let painted = painted_of(&host);
+        assert!(painted.contains("Transaction not found"), "{painted} {err}");
+        assert!(!host.notice.starts_with("http:"), "{}", host.notice);
+
+        let package = r#"{"package_msg":"success","tx-results":{"aa":{"txid":"pkgtx1","vsize":100,"error":null}},"replaced-transactions":["oldtx"]}"#;
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/txs/package".to_string(), package.to_string())]),
+        );
+        host.activate(Screen::Broadcast).expect("broadcast");
+        host.broadcast.raw_tx = "abcd,ef01".to_string();
+        host.submit().expect("package");
+        assert_eq!(rec.post_paths(), vec!["/txs/package".to_string()]);
+        let painted = painted_of(&host);
+        assert!(painted.contains("broadcast package success"), "{painted}");
+        assert!(painted.contains("pkgtx1"), "{painted}");
+        assert!(!painted.contains("replace-by-fee"), "{painted}");
+        assert!(!painted.contains("replacements"), "{painted}");
+        assert!(Screen::from_link("replacements").is_none());
+
+        let asset = hex64("12");
+        let asset_body = r#"{"name":"Tether USD","ticker":"USDt","precision":8}"#;
+        let asset_tx = format!(
+            r#"[{{"txid":"assettx1","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":1,"status":{{"confirmed":true}}}}]"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Liquid,
+            BTreeMap::from([
+                (format!("/tx/{asset}"), "Transaction not found".to_string()),
+                (format!("/block/{asset}"), "Block not found".to_string()),
+                (format!("/asset/{asset}"), asset_body.to_string()),
+                (format!("/asset/{asset}/txs"), asset_tx),
+            ]),
+        );
+        host.activate(Screen::Dashboard).expect("liquid dashboard");
+        host.push_str(&asset);
+        host.reload().expect("asset");
+        let painted = painted_of(&host);
+        assert!(painted.contains("asset name Tether USD"), "{painted}");
+        assert!(painted.contains("ticker USDt"), "{painted}");
+        assert!(painted.contains("assettx1"), "{painted}");
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| *path == format!("/asset/{asset}"))
+        );
+        assert!(
+            rec.get_paths()
+                .iter()
+                .any(|path| *path == format!("/asset/{asset}/txs"))
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/tx/{asset}"), "Transaction not found".to_string()),
+                (format!("/block/{asset}"), "Block not found".to_string()),
+                (format!("/asset/{asset}"), asset_body.to_string()),
+                (
+                    format!("/scripthash/{asset}"),
+                    "address search disabled".to_string(),
+                ),
+            ]),
+        );
+        host.activate(Screen::Dashboard).expect("mainnet dashboard");
+        host.push_str(&asset);
+        let _ = host.reload();
+        let painted = painted_of(&host);
+        assert!(
+            rec.get_paths().iter().all(|path| !path.contains("/asset/")),
+            "{:?}",
+            rec.get_paths()
+        );
+        assert!(!painted.contains("Tether USD"), "{painted}");
+        assert!(!painted.contains("USDt"), "{painted}");
+        let (mut host, _) = host_with(
+            Network::Liquid,
+            BTreeMap::from([
+                (format!("/tx/{asset}"), "Transaction not found".to_string()),
+                (format!("/block/{asset}"), "Block not found".to_string()),
+                (
+                    format!("/asset/{asset}"),
+                    "endpoint does not exist /asset".to_string(),
+                ),
+            ]),
+        );
+        host.activate(Screen::Dashboard).expect("liquid");
+        host.push_str(&asset);
+        let _ = host.reload();
+        let painted = painted_of(&host);
+        assert!(painted.contains("not-served"), "{painted}");
+        assert!(!painted.contains("Tether USD"), "{painted}");
     }
 }

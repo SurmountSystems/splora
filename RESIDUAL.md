@@ -447,6 +447,8 @@ The highest value next is not mining and not a serve. It is the 86 later rows on
 
 ## Open
 
+The rest-of-indexer wave is in the tree. Shared parsers are in frontend/shared. The GPUI program shows compact history, a multi-address post, per-output spends, the transaction at an index, raw header and raw block and raw transaction and merkleblock proof beside the rows, and the liquid registry and supply only on liquid. That GPUI review passed. The Leptos page shows raw block bytes and raw transaction bytes as hex beside the rows, and a failed block-height body is a notice. The review of that Leptos fix passed. Totals stay 177, 130 ported, 45 later, and 2 with no backend. The 45 later rows stay later. Mining, pools, graphs, statistics, and replace-by-fee stay later. A person has not used either program against a live indexer.
+
 ### Explorer screens
 
 Shared `BlockRow`, `TxRow`, and `AddressRow` live in `frontend/shared/src/rows.rs`. The shared cargo test exited 0. The report is `/home/hunter/.agents/reports/shared-row-model.md`. The test `explorer_views_render_one_row_per_block_or_transaction` was red, then green. The web cargo test exited 0. The report is `/home/hunter/.agents/reports/web-rows.md`. The test `painted_shell_paints_one_row_per_block_or_transaction` was red, then green. The native cargo test exited 0. The report is `/home/hunter/.agents/reports/native-rows.md`. The 86 later rows stay later. They are not ported. No server is running. The explorer is not finished. The screens are not done. Those three notes are under Shared row model, Web rows, and Native rows above. Web block and transaction views call `BlockRow::from` and `TxRow::from` from `splora_frontend_shared`. Test `block_and_transaction_views_construct_shared_block_row_and_tx_row` was red, then `cargo test --manifest-path frontend/web/Cargo.toml` exited 0. The report is `/home/hunter/.agents/reports/web-shared-rows.md`. The native screen uses the same `BlockRow` and `TxRow`. Test `screens::tests::screen_module_builds_block_and_tx_rows_with_shared_types` was red, then `cargo test --manifest-path frontend/native/Cargo.toml` exited 0. The report is `/home/hunter/.agents/reports/native-shared-rows.md`. Mempool still requests GET `/mempool` and GET `/mempool/recent`. The 86 later rows stay later. The 2 Lightning rows stay no-backend. No server is running. Those notes are under Web shared block and transaction rows and Native shared block and transaction rows above.
@@ -645,3 +647,41 @@ rest-stop then flush then bounded Electrum join order, or the unbounded
 `MAX_HISTORY_TXS = 100`. Skip rows stay skip. Liquid peg-in REST
 `sigops` is closed. The hung Electrum join before the watchdog is
 closed.
+
+## Calculator and fiat
+
+Shared calculator and fiat functions exist. `cargo test --manifest-path frontend/shared/Cargo.toml` exited 0. Statistics, mining, and Lightning are not-served. No new routes in `src/rest.rs`. The reports are `/home/hunter/.agents/reports/shared-calculator-fiat.md` and `/home/hunter/.agents/reports/shared-remaining-review.md`. This shared cargo result is later than Shared field contract above.
+
+Web views call those functions. `cargo test --manifest-path frontend/web/Cargo.toml` exited 0. A focused test failed to compile (exit 101), then passed. The report is `/home/hunter/.agents/reports/web-calculator-fiat.md`. This web cargo result is later than Web shared block and transaction rows above.
+
+The native shell calls those functions. A focused test exited 101, then passed. Full `cargo test --manifest-path frontend/native/Cargo.toml` exited 0 (57 library, 1 window). The report is `/home/hunter/.agents/reports/native-calculator-fiat.md`. A monitor that grepped for `EXIT:` printed FAILED. That is not a test failure. This native cargo result is later than Native shared block and transaction rows above.
+
+86 later rows that need missing routes stay later. Lightning stays no-backend. Lightning has no backend. No server is running. The explorer is not finished. The screens are not done. The note is `/home/hunter/.agents/reports/calculator-residual.md`.
+
+Shared fixture fiat amounts. `cargo test --manifest-path frontend/shared/Cargo.toml` exited 0 after a first exit 101. The strings are `$40,740.48`, `$0.00`, `¥11,057,757`, and `$12.35`. The report is `/home/hunter/.agents/reports/shared-fiat-amounts.md`. No price route was added.
+
+The web calculator calls `btc_fiat_usd`, `btc_fiat_jpy`, and `sats_fiat_usd`. The fiat test failed first because the view did not import `btc_fiat_usd`. Then `cargo test --manifest-path frontend/web/Cargo.toml` exited 0. The report is `/home/hunter/.agents/reports/web-fiat-strings.md`.
+
+The native calculator paints the same four strings through those functions. `cargo test --manifest-path frontend/native/Cargo.toml` exited 0 (58 library tests, 1 binary test). The report is `/home/hunter/.agents/reports/native-fiat-strings.md`.
+
+86 later rows that need missing routes stay later. Lightning stays no-backend. No server is running.
+
+## Shared later recount
+
+`cargo test --manifest-path frontend/shared/Cargo.toml` exited 0. 57 rows are still later. 29 calculator and fiat rows moved to ported. 42 later rows that need statistics, mining, or a price feed cite `statistics_mining_and_lightning_are_not_served`. That test was extended for `/v1/prices`. Not-served tests added: 0 new test functions. The existing test was extended. No mining, price, or Lightning route was added to `src/rest.rs`. The native price chart text asks whether `/api/v1/historical-price` is available. That availability is `not-checked` (the test expects `not-checked`). A red run saw `not-served`. After the product change, `cargo test --manifest-path frontend/native/Cargo.toml` exited 0. Web graphs show `not-served` for `/api/v1/statistics`. Hashrate shows `not-served` for `/v1/mining`. The price chart names `/api/v1/historical-price` and shows `not-checked`. `cargo test --manifest-path frontend/web/Cargo.toml` exited 0. The test name is `graphs_hashrate_and_price_chart_show_route_tokens`. The source report is `/home/hunter/.agents/reports/web-missing-categories.md`. No chart. No price request. No new route in `src/rest.rs`. The 57 later rows are not ported. The source note is `/home/hunter/.agents/reports/shared-later-cases.md`.
+
+## Fifteen cited Cypress rows
+
+The fifteen Cypress titles named in `/home/hunter/.agents/reports/native-fifteen-rows.md` are confirmed in the local specs and cited in `doc/angular-test-port.md`. The filled note is `/home/hunter/.agents/reports/fifteen-uncited-rows.md`.
+
+Two of those fifteen stay ported. Liquid testnet `loads the graphs page` does not open `/graphs`. It stays on GET `/mempool` and GET `/blocks`, covered by `every_ported_row_asserts_its_electrs_path_and_serde_fields`. The USD symbol row stays ported, covered by `usd_whole_amount_has_no_cents`.
+
+Thirteen of those fifteen stay later. Graphs, the three graphs viewport checks, pools, and the hashrate graph cite `statistics_mining_and_lightning_are_not_served`. That test asserts `/api/v1/statistics` and `/v1/mining` are `not-served`. The calculator heading still waits on a price feed, so it stays later, and that same test asserts `/v1/prices` is `not-served`. The docs click stays later. `docs_click_is_not_an_electrs_route` asserts `/docs` is `not-checked`. `/api/v1/historical-price` stays `not-checked`. No mining, price, or Lightning route was added.
+
+The later count is 45. Ported is 130. No backend stays 2. Those three buckets still sum to 177. The 45 later rows are not ported. Both programs walk the blocks, addresses, spends, pages, and search this indexer already serves. Reports: `shared-walk.md`, `web-walk.md`, `native-walk.md`, and `web-walk-close.md` under `/home/hunter/.agents/reports/`. The close verdict is pass. A live indexer session has not been run. The 45 later rows are still the unfinished port.
+
+The two programs are the Leptos page and the GPUI program on this indexer, not the mempool.space site. Layouts are text rows, not Mempool's block graphic. No mining, price, or Lightning route was added for that sentence.
+
+calculator_inputs_use_shared_fiat_functions exited 0. docs_view_text_contains_blocks_and_tx exited 0. explorer_views_render_one_row_per_block_or_transaction exited 0. Hashrate, pool tag, and replace-by-fee are not stored, so no route was added.
+
+The web test views_file_contains_incoming_virtual_bytes_rate_sentence passed. calculator_heading exited 0. The sentence was already in the mempool summary. calculator_field_names is public, and tests::public_calculator_field_names_are_fiat_bitcoin_and_satoshis exited 0. The heading row is ported. The three docs rows are ported. Totals are 45 later, 130 ported, and 2 with no backend.

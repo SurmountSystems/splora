@@ -47,7 +47,22 @@ pub async fn signed_get(
     network: Network,
     indexer_path: &str,
 ) -> Result<String, ClientError> {
-    signed_fetch(origin, network, indexer_path, "GET", None).await
+    match signed_fetch(origin, network, indexer_path, "GET", None, false).await? {
+        Fetched::Text(text) => Ok(text),
+        Fetched::Bytes(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn signed_get_bytes(
+    origin: &str,
+    network: Network,
+    indexer_path: &str,
+) -> Result<Vec<u8>, ClientError> {
+    match signed_fetch(origin, network, indexer_path, "GET", None, true).await? {
+        Fetched::Bytes(bytes) => Ok(bytes),
+        Fetched::Text(text) => Ok(text.into_bytes()),
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -58,10 +73,19 @@ pub async fn signed_post(
     indexer_path: &str,
     payload: &str,
 ) -> Result<String, ClientError> {
-    if method != "POST" || !crate::paths::allowed_post_path(indexer_path) {
+    if method != "POST" || !crate::paths::allowed_post(indexer_path, payload) {
         return Err(ClientError::RejectedEvent);
     }
-    signed_fetch(origin, network, indexer_path, method, Some(payload)).await
+    match signed_fetch(origin, network, indexer_path, method, Some(payload), false).await? {
+        Fetched::Text(text) => Ok(text),
+        Fetched::Bytes(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+enum Fetched {
+    Text(String),
+    Bytes(Vec<u8>),
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -71,7 +95,8 @@ async fn signed_fetch(
     indexer_path: &str,
     method: &str,
     payload: Option<&str>,
-) -> Result<String, ClientError> {
+    as_bytes: bool,
+) -> Result<Fetched, ClientError> {
     use crate::auth::{browser_fetch_url, unsigned_method};
     use js_sys::{Array, Function, JSON, Object, Promise, Reflect};
     use splora_api::authorization_header;
@@ -171,8 +196,13 @@ async fn signed_fetch(
         .set("Authorization", &header)
         .map_err(|_| ClientError::RejectedEvent)?;
     if payload.is_some() {
+        let content_type = if indexer_path == splora_frontend_shared::package_path() {
+            "application/json"
+        } else {
+            "text/plain"
+        };
         headers
-            .set("Content-Type", "text/plain")
+            .set("Content-Type", content_type)
             .map_err(|_| ClientError::RejectedEvent)?;
     }
     init.set_headers(headers.as_ref());
@@ -185,11 +215,34 @@ async fn signed_fetch(
         .dyn_into()
         .map_err(|_| ClientError::RejectedEvent)?;
     if !response.ok() {
-        return Err(ClientError::RejectedEvent);
+        let text_promise = response.text().map_err(|_| ClientError::RejectedEvent)?;
+        let text: JsValue = JsFuture::from(text_promise)
+            .await
+            .map_err(|_| ClientError::RejectedEvent)?;
+        let sentence = text.as_string().unwrap_or_default();
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            return Err(ClientError::RejectedEvent);
+        }
+        return Err(ClientError::Indexer(sentence.to_string()));
+    }
+    if as_bytes {
+        let buffer_promise = response
+            .array_buffer()
+            .map_err(|_| ClientError::RejectedEvent)?;
+        let buffer = JsFuture::from(buffer_promise)
+            .await
+            .map_err(|_| ClientError::RejectedEvent)?;
+        let array = js_sys::Uint8Array::new(&buffer);
+        let mut bytes = vec![0u8; array.length() as usize];
+        array.copy_to(&mut bytes[..]);
+        return Ok(Fetched::Bytes(bytes));
     }
     let text_promise = response.text().map_err(|_| ClientError::RejectedEvent)?;
     let text: JsValue = JsFuture::from(text_promise)
         .await
         .map_err(|_| ClientError::RejectedEvent)?;
-    text.as_string().ok_or(ClientError::RejectedEvent)
+    text.as_string()
+        .map(Fetched::Text)
+        .ok_or(ClientError::RejectedEvent)
 }

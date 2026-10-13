@@ -1,8 +1,9 @@
 //! Serde shapes for indexer JSON.
 //!
 //! Fields follow the structs this tree already serializes. String parsers in
-//! [`crate::parse`] stay as they are. Liquid-only keys are not modeled; extra
-//! keys are ignored.
+//! [`crate::parse`] stay as they are. Extra keys are ignored. `is_pegin`,
+//! `pegout`, `issuance`, and `ext` stay optional because the indexer emits
+//! them only on a liquid build.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +12,10 @@ use serde::{Deserialize, Serialize};
 /// One block from `GET /block/:hash` or an element of `GET /blocks`.
 ///
 /// `BlockValue` in `src/rest.rs`. `previousblockhash` is null for the genesis
-/// block and is omitted by some clients; both deserialize.
+/// block and is omitted by some clients; both deserialize. `ext` is the liquid
+/// header extra object. A Bitcoin body omits it. A missing key is `None`. The
+/// value is the JSON object the indexer already emits. There is no elements
+/// crate and no unblinding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub id: String,
@@ -29,6 +33,8 @@ pub struct Block {
     pub nonce: u32,
     pub bits: u32,
     pub difficulty: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ext: Option<serde_json::Value>,
 }
 
 /// `TransactionStatus` in `src/util/transaction.rs`.
@@ -46,7 +52,36 @@ pub struct TxStatus {
     pub block_time: Option<u64>,
 }
 
-/// One input from `TransactionValue` in `src/rest.rs` (non-liquid).
+/// `IssuanceValue` in `src/elements/mod.rs`.
+///
+/// Present on an input only when that input has an issuance. `assetamount`
+/// and `tokenamount` are omitted when those values are confidential. A
+/// missing amount is `None`, not zero. Each commitment is the hex of the
+/// consensus encoding. There is no unblinding step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Issuance {
+    pub asset_id: String,
+    pub is_reissuance: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_blinding_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_hash: Option<String>,
+    pub asset_entropy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assetamount: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assetamountcommitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenamount: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokenamountcommitment: Option<String>,
+}
+
+/// One input from `TransactionValue` in `src/rest.rs`.
+///
+/// `is_pegin` is always present on a liquid build, including false. A Bitcoin
+/// body omits it, and a missing key deserializes as false. `issuance` is
+/// omitted when the input has no issuance. A missing key is `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxInput {
     pub txid: String,
@@ -59,6 +94,10 @@ pub struct TxInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witness: Option<Vec<String>>,
     pub is_coinbase: bool,
+    #[serde(default)]
+    pub is_pegin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance: Option<Issuance>,
     pub sequence: u32,
     #[serde(
         default,
@@ -74,7 +113,34 @@ pub struct TxInput {
     pub inner_witness_script_asm: Option<String>,
 }
 
-/// One output from `TransactionValue` in `src/rest.rs` (non-liquid).
+/// `PegoutValue` in `src/elements/peg.rs`.
+///
+/// `scriptpubkey` is the parent-chain script as lowercase hex. There is no
+/// value field. `scriptpubkey_address` is omitted when absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pegout {
+    pub genesis_hash: String,
+    #[serde(rename = "scriptpubkey")]
+    pub script_pubkey: String,
+    #[serde(rename = "scriptpubkey_asm")]
+    pub script_pubkey_asm: String,
+    #[serde(
+        default,
+        rename = "scriptpubkey_address",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub script_pubkey_address: Option<String>,
+}
+
+/// One output from `TransactionValue` in `src/rest.rs`.
+///
+/// `pegout` is omitted when the output is not a peg-out. The object is not
+/// null when absent, and it has no value field.
+///
+/// On a liquid build, `value` is `Option<u64>` and is omitted when the amount
+/// is confidential. A missing key is `None`. It is not zero. `asset` is the
+/// explicit asset id string. `valuecommitment` and `assetcommitment` are the
+/// hex of the 33-byte consensus encoding when that field is blinded.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxOutput {
     #[serde(rename = "scriptpubkey")]
@@ -89,7 +155,16 @@ pub struct TxOutput {
         skip_serializing_if = "Option::is_none"
     )]
     pub script_pubkey_address: Option<String>,
-    pub value: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuecommitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assetcommitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pegout: Option<Pegout>,
 }
 
 /// One transaction from `GET /tx/:txid`, `GET /block/:hash/txs`, or
@@ -139,23 +214,66 @@ pub struct AddressStats {
 /// One output from `GET /address/:script/utxo`.
 ///
 /// `UtxoValue` in `src/rest.rs`. Confirmation is `status.confirmed`.
+///
+/// On a liquid build the indexer also emits `asset`, `valuecommitment`,
+/// `assetcommitment`, `nonce`, `noncecommitment`, `surjection_proof`, and
+/// `range_proof`. Each is omitted when absent. A missing key is `None`.
+/// `surjection_proof` and `range_proof` are the hex strings `serde_hex`
+/// already emits. An empty proof is omitted, not `""`. A missing `value`
+/// is `None`, not zero. A non-liquid body still sends the number. There
+/// is no unblinding step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Utxo {
     pub txid: String,
     pub vout: u32,
     pub status: TxStatus,
-    pub value: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valuecommitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assetcommitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noncecommitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surjection_proof: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range_proof: Option<String>,
 }
 
 /// One row from `GET /mempool/recent`.
 ///
-/// `TxOverview` in `src/new_index/mempool.rs` (non-liquid).
+/// `TxOverview` in `src/new_index/mempool.rs`. A liquid build omits `value`.
+/// A missing key is `None`, not zero. Explicit `0` stays `Some(0)`. JSON
+/// `null` is `None` and is omitted on serialize.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentTransaction {
     pub txid: String,
     pub fee: u64,
     pub vsize: u32,
-    pub value: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u64>,
+}
+
+/// Integer text for a recent mempool amount.
+///
+/// `Some(n)` is that integer, including zero. `None` with a non-empty
+/// commitment is the word Confidential. `None` with an empty commitment is
+/// blank. This does not convert satoshis to BTC. Recent rows have no
+/// commitment field, so callers with none in hand pass `""`.
+pub fn recent_value_text(value: Option<u64>, commitment: &str) -> String {
+    if let Some(amount) = value {
+        return amount.to_string();
+    }
+    if commitment.is_empty() {
+        String::new()
+    } else {
+        "Confidential".to_string()
+    }
 }
 
 /// `GET /mempool`.
@@ -214,6 +332,108 @@ pub struct TestTxResult {
     pub fees: Option<TestTxFees>,
     #[serde(default, rename = "reject-reason")]
     pub reject_reason: Option<String>,
+}
+
+/// `GET /block/:hash/status`.
+///
+/// `BlockStatus` in `src/util/block.rs`. `height` and `next_best` are null
+/// when the block is not in the best chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockStatus {
+    pub in_best_chain: bool,
+    pub height: Option<u64>,
+    pub next_best: Option<String>,
+}
+
+/// `GET /tx/:txid/merkle-proof`.
+///
+/// The handler in `src/rest.rs` emits `block_height`, `merkle`, and `pos`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MerkleProof {
+    pub block_height: u64,
+    pub merkle: Vec<String>,
+    pub pos: u64,
+}
+
+/// One output from `GET /tx/:txid/outspend/:index` or `GET /tx/:txid/outspends`.
+///
+/// `SpendingValue` in `src/rest.rs`. An unspent output is `spent: false` and
+/// omits `txid`, `vin`, and `status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outspend {
+    pub spent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub txid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vin: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TxStatus>,
+}
+
+/// One row from `GET /address/:script/txs/summary`.
+///
+/// `TxHistorySummary` in `src/new_index/schema.rs`. `value` is signed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TxSummary {
+    pub txid: String,
+    pub height: u64,
+    pub value: i64,
+    pub time: u64,
+    pub tx_position: u64,
+}
+
+/// `fees` on one `tx-results` entry from `POST /txs/package`.
+///
+/// `MempoolFeesSubmitPackage` in `src/daemon.rs`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackageTxFees {
+    pub base: f64,
+    #[serde(
+        default,
+        rename = "effective-feerate",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub effective_feerate: Option<f64>,
+    #[serde(
+        default,
+        rename = "effective-includes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub effective_includes: Option<Vec<String>>,
+}
+
+/// One value in `tx-results` from `POST /txs/package`.
+///
+/// `TxResult` in `src/daemon.rs`. `other-wtxid` is omitted when there is no
+/// other witness id. A missing key is `None`. It is not copied from `txid`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackageTx {
+    pub txid: String,
+    #[serde(
+        default,
+        rename = "other-wtxid",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub other_wtxid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vsize: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fees: Option<PackageTxFees>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// `POST /txs/package`.
+///
+/// `SubmitPackageResult` in `src/daemon.rs`. A missing `replaced-transactions`
+/// key is an empty list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackageResult {
+    pub package_msg: String,
+    #[serde(rename = "tx-results")]
+    pub tx_results: BTreeMap<String, PackageTx>,
+    #[serde(default, rename = "replaced-transactions")]
+    pub replaced_transactions: Vec<String>,
 }
 
 #[cfg(test)]
@@ -318,7 +538,7 @@ mod tests {
         let input = &detailed.vin[0];
         assert_eq!(input.script_sig, "");
         assert_eq!(input.witness.as_ref().unwrap().len(), 2);
-        assert_eq!(input.prevout.as_ref().unwrap().value, 610_677);
+        assert_eq!(input.prevout.as_ref().unwrap().value, Some(610_677));
         assert_eq!(
             input.prevout.as_ref().unwrap().script_pubkey_type,
             "v0_p2wpkh"
@@ -347,7 +567,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].txid, "utxo-tx-1");
         assert_eq!(rows[0].vout, 2);
-        assert_eq!(rows[0].value, 42_000);
+        assert_eq!(rows[0].value, Some(42_000));
         assert!(rows[0].status.confirmed);
         assert_eq!(rows[0].status.block_height, Some(100));
 
@@ -365,7 +585,7 @@ mod tests {
         assert_eq!(rows[0].txid, "recent-tx-1");
         assert_eq!(rows[0].fee, 800);
         assert_eq!(rows[0].vsize, 141);
-        assert_eq!(rows[0].value, 99_000);
+        assert_eq!(rows[0].value, Some(99_000));
     }
 
     #[test]

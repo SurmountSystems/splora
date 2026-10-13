@@ -3,14 +3,20 @@
 //! Field sentences stay available for the screen text helpers. These functions
 //! are what the views put on the page.
 
-use splora_frontend_shared::wire::{AddressStats, Block, RecentTransaction, Transaction, Utxo};
-use splora_frontend_shared::{BlockRow, TxRow};
+use splora_frontend_shared::wire::{
+    AddressStats, Block, Issuance, RecentTransaction, Transaction, TxInput, TxOutput, Utxo,
+    recent_value_text,
+};
+use splora_frontend_shared::{
+    BlockRow, IssuedRegistryAsset, NativeRegistryAsset, RegistryAsset, TxRow,
+    parse_assets_registry, sat_per_vbyte_from_vsize,
+};
 
 use crate::models::{
     parse_address_stats_json, parse_block_json, parse_blocks_json, parse_recent_transactions_json,
     parse_transaction_json, parse_transactions_json, parse_utxos_json,
 };
-use crate::screens::closed_notice;
+use crate::screens::{UtxoAmount, closed_notice, plain_number, utxo_amount};
 
 fn html_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -29,6 +35,35 @@ fn html_escape(text: &str) -> String {
 
 fn td(class: &str, text: &str) -> String {
     format!("<td class=\"{class}\">{text}</td>")
+}
+
+fn txid_anchor(txid: &str) -> String {
+    let escaped = html_escape(txid);
+    format!("<a href=\"/tx/{escaped}\">{escaped}</a>")
+}
+
+fn block_anchor(hash: &str) -> String {
+    let escaped = html_escape(hash);
+    format!("<a href=\"/block/{escaped}\">{escaped}</a>")
+}
+
+fn height_on_block(height: impl std::fmt::Display, hash: &str) -> String {
+    let escaped = html_escape(hash);
+    format!("<a href=\"/block/{escaped}\">{height}</a>")
+}
+
+fn height_only_anchor(height: impl std::fmt::Display) -> String {
+    format!("<a href=\"/block-height/{height}\">{height}</a>")
+}
+
+fn address_anchor(address: &str) -> String {
+    let escaped = html_escape(address);
+    format!("<a class=\"address\" href=\"/address/{escaped}\">{escaped}</a>")
+}
+
+fn finite_rate(rate: Option<f64>) -> Option<String> {
+    rate.filter(|rate| rate.is_finite())
+        .map(|rate| format!("{}", rate))
 }
 
 fn paragraph(class: &str, text: &str) -> String {
@@ -61,9 +96,15 @@ fn is_notice(line: &str) -> bool {
 
 /// Keep indexer failure lines. Drop the flat field sentences.
 pub(crate) fn rows_with_notices(fields: &str, rows: &str) -> String {
+    let failure = fields
+        .lines()
+        .any(|line| line.starts_with("indexer error ") || line == crate::FAIL_CLOSED);
     let mut out = String::new();
     for line in fields.lines() {
-        if is_notice(line) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if failure || is_notice(line) {
             out.push_str(&paragraph("notice", &html_escape(line)));
         }
     }
@@ -127,8 +168,8 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
 fn block_row(block: &Block) -> String {
     let row = BlockRow::from(block);
     let mut cells = vec![
-        td("height", &row.height.to_string()),
-        td("hash", &html_escape(&row.id)),
+        td("height", &height_on_block(row.height, &row.id)),
+        td("hash", &block_anchor(&row.id)),
         td("tx-count", &row.tx_count.to_string()),
         td("time", &row.timestamp.to_string()),
         td("size", &block.size.to_string()),
@@ -136,34 +177,134 @@ fn block_row(block: &Block) -> String {
         td("median-time", &block.median_time.to_string()),
     ];
     if let Some(previous) = nonempty(block.previous_block_hash.as_deref()) {
-        cells.push(td("previous", &html_escape(previous)));
+        cells.push(td("previous", &block_anchor(previous)));
     }
+    cells.push(td("version", &row.version.to_string()));
+    cells.push(td("merkle-root", &html_escape(&row.merkle_root)));
+    cells.push(td("nonce", &row.nonce.to_string()));
+    cells.push(td("bits", &row.bits.to_string()));
+    cells.push(td("difficulty", &plain_number(row.difficulty)));
     format!("<tr class=\"block-row\">{}</tr>", cells.concat())
 }
 
-fn party(address: Option<&str>, value: u64) -> Option<String> {
-    let address = nonempty(address)?;
-    Some(format!(
-        "<span class=\"party\"><span class=\"address\">{}</span><span class=\"value\">{value}</span></span>",
-        html_escape(address),
-    ))
+fn address_span(address: &str) -> String {
+    address_anchor(address)
+}
+
+fn value_span(value: u64) -> String {
+    format!("<span class=\"value\">{value}</span>")
+}
+
+fn issuance_span(phrase: &str) -> String {
+    format!("<span>{}</span>", html_escape(phrase))
+}
+
+/// Input issuance, not a prevout field. A missing amount stays blank.
+/// A non-empty commitment is the word Confidential, never the hex.
+fn issuance_markup(issuance: &Issuance) -> String {
+    let mut out = String::new();
+    if !issuance.asset_id.is_empty() {
+        out.push_str(&issuance_span(&format!(
+            "issuance asset {}",
+            issuance.asset_id
+        )));
+    }
+    out.push_str(&issuance_span(&format!(
+        "issuance reissuance {}",
+        yes_no(issuance.is_reissuance)
+    )));
+    if let Some(hash) = issuance
+        .contract_hash
+        .as_deref()
+        .filter(|hash| !hash.is_empty())
+    {
+        out.push_str(&issuance_span(&format!("issuance contract {hash}")));
+    }
+    if !issuance.asset_entropy.is_empty() {
+        out.push_str(&issuance_span(&format!(
+            "issuance entropy {}",
+            issuance.asset_entropy
+        )));
+    }
+    if let Some(nonce) = issuance
+        .asset_blinding_nonce
+        .as_deref()
+        .filter(|nonce| !nonce.is_empty())
+    {
+        out.push_str(&issuance_span(&format!("issuance blinding nonce {nonce}")));
+    }
+    if let Some(phrase) = issuance_amount_phrase(
+        "asset",
+        issuance.assetamount,
+        issuance.assetamountcommitment.as_deref(),
+    ) {
+        out.push_str(&issuance_span(&phrase));
+    }
+    if let Some(phrase) = issuance_amount_phrase(
+        "token",
+        issuance.tokenamount,
+        issuance.tokenamountcommitment.as_deref(),
+    ) {
+        out.push_str(&issuance_span(&phrase));
+    }
+    out
+}
+
+fn issuance_amount_phrase(
+    kind: &str,
+    amount: Option<u64>,
+    commitment: Option<&str>,
+) -> Option<String> {
+    if let Some(amount) = amount {
+        return Some(format!("issuance {kind} amount {amount}"));
+    }
+    if commitment.is_some_and(|text| !text.is_empty()) {
+        return Some(format!("issuance {kind} amount Confidential"));
+    }
+    None
+}
+
+fn input_party(input: &TxInput) -> String {
+    let mut inner = txid_anchor(&input.txid);
+    inner.push_str(&format!("<span class=\"vout\">{}</span>", input.vout));
+    if let Some(prevout) = &input.prevout {
+        if let Some(address) = nonempty(prevout.script_pubkey_address.as_deref()) {
+            inner.push_str(&address_span(address));
+        }
+        if let Some(value) = prevout.value {
+            inner.push_str(&value_span(value));
+        }
+    }
+    if let Some(issuance) = &input.issuance {
+        inner.push_str(&issuance_markup(issuance));
+    }
+    format!("<span class=\"party\">{inner}</span>")
+}
+
+fn output_party(output: &TxOutput) -> String {
+    let mut inner = String::new();
+    if let Some(address) = nonempty(output.script_pubkey_address.as_deref()) {
+        inner.push_str(&address_span(address));
+    }
+    if output.script_pubkey_type == "op_return" {
+        inner.push_str("<span class=\"scriptpubkey-type\">op_return</span>");
+        inner.push_str("<span class=\"op-return\">OP_RETURN</span>");
+    }
+    if let Some(value) = output.value {
+        inner.push_str(&value_span(value));
+    }
+    format!("<span class=\"party\">{inner}</span>")
 }
 
 fn tx_parties(tx: &Transaction) -> String {
-    let mut parties = Vec::new();
+    let mut parties = String::new();
     for input in &tx.vin {
-        if let Some(prevout) = &input.prevout {
-            if let Some(markup) = party(prevout.script_pubkey_address.as_deref(), prevout.value) {
-                parties.push(markup);
-            }
-        }
+        parties.push_str(&input_party(input));
     }
     for output in &tx.vout {
-        if let Some(markup) = party(output.script_pubkey_address.as_deref(), output.value) {
-            parties.push(markup);
-        }
+        parties.push_str(&output_party(output));
     }
-    parties.concat()
+    parties
 }
 
 fn tx_row(tx: &Transaction) -> String {
@@ -174,18 +315,32 @@ fn tx_row(tx: &Transaction) -> String {
         .map(|status| status.confirmed)
         .unwrap_or(false);
     let mut cells = vec![
-        td("txid", &html_escape(&row.txid)),
+        td("txid", &txid_anchor(&row.txid)),
         td("fee", &row.fee.to_string()),
         td("confirmed", yes_no(confirmed)),
         td("size", &tx.size.to_string()),
         td("weight", &tx.weight.to_string()),
+        td("version", &row.version.to_string()),
+        td("locktime", &row.lock_time.to_string()),
+        td("sigops", &row.sigops.to_string()),
     ];
+    if let Some(rate) = finite_rate(row.sat_per_vbyte()) {
+        cells.push(td("fee-rate", &rate));
+    }
+    let confirming_hash = tx
+        .status
+        .as_ref()
+        .and_then(|status| nonempty(status.block_hash.as_deref()));
     if let Some(height) = row.block_height {
-        cells.push(td("block-height", &height.to_string()));
+        let text = match confirming_hash {
+            Some(hash) => height_on_block(height, hash),
+            None => height_only_anchor(height),
+        };
+        cells.push(td("block-height", &text));
     }
     if let Some(status) = tx.status.as_ref() {
-        if let Some(hash) = nonempty(status.block_hash.as_deref()) {
-            cells.push(td("block-hash", &html_escape(hash)));
+        if let Some(hash) = confirming_hash {
+            cells.push(td("block-hash", &block_anchor(hash)));
         }
         if let Some(time) = status.block_time {
             cells.push(td("block-time", &time.to_string()));
@@ -199,27 +354,43 @@ fn tx_row(tx: &Transaction) -> String {
 }
 
 fn recent_row(tx: &RecentTransaction) -> String {
-    format!(
-        "<tr class=\"tx-row\">{}{}{}{}</tr>",
-        td("txid", &html_escape(&tx.txid)),
+    let mut cells = vec![
+        td("txid", &txid_anchor(&tx.txid)),
         td("fee", &tx.fee.to_string()),
         td("vsize", &tx.vsize.to_string()),
-        td("value", &tx.value.to_string()),
-    )
+        td("value", &recent_value_text(tx.value, "")),
+    ];
+    if let Some(rate) = finite_rate(sat_per_vbyte_from_vsize(tx.fee, tx.vsize)) {
+        cells.push(td("fee-rate", &rate));
+    }
+    format!("<tr class=\"tx-row\">{}</tr>", cells.concat())
+}
+
+fn utxo_value_cell(utxo: &Utxo) -> String {
+    match utxo_amount(utxo) {
+        UtxoAmount::Number(amount) => amount.to_string(),
+        UtxoAmount::Confidential => "<span class=\"amount\">Confidential</span>".to_string(),
+        UtxoAmount::Blank => String::new(),
+    }
 }
 
 fn utxo_row(utxo: &Utxo) -> String {
     let mut cells = vec![
-        td("txid", &html_escape(&utxo.txid)),
+        td("txid", &txid_anchor(&utxo.txid)),
         td("vout", &utxo.vout.to_string()),
-        td("value", &utxo.value.to_string()),
+        td("value", &utxo_value_cell(utxo)),
         td("confirmed", yes_no(utxo.status.confirmed)),
     ];
+    let confirming_hash = nonempty(utxo.status.block_hash.as_deref());
     if let Some(height) = utxo.status.block_height {
-        cells.push(td("block-height", &height.to_string()));
+        let text = match confirming_hash {
+            Some(hash) => height_on_block(height, hash),
+            None => height_only_anchor(height),
+        };
+        cells.push(td("block-height", &text));
     }
-    if let Some(hash) = nonempty(utxo.status.block_hash.as_deref()) {
-        cells.push(td("block-hash", &html_escape(hash)));
+    if let Some(hash) = confirming_hash {
+        cells.push(td("block-hash", &block_anchor(hash)));
     }
     if let Some(time) = utxo.status.block_time {
         cells.push(td("block-time", &time.to_string()));
@@ -230,7 +401,7 @@ fn utxo_row(utxo: &Utxo) -> String {
 fn address_summary(stats: &AddressStats) -> String {
     let mut out = String::new();
     if let Some(address) = nonempty(stats.address.as_deref()) {
-        out.push_str(&paragraph("address", &html_escape(address)));
+        out.push_str(&paragraph("address", &address_anchor(address)));
     }
     if let Some(scripthash) = nonempty(stats.scripthash.as_deref()) {
         out.push_str(&paragraph("scripthash", &html_escape(scripthash)));
@@ -251,22 +422,109 @@ fn address_summary(stats: &AddressStats) -> String {
         "mempool-funded-sum",
         &stats.mempool_stats.funded_txo_sum.to_string(),
     ));
-    out
-}
-
-pub fn dashboard_rows_markup(blocks_json: &str, recent_json: &str) -> String {
-    let mut out = table(
-        "block-rows",
-        blocks_from(blocks_json).iter().map(block_row).collect(),
-    );
-    out.push_str(&table(
-        "tx-rows",
-        recent_from(recent_json).iter().map(recent_row).collect(),
+    out.push_str(&paragraph(
+        "chain-funded-txo-count",
+        &stats.chain_stats.funded_txo_count.to_string(),
+    ));
+    out.push_str(&paragraph(
+        "chain-spent-txo-count",
+        &stats.chain_stats.spent_txo_count.to_string(),
+    ));
+    out.push_str(&paragraph(
+        "chain-spent-sum",
+        &stats.chain_stats.spent_txo_sum.to_string(),
+    ));
+    out.push_str(&paragraph(
+        "mempool-funded-txo-count",
+        &stats.mempool_stats.funded_txo_count.to_string(),
+    ));
+    out.push_str(&paragraph(
+        "mempool-spent-txo-count",
+        &stats.mempool_stats.spent_txo_count.to_string(),
+    ));
+    out.push_str(&paragraph(
+        "mempool-spent-sum",
+        &stats.mempool_stats.spent_txo_sum.to_string(),
     ));
     out
 }
 
+pub fn recent_rows_markup(recent_json: &str) -> String {
+    if exact_empty_array(recent_json) {
+        return empty_list("transactions");
+    }
+    let rows = recent_from(recent_json);
+    let rows = splora_frontend_shared::cap_recent_transactions(&rows);
+    table("tx-rows", rows.iter().map(recent_row).collect())
+}
+
+pub fn block_txid_links_markup(body: &str) -> String {
+    if skip(body) {
+        return String::new();
+    }
+    match splora_frontend_shared::parse_block_txids(body) {
+        Ok(txids) => txids.iter().map(|txid| txid_anchor(txid)).collect(),
+        Err(_) => String::new(),
+    }
+}
+
+fn empty_list(kind: &str) -> String {
+    format!("<p class=\"empty\">There are no {kind}.</p>")
+}
+
+fn exact_empty_array(body: &str) -> bool {
+    let trimmed = body.trim();
+    let Some(inner) = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
+        return false;
+    };
+    inner.trim().is_empty()
+}
+
+fn failure_markup(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() || trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return None;
+    }
+    if !trimmed
+        .lines()
+        .any(|line| line.starts_with("indexer error "))
+        && trimmed != crate::FAIL_CLOSED
+        && !trimmed.contains(' ')
+    {
+        return None;
+    }
+    let html = trimmed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| paragraph("notice", &html_escape(line)))
+        .collect();
+    Some(html)
+}
+
+pub fn dashboard_rows_markup(blocks_json: &str, recent_json: &str) -> String {
+    let mut out = if exact_empty_array(blocks_json) {
+        empty_list("blocks")
+    } else {
+        table(
+            "block-rows",
+            blocks_from(blocks_json).iter().map(block_row).collect(),
+        )
+    };
+    if exact_empty_array(recent_json) {
+        out.push_str(&empty_list("transactions"));
+    } else {
+        out.push_str(&recent_rows_markup(recent_json));
+    }
+    out
+}
+
 pub fn blocks_rows_markup(blocks_json: &str) -> String {
+    if exact_empty_array(blocks_json) {
+        return empty_list("blocks");
+    }
     table(
         "block-rows",
         blocks_from(blocks_json).iter().map(block_row).collect(),
@@ -278,17 +536,600 @@ pub fn block_rows_markup(block_json: &str, txs_json: &str) -> String {
         .map(|block| vec![block_row(&block)])
         .unwrap_or_default();
     let mut out = table("block-rows", block_rows);
-    out.push_str(&table(
-        "tx-rows",
-        txs_from(txs_json).iter().map(tx_row).collect(),
-    ));
+    if exact_empty_array(txs_json) {
+        out.push_str(&empty_list("transactions"));
+    } else {
+        out.push_str(&table(
+            "tx-rows",
+            txs_from(txs_json).iter().map(tx_row).collect(),
+        ));
+    }
+    out.push_str(&liquid_tx_labels(txs_json));
     out
 }
 
 pub fn transaction_row_markup(body: &str) -> String {
-    match one_tx(body) {
+    let mut out = match one_tx(body) {
         Some(tx) => table("tx-rows", vec![tx_row(&tx)]),
         None => String::new(),
+    };
+    out.push_str(&liquid_tx_labels(body));
+    out
+}
+
+pub fn summary_rows_markup(body: &str) -> String {
+    summary_rows_with_status(body, &[])
+}
+
+/// Compact history rows. A matching status body adds confirmation beside the summary fields.
+pub fn summary_rows_with_status(body: &str, statuses: &[(String, String)]) -> String {
+    if exact_empty_array(body) {
+        return empty_list("transactions");
+    }
+    let Ok(rows) = splora_frontend_shared::parse_address_txs_summary(body) else {
+        return String::new();
+    };
+    let rendered = rows
+        .iter()
+        .map(|row| {
+            let mut cells = vec![
+                td("txid", &txid_anchor(&row.txid)),
+                td("height", &height_only_anchor(row.height)),
+                td("value", &row.value.to_string()),
+                td("time", &row.time.to_string()),
+                td("tx-position", &row.tx_position.to_string()),
+            ];
+            if let Some((_, status)) = statuses.iter().find(|(txid, _)| txid == &row.txid) {
+                cells.push(td("confirmation", &tx_status_markup(status)));
+            }
+            format!("<tr class=\"summary-row\">{}</tr>", cells.concat())
+        })
+        .collect();
+    table("summary-rows", rendered)
+}
+
+pub fn tx_status_markup(body: &str) -> String {
+    if let Some(notice) = byte_notice(body) {
+        return notice;
+    }
+    let Ok(status) = splora_frontend_shared::parse_tx_status(body) else {
+        return byte_notice(body).unwrap_or_default();
+    };
+    let word = if status.confirmed { "true" } else { "false" };
+    let mut out = format!("confirmed {word}");
+    if let Some(height) = status.block_height {
+        out.push(' ');
+        match status.block_hash.as_deref().filter(|hash| !hash.is_empty()) {
+            Some(hash) => out.push_str(&height_on_block(height, hash)),
+            None => out.push_str(&height_only_anchor(height)),
+        }
+    }
+    if let Some(hash) = status.block_hash.as_deref().filter(|hash| !hash.is_empty()) {
+        out.push(' ');
+        out.push_str(&block_anchor(hash));
+    }
+    out
+}
+
+pub fn mempool_txids_markup(body: &str) -> String {
+    if exact_empty_array(body) {
+        return empty_list("transactions");
+    }
+    let Ok(ids) = splora_frontend_shared::parse_mempool_txids(body) else {
+        return String::new();
+    };
+    ids.iter().map(|txid| txid_anchor(txid)).collect()
+}
+
+fn paint_outspend(spend: &splora_frontend_shared::wire::Outspend) -> String {
+    let mut out = String::from("<p>");
+    if spend.spent {
+        out.push_str("spent true");
+        if let Some(txid) = spend.txid.as_deref().filter(|txid| !txid.is_empty()) {
+            out.push(' ');
+            out.push_str(&txid_anchor(txid));
+        }
+    } else {
+        out.push_str("spent false");
+    }
+    if let Some(vin) = spend.vin {
+        out.push_str(&format!(" vin {vin}"));
+    }
+    out.push_str("</p>");
+    out
+}
+
+pub fn outspends_markup(body: &str) -> String {
+    if let Some(notice) = failure_markup(body) {
+        return notice;
+    }
+    let Ok(rows) = splora_frontend_shared::parse_outspends(body) else {
+        return String::new();
+    };
+    rows.iter().map(paint_outspend).collect()
+}
+
+pub fn batch_outspends_markup(body: &str) -> String {
+    if let Some(notice) = byte_notice(body) {
+        return notice;
+    }
+    let Ok(groups) = splora_frontend_shared::parse_txs_outspends(body) else {
+        return outspends_markup(body);
+    };
+    groups
+        .iter()
+        .flat_map(|group| group.iter().map(paint_outspend))
+        .collect()
+}
+
+pub fn one_outspend_markup(body: &str) -> String {
+    if let Some(notice) = byte_notice(body) {
+        return notice;
+    }
+    match splora_frontend_shared::parse_outspend(body) {
+        Ok(spend) => paint_outspend(&spend),
+        Err(_) => byte_notice(body).unwrap_or_default(),
+    }
+}
+
+fn raw_failure_notice(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed == "not-served" || trimmed.contains("endpoint does not exist") {
+        return Some(paragraph("notice", &html_escape(trimmed)));
+    }
+    if trimmed.contains("indexer error ") || trimmed == crate::FAIL_CLOSED {
+        return failure_markup(text);
+    }
+    None
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn raw_octet_markup(
+    body: &[u8],
+    class: &str,
+    parse: fn(&[u8]) -> Result<Vec<u8>, splora_frontend_shared::ParseError>,
+) -> String {
+    if body.is_empty() {
+        return String::new();
+    }
+    if let Ok(text) = std::str::from_utf8(body) {
+        if let Some(notice) = raw_failure_notice(text) {
+            return notice;
+        }
+    }
+    match parse(body) {
+        Ok(bytes) if !bytes.is_empty() => {
+            format!("<pre class=\"{class}\">{}</pre>", encode_hex(&bytes))
+        }
+        _ => String::new(),
+    }
+}
+
+/// Block rows, then the octet-stream from `GET /block/:hash/raw`.
+pub fn block_raw_beside(rows: &str, body: &[u8]) -> String {
+    let mut out = rows.to_string();
+    out.push_str(&raw_octet_markup(
+        body,
+        "block-raw",
+        splora_frontend_shared::parse_block_raw,
+    ));
+    out
+}
+
+/// Transaction rows, then the octet-stream from `GET /tx/:txid/raw`.
+pub fn tx_raw_beside(rows: &str, body: &[u8]) -> String {
+    let mut out = rows.to_string();
+    out.push_str(&raw_octet_markup(
+        body,
+        "tx-raw",
+        splora_frontend_shared::parse_tx_raw,
+    ));
+    out
+}
+
+/// A failed `GET /block-height/:height` body is a notice. A block hash is not preformatted bytes.
+pub fn height_body_markup(body: &str) -> String {
+    byte_notice(body).unwrap_or_default()
+}
+
+/// A failed body is a notice. Hex from the shared parsers stays in a pre of `class`.
+pub fn indexed_bytes_markup(body: &str, class: &str) -> String {
+    if let Some(notice) = byte_notice(body) {
+        return notice;
+    }
+    let trimmed = body.trim();
+    let hex = splora_frontend_shared::parse_block_header(trimmed)
+        .or_else(|_| splora_frontend_shared::parse_block_raw_hex(trimmed))
+        .or_else(|_| splora_frontend_shared::parse_tx_raw_hex(trimmed))
+        .or_else(|_| splora_frontend_shared::parse_merkleblock_proof(trimmed));
+    match hex {
+        Ok(text) if !text.is_empty() => {
+            format!("<pre class=\"{class}\">{}</pre>", html_escape(&text))
+        }
+        _ => String::new(),
+    }
+}
+
+pub fn block_txid_index_markup(body: &str) -> String {
+    if let Some(notice) = byte_notice(body) {
+        return notice;
+    }
+    let Ok(txid) = splora_frontend_shared::parse_block_txid(body) else {
+        return byte_notice(body).unwrap_or_default();
+    };
+    let hex = txid.len() == 64 && txid.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if hex {
+        txid_anchor(&txid)
+    } else {
+        byte_notice(&txid).unwrap_or_default()
+    }
+}
+
+fn byte_notice(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed == "not-served" || trimmed.contains("endpoint does not exist") {
+        return Some(paragraph("notice", &html_escape(trimmed)));
+    }
+    failure_markup(body)
+}
+
+pub fn merkle_proof_markup(body: &str) -> String {
+    let Ok(proof) = splora_frontend_shared::parse_merkle_proof(body) else {
+        return failure_markup(body).unwrap_or_default();
+    };
+    let mut out = format!(
+        "<p>{} pos {}</p>",
+        height_only_anchor(proof.block_height),
+        proof.pos
+    );
+    for txid in &proof.merkle {
+        out.push_str(&txid_anchor(txid));
+    }
+    out
+}
+
+pub fn transaction_hex_markup(body: &str) -> String {
+    if let Some(notice) = failure_markup(body) {
+        return notice;
+    }
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    format!("<pre class=\"tx-hex\">{}</pre>", html_escape(trimmed))
+}
+
+pub fn block_status_markup(body: &str) -> String {
+    let Ok(status) = splora_frontend_shared::parse_block_status(body) else {
+        return failure_markup(body).unwrap_or_default();
+    };
+    let mut out = if status.in_best_chain {
+        "true".to_string()
+    } else {
+        "false".to_string()
+    };
+    if let Some(height) = status.height {
+        out.push(' ');
+        out.push_str(&height.to_string());
+    }
+    if let Some(next) = status.next_best.as_deref().filter(|hash| !hash.is_empty()) {
+        out.push_str(&block_anchor(next));
+    }
+    out
+}
+
+pub fn multi_address_links_markup(rows: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (path, _) in rows {
+        let Some(address) = path.strip_prefix("/address/") else {
+            continue;
+        };
+        if address.is_empty() || address.contains('/') {
+            continue;
+        }
+        out.push_str(&address_anchor(address));
+    }
+    out
+}
+
+pub fn broadcast_txid_markup(txid: &str) -> String {
+    let txid = txid.trim();
+    if txid.is_empty() {
+        return String::new();
+    }
+    txid_anchor(txid)
+}
+
+pub fn test_txid_markup(body: &str) -> String {
+    if let Ok(rows) = splora_frontend_shared::parse_test_txs(body) {
+        return rows.iter().map(|row| txid_anchor(&row.txid)).collect();
+    }
+    // A disallowed row can omit reject-reason. The public parser stops the
+    // whole array there. The txid is still on the object, and it still opens /tx/.
+    let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(body) else {
+        return String::new();
+    };
+    rows.iter()
+        .filter_map(|row| row.get("txid").and_then(|txid| txid.as_str()))
+        .filter(|txid| !txid.is_empty())
+        .map(txid_anchor)
+        .collect()
+}
+
+pub fn package_txid_markup(body: &str) -> String {
+    let Ok(result) = splora_frontend_shared::parse_package(body) else {
+        return String::new();
+    };
+    let mut out = html_escape(&result.package_msg);
+    for tx in result.tx_results.values() {
+        out.push_str(&txid_anchor(&tx.txid));
+        // An empty other-wtxid is not a witness id. A missing one is not the txid.
+        if let Some(wtxid) = tx.other_wtxid.as_deref().filter(|wtxid| !wtxid.is_empty()) {
+            out.push_str(&html_escape(wtxid));
+        }
+    }
+    out
+}
+
+/// When the tip hash is already known, the height opens that block.
+pub fn chain_tip_markup(hash_body: &str, height_body: &str) -> String {
+    let hash = hash_body.trim();
+    let known = hash.len() == 64
+        && !hash.contains('\n')
+        && !hash.starts_with("indexer error ")
+        && hash.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if known {
+        let mut out = block_anchor(hash);
+        if let Ok(height) = height_body.trim().parse::<u64>() {
+            out.push_str(&height_on_block(height, hash));
+        }
+        return out;
+    }
+    tip_links_markup(hash_body, height_body)
+}
+
+pub fn tip_links_markup(hash_body: &str, height_body: &str) -> String {
+    let mut out = String::new();
+    let hash = hash_body.trim();
+    if !hash.is_empty()
+        && !hash.contains('\n')
+        && !hash.starts_with("indexer error ")
+        && !hash.starts_with('{')
+    {
+        out.push_str(&block_anchor(hash));
+    }
+    if let Ok(height) = height_body.trim().parse::<u64>() {
+        out.push_str(&height_only_anchor(height));
+    }
+    out
+}
+
+/// Liquid Bitcoin on the liquid network. Liquid testnet uses the issuance heading.
+const NATIVE_LIQUID_ASSET: &str =
+    "6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d";
+
+fn asset_transaction_heading(asset_id: Option<&str>) -> &'static str {
+    if asset_id == Some(NATIVE_LIQUID_ASSET) {
+        "Peg In/Out and Burn Transactions"
+    } else {
+        "Issuance and Burn Transactions"
+    }
+}
+
+/// en-US `DecimalPipe` grouping. `1,234` not `1234`. No fraction on an integer.
+fn grouped_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index.is_multiple_of(3) {
+            reversed.push(',');
+        }
+        reversed.push(ch);
+    }
+    reversed.chars().rev().collect()
+}
+
+fn stats_tx_count(asset: &serde_json::Value, key: &str) -> u64 {
+    asset
+        .get(key)
+        .and_then(|stats| stats.get("tx_count"))
+        .and_then(|count| count.as_u64())
+        .unwrap_or(0)
+}
+
+/// Input and output rows for `GET /asset/:id/txs`. Not an unblinded asset box.
+fn asset_transaction_tables(txs_json: &str) -> String {
+    let mut out = String::new();
+    for tx in txs_from(txs_json) {
+        if tx.vin.is_empty() && tx.vout.is_empty() {
+            continue;
+        }
+        out.push_str("<table class=\"table-tx-vin\"><tbody>");
+        for input in &tx.vin {
+            out.push_str("<tr><td>");
+            out.push_str(&input_party(input));
+            out.push_str("</td></tr>");
+        }
+        out.push_str("</tbody></table><table class=\"table-tx-vout\"><tbody>");
+        for output in &tx.vout {
+            out.push_str("<tr><td>");
+            out.push_str(&output_party(output));
+            out.push_str("</td></tr>");
+        }
+        out.push_str("</tbody></table>");
+    }
+    out
+}
+
+pub fn asset_markup(asset_json: &str, txs_json: &str, liquid: bool) -> String {
+    if !liquid {
+        return String::new();
+    }
+    let trimmed = asset_json.trim();
+    if trimmed == "not-served" || trimmed.contains("endpoint does not exist") {
+        return paragraph("notice", &html_escape(trimmed));
+    }
+    let mut out = String::new();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(name) = value.get("name").and_then(|item| item.as_str()) {
+            out.push_str(&html_escape(name));
+        }
+        if let Some(ticker) = value.get("ticker").and_then(|item| item.as_str()) {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&html_escape(ticker));
+        }
+        let asset_id = value.get("asset_id").and_then(|item| item.as_str());
+        // `asset.component.html` shows this id in `.tx-link`. Not a price or an amount.
+        if let Some(id) = asset_id.filter(|id| !id.is_empty()) {
+            out.push_str("<div class=\"tx-link\">");
+            out.push_str(&html_escape(id));
+            out.push_str("</div>");
+        }
+        out.push_str(&asset_chain_stats_table(trimmed));
+        let loaded = txs_from(txs_json);
+        out.push_str("<h2>");
+        if !loaded.is_empty() {
+            let total = stats_tx_count(&value, "chain_stats")
+                .saturating_add(stats_tx_count(&value, "mempool_stats"));
+            out.push_str(&grouped_count(loaded.len() as u64));
+            out.push_str(" of ");
+            out.push_str(&grouped_count(total));
+            out.push_str("&nbsp;");
+        }
+        out.push_str(asset_transaction_heading(asset_id));
+        out.push_str("</h2>");
+    } else if !trimmed.is_empty() {
+        out.push_str(&paragraph("notice", &html_escape(trimmed)));
+    }
+    if let Ok(txs) = parse_transactions_json(txs_json) {
+        for tx in txs {
+            out.push_str(&txid_anchor(&tx.txid));
+        }
+    }
+    out.push_str(&asset_transaction_tables(txs_json));
+    out
+}
+
+/// Chain stats from one `GET /asset/:id` document.
+///
+/// Integers stay the chain values. Mempool issued, burned, pegged-in, and
+/// pegged-out amounts are not added. A blinded issuance is the word
+/// Confidential. A zero issued or pegged figure stays off the row the asset
+/// page hides. Precision does not scale the amount, and a ticker is not appended.
+fn asset_chain_stats_table(asset_json: &str) -> String {
+    let wrapped = format!("[{}]", asset_json.trim());
+    let Ok(rows) = parse_assets_registry(&wrapped) else {
+        return String::new();
+    };
+    let Some(asset) = rows.into_iter().next() else {
+        return String::new();
+    };
+    let rows = match asset {
+        RegistryAsset::Issued(issued) => issued_stat_rows(&issued),
+        RegistryAsset::Native(native) => pegged_stat_rows(&native),
+    };
+    table("table table-borderless table-striped", rows)
+}
+
+fn stat_row(label: &str, value_html: &str) -> String {
+    format!("<tr><td>{label}</td><td>{value_html}</td></tr>")
+}
+
+fn stats_amount(blinded: bool, amount: u64) -> String {
+    if blinded {
+        "Confidential".to_string()
+    } else {
+        amount.to_string()
+    }
+}
+
+fn issued_stat_rows(issued: &IssuedRegistryAsset) -> Vec<String> {
+    let blinded =
+        issued.chain_stats.has_blinded_issuances || issued.mempool_stats.has_blinded_issuances;
+    let mut rows = Vec::new();
+    if let Some(precision) = issued.precision {
+        rows.push(stat_row("Precision", &precision.to_string()));
+    }
+    if let Some(domain) = issued
+        .entity
+        .get("domain")
+        .and_then(|value| value.as_str())
+        .filter(|domain| !domain.is_empty())
+    {
+        rows.push(stat_row("Issuer", &html_escape(domain)));
+    }
+    let issuance = &issued.issuance_txin.txid;
+    if !issuance.is_empty() {
+        rows.push(stat_row("Issuance TX", &txid_anchor(issuance)));
+    }
+    let chain = &issued.chain_stats;
+    if chain.issued_amount != 0 {
+        rows.push(stat_row(
+            "Issued amount",
+            &stats_amount(blinded, chain.issued_amount),
+        ));
+    }
+    rows.push(stat_row(
+        "Burned amount",
+        &stats_amount(blinded, chain.burned_amount),
+    ));
+    if chain.issued_amount != 0 {
+        let circulating = chain.issued_amount.saturating_sub(chain.burned_amount);
+        rows.push(stat_row(
+            "Circulating amount",
+            &stats_amount(blinded, circulating),
+        ));
+    }
+    rows
+}
+
+fn pegged_stat_rows(native: &NativeRegistryAsset) -> Vec<String> {
+    let chain = &native.chain_stats;
+    let mut rows = Vec::new();
+    if chain.peg_in_amount != 0 {
+        rows.push(stat_row("Pegged in", &chain.peg_in_amount.to_string()));
+    }
+    if chain.peg_out_amount != 0 {
+        rows.push(stat_row("Pegged out", &chain.peg_out_amount.to_string()));
+    }
+    rows.push(stat_row("Burned amount", &chain.burned_amount.to_string()));
+    if chain.peg_in_amount != 0 {
+        let circulating = chain
+            .peg_in_amount
+            .saturating_sub(chain.peg_out_amount)
+            .saturating_sub(chain.burned_amount);
+        rows.push(stat_row("Circulating amount", &circulating.to_string()));
+    }
+    rows
+}
+
+pub fn scripthash_markup(body: &str) -> String {
+    match splora_frontend_shared::parse_scripthash(body) {
+        Ok(stats) => {
+            let mut out = paragraph("scripthash", &html_escape(&stats.scripthash));
+            out.push_str(&paragraph(
+                "chain-tx-count",
+                &html_escape(&stats.chain_tx_count),
+            ));
+            out.push_str(&paragraph("funded-sum", &html_escape(&stats.funded_sum)));
+            out.push_str(&paragraph(
+                "mempool-tx-count",
+                &html_escape(&stats.mempool_tx_count),
+            ));
+            out
+        }
+        Err(_) => failure_markup(body).unwrap_or_default(),
     }
 }
 
@@ -296,15 +1137,364 @@ pub fn address_rows_markup(stats_json: &str, txs_json: &str, utxo_json: &str) ->
     let mut out = one_stats(stats_json)
         .map(|stats| address_summary(&stats))
         .unwrap_or_default();
-    out.push_str(&table(
-        "tx-rows",
-        txs_from(txs_json).iter().map(tx_row).collect(),
-    ));
-    out.push_str(&table(
-        "utxo-rows",
-        utxos_from(utxo_json).iter().map(utxo_row).collect(),
-    ));
+    if exact_empty_array(txs_json) {
+        out.push_str(&empty_list("transactions"));
+    } else {
+        out.push_str(&table(
+            "tx-rows",
+            txs_from(txs_json).iter().map(tx_row).collect(),
+        ));
+    }
+    if exact_empty_array(utxo_json) {
+        out.push_str(&empty_list("unspent outputs"));
+    } else {
+        out.push_str(&table(
+            "utxo-rows",
+            utxos_from(utxo_json).iter().map(utxo_row).collect(),
+        ));
+    }
+    out.push_str(&liquid_tx_labels(txs_json));
     out
+}
+
+/// Peg-in, peg-out, asset id, and the confidential label from the parsed transaction.
+///
+/// `TxInput.is_pegin` and `TxOutput.pegout` are on the shared transaction.
+/// A missing `is_pegin` is false. A missing `pegout` is none. `TxOutput.asset`,
+/// `value`, `valuecommitment`, and `assetcommitment` are on the shared output.
+/// A missing value is none, not zero. A commitment is not an amount.
+fn liquid_tx_labels(body: &str) -> String {
+    let mut out = parsed_peg_labels(body);
+    if let Some(tx) = one_tx(body) {
+        out.push_str(&asset_labels_from_tx(&tx));
+        return out;
+    }
+    for tx in txs_from(body) {
+        out.push_str(&asset_labels_from_tx(&tx));
+    }
+    out
+}
+
+fn parsed_peg_labels(body: &str) -> String {
+    if let Some(tx) = one_tx(body) {
+        return peg_labels_from_tx(&tx);
+    }
+    txs_from(body).iter().map(peg_labels_from_tx).collect()
+}
+
+fn peg_labels_from_tx(tx: &Transaction) -> String {
+    let mut vin_rows = String::new();
+    for input in &tx.vin {
+        if !input.is_pegin {
+            continue;
+        }
+        let link = if input.txid.is_empty() {
+            String::new()
+        } else {
+            txid_anchor(&input.txid)
+        };
+        vin_rows.push_str(&format!("<tr><td><span>Peg-in</span>{link}</td></tr>"));
+    }
+    let mut vout_rows = String::new();
+    for output in &tx.vout {
+        let Some(pegout) = output.pegout.as_ref() else {
+            continue;
+        };
+        let link = pegout
+            .script_pubkey_address
+            .as_deref()
+            .filter(|address| !address.is_empty())
+            .map(address_anchor)
+            .unwrap_or_default();
+        vout_rows.push_str(&format!(
+            "<tr><td>Peg-out to {link}<span class=\"badge\">Liquid Peg Out</span></td></tr>"
+        ));
+    }
+    vin_vout_tables(&vin_rows, &vout_rows)
+}
+
+fn vin_vout_tables(vin_rows: &str, vout_rows: &str) -> String {
+    let mut out = String::new();
+    if !vin_rows.is_empty() {
+        out.push_str("<table class=\"table-tx-vin\"><tbody>");
+        out.push_str(vin_rows);
+        out.push_str("</tbody></table>");
+    }
+    if !vout_rows.is_empty() {
+        out.push_str("<table class=\"table-tx-vout\"><tbody>");
+        out.push_str(vout_rows);
+        out.push_str("</tbody></table>");
+    }
+    out
+}
+
+fn asset_labels_from_tx(tx: &Transaction) -> String {
+    let mut vin_rows = String::new();
+    for input in &tx.vin {
+        if let Some(prevout) = input.prevout.as_ref() {
+            if let Some(cell) = output_asset_cell(prevout) {
+                vin_rows.push_str(&format!("<tr><td>{cell}</td></tr>"));
+            }
+        }
+    }
+    let mut vout_rows = String::new();
+    for output in &tx.vout {
+        if let Some(cell) = output_asset_cell(output) {
+            vout_rows.push_str(&format!("<tr><td>{cell}</td></tr>"));
+        }
+    }
+    vin_vout_tables(&vin_rows, &vout_rows)
+}
+
+fn output_asset_cell(output: &TxOutput) -> Option<String> {
+    let commitment = output
+        .valuecommitment
+        .as_deref()
+        .is_some_and(|text| !text.is_empty())
+        || output
+            .assetcommitment
+            .as_deref()
+            .is_some_and(|text| !text.is_empty());
+    let mut cell = String::new();
+    // A public asset id can sit on a blinded amount. Keep both.
+    if output.value.is_none() && commitment {
+        cell.push_str("<span class=\"amount\">Confidential</span>");
+    }
+    if let Some(asset) = output.asset.as_deref().filter(|text| !text.is_empty()) {
+        let escaped = html_escape(asset);
+        cell.push_str(&format!(
+            "<span class=\"amount\"><a href=\"/asset/{escaped}\">{escaped}</a></span>"
+        ));
+    }
+    if cell.is_empty() { None } else { Some(cell) }
+}
+
+/// Indexer chain page size. Cypress `ITEMS_PER_PAGE` is the same 25.
+pub const BLOCK_TXS_PER_PAGE: u32 = 25;
+
+/// Wide pager window. A phone window of three needs a viewport and is not used here.
+pub const BLOCK_PAGER_MAX_PAGES: u32 = 5;
+
+/// `GET /block/:hash/txs` on page 1, then `GET /block/:hash/txs/:start` in steps of 25.
+pub fn block_tx_page_path(hash: &str, page: u32) -> String {
+    let start = page
+        .max(1)
+        .saturating_sub(1)
+        .saturating_mul(BLOCK_TXS_PER_PAGE);
+    if start == 0 {
+        format!("/block/{hash}/txs")
+    } else {
+        format!("/block/{hash}/txs/{start}")
+    }
+}
+
+/// One click shows the details panel. The next click hides it.
+pub fn details_open_after_click(open: bool) -> bool {
+    !open
+}
+
+fn block_page_count(tx_count: u32) -> u32 {
+    if tx_count == 0 {
+        1
+    } else {
+        tx_count.div_ceil(BLOCK_TXS_PER_PAGE)
+    }
+}
+
+fn page_window(page: u32, page_count: u32, max_pages: u32) -> (u32, u32) {
+    if page_count <= max_pages {
+        return (1, page_count.max(1));
+    }
+    let half = max_pages / 2;
+    let mut start = page.saturating_sub(half).max(1);
+    let mut end = start + max_pages - 1;
+    if end > page_count {
+        end = page_count;
+        start = end - max_pages + 1;
+    }
+    (start, end)
+}
+
+fn pager_item(hash: &str, page: u32, active: bool, label: &str) -> String {
+    let start = page.saturating_sub(1).saturating_mul(BLOCK_TXS_PER_PAGE);
+    let href = html_escape(&format!("/block/{hash}?start_index={start}"));
+    let class = if active {
+        "page-item active"
+    } else {
+        "page-item"
+    };
+    format!(
+        "<li class=\"{class}\"><a class=\"page-link\" href=\"{href}\">{}</a></li>",
+        html_escape(label)
+    )
+}
+
+fn pager_items(hash: &str, page: u32, page_count: u32) -> String {
+    let mut out = String::new();
+    out.push_str(&pager_item(hash, 1, false, "«"));
+    out.push_str(&pager_item(hash, page.saturating_sub(1).max(1), false, "‹"));
+    let (start, end) = page_window(page, page_count, BLOCK_PAGER_MAX_PAGES);
+    for number in start..=end {
+        out.push_str(&pager_item(
+            hash,
+            number,
+            number == page,
+            &number.to_string(),
+        ));
+    }
+    let next = (page + 1).min(page_count);
+    out.push_str(&pager_item(hash, next, false, "›"));
+    out.push_str(&pager_item(hash, page_count, false, "»"));
+    out
+}
+
+/// Transaction heading and pager from `block.tx_count`, plus the header link for this page of txs.
+pub fn block_transactions_markup(block_json: &str, txs_json: &str, page: u32) -> String {
+    let Some(block) = one_block(block_json) else {
+        return paragraph("notice", "unreadable indexer response");
+    };
+    let page_count = block_page_count(block.tx_count);
+    let page = page.max(1).min(page_count);
+    let path = block_tx_page_path(&block.id, page);
+    let heading = splora_frontend_shared::transaction_count_heading(block.tx_count);
+    let mut out = format!(
+        "<div id=\"block-tx-title\" class=\"block-tx-title\" data-path=\"{}\"><h2 class=\"text-start\">{}</h2><nav class=\"pagination-container\"><ul class=\"pagination\">{}</ul></nav></div>",
+        html_escape(&path),
+        html_escape(&heading),
+        pager_items(&block.id, page, page_count)
+    );
+    for tx in txs_from(txs_json) {
+        if tx.txid.is_empty() {
+            continue;
+        }
+        let id = html_escape(&tx.txid);
+        out.push_str(&format!(
+            "<div class=\"header-bg box\"><a class=\"tx-link\" href=\"/tx/{id}\">{id}</a></div>"
+        ));
+    }
+    out
+}
+
+fn highlighted_address(address: &str, highlight: bool) -> String {
+    let anchor = address_anchor(address);
+    if highlight {
+        format!("<span class=\"highlight\">{anchor}</span>")
+    } else {
+        anchor
+    }
+}
+
+fn probe_transaction(vin: Vec<TxInput>, vout: Vec<TxOutput>) -> Transaction {
+    Transaction {
+        txid: String::new(),
+        version: 0,
+        lock_time: 0,
+        vin,
+        vout,
+        size: 0,
+        weight: 0,
+        sigops: 0,
+        fee: 0,
+        status: None,
+    }
+}
+
+fn output_matches_page(address: &str, output: &TxOutput) -> bool {
+    let probe = probe_transaction(Vec::new(), vec![output.clone()]);
+    splora_frontend_shared::highlight_counts(address, std::slice::from_ref(&probe))
+        .first()
+        .is_some_and(|count| count.outputs > 0)
+}
+
+fn painted_output(output: &TxOutput, page: &str, highlight: bool) -> String {
+    if let Some(address) = nonempty(output.script_pubkey_address.as_deref()) {
+        return highlighted_address(address, highlight);
+    }
+    if highlight {
+        return highlighted_address(page, true);
+    }
+    String::new()
+}
+
+/// Inputs and outputs for the address page. `highlight_counts` decides `class="highlight"`.
+pub fn address_highlight_markup(address: &str, txs_json: &str) -> String {
+    let txs = txs_from(txs_json);
+    let counts = splora_frontend_shared::highlight_counts(address, &txs);
+    let mut out = String::new();
+    for (index, tx) in txs.iter().enumerate() {
+        let inputs_allowed = counts.get(index).map(|count| count.inputs).unwrap_or(0);
+        let outputs_allowed = counts.get(index).map(|count| count.outputs).unwrap_or(0);
+        out.push_str(&format!("<div data-cy=\"tx-{index}\">"));
+        out.push_str("<table class=\"table-tx-vin\"><tbody>");
+        let mut inputs_left = inputs_allowed;
+        for input in &tx.vin {
+            out.push_str("<tr><td>");
+            if let Some(prevout) = &input.prevout {
+                let highlight = inputs_left > 0 && output_matches_page(address, prevout);
+                if highlight {
+                    inputs_left -= 1;
+                }
+                out.push_str(&painted_output(prevout, address, highlight));
+            }
+            out.push_str("</td></tr>");
+        }
+        out.push_str("</tbody></table>");
+        out.push_str("<table class=\"table-tx-vout\"><tbody>");
+        let mut outputs_left = outputs_allowed;
+        for output in &tx.vout {
+            out.push_str("<tr><td>");
+            let highlight = outputs_left > 0 && output_matches_page(address, output);
+            if highlight {
+                outputs_left -= 1;
+            }
+            out.push_str(&painted_output(output, address, highlight));
+            out.push_str("</td></tr>");
+        }
+        out.push_str("</tbody></table></div>");
+    }
+    out
+}
+
+/// Poisoning banner from `splora_frontend_shared::poison_alerts`. Empty when that comparison finds none.
+pub fn poison_alert_markup(tx_json: &str, network: &str) -> String {
+    let Ok(tx) = parse_transaction_json(tx_json) else {
+        return String::new();
+    };
+    let alerts = splora_frontend_shared::poison_alerts(&tx, network);
+    if alerts.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "<div class=\"alert alert-mempool\" role=\"alert\"><span>Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.</span></div>",
+    );
+    for alert in alerts {
+        let prefix = html_escape(&alert.parts.prefix);
+        let infix = html_escape(&alert.parts.infix);
+        let postfix = html_escape(&alert.parts.postfix);
+        out.push_str(&format!(
+            "<span class=\"prefix\">{prefix}</span><span class=\"infix\">{infix}</span><span class=\"postfix\">{postfix}</span><span class=\"poison-alert\"></span>"
+        ));
+    }
+    out
+}
+
+/// Version, bits, merkle root, difficulty, and nonce. Closed markup keeps `hidden` on `#details`.
+pub fn block_details_markup(block_json: &str, open: bool) -> String {
+    let hidden = if open { "" } else { " hidden" };
+    let Some(block) = one_block(block_json) else {
+        return format!(
+            "<div id=\"details\"{hidden}><p class=\"notice\">unreadable indexer response</p></div>"
+        );
+    };
+    let id = html_escape(&block.id);
+    format!(
+        "<div id=\"details\"{hidden}><table><tbody><tr><td>Version</td><td>{}</td></tr><tr><td>Bits</td><td>{}</td></tr><tr><td>Merkle root</td><td>{}</td></tr><tr><td>Difficulty</td><td>{}</td></tr><tr><td>Nonce</td><td>{}</td></tr></tbody></table><a href=\"/block/{id}/header\">Block Header Hex</a></div>",
+        block.version,
+        block.bits,
+        html_escape(&block.merkle_root),
+        plain_number(block.difficulty),
+        block.nonce
+    )
 }
 
 #[cfg(test)]

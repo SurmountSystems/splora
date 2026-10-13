@@ -3,8 +3,8 @@
 //! One `<tr>` per block or transaction. A flat sentence in a `<pre>` is not a row.
 
 use splora_web::{
-    address_rows_markup, block_rows_markup, blocks_rows_markup, dashboard_rows_markup,
-    transaction_row_markup,
+    address_fields_text, address_rows_markup, block_rows_markup, blocks_rows_markup,
+    dashboard_rows_markup, transaction_row_markup,
 };
 
 const BLOCK_HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -67,6 +67,18 @@ fn cell(row: &str, class: &str) -> String {
 
 fn assert_cell(row: &str, class: &str, value: &str) {
     assert_eq!(cell(row, class), value, "cell {class} in {row}");
+}
+
+fn txid_link(id: &str) -> String {
+    format!("<a href=\"/tx/{id}\">{id}</a>")
+}
+
+fn block_link(hash: &str) -> String {
+    format!("<a href=\"/block/{hash}\">{hash}</a>")
+}
+
+fn height_on_block(height: &str, hash: &str) -> String {
+    format!("<a href=\"/block/{hash}\">{height}</a>")
 }
 
 fn element_text(markup: &str, class: &str) -> String {
@@ -183,19 +195,27 @@ fn explorer_views_render_one_row_per_block_or_transaction() {
     assert_not_flat_sentence(&dashboard);
     let block_rows = row_bodies(&dashboard, "block-row");
     assert_eq!(block_rows.len(), 2, "dashboard blocks: {dashboard}");
-    assert_cell(&block_rows[0], "height", "842001");
-    assert_cell(&block_rows[0], "hash", BLOCK_HASH);
+    assert_cell(
+        &block_rows[0],
+        "height",
+        &height_on_block("842001", BLOCK_HASH),
+    );
+    assert_cell(&block_rows[0], "hash", &block_link(BLOCK_HASH));
     assert_cell(&block_rows[0], "tx-count", "17");
     assert_cell(&block_rows[0], "time", "1700000000");
-    assert_cell(&block_rows[1], "height", "842000");
-    assert_cell(&block_rows[1], "hash", BLOCK_PREV);
+    assert_cell(
+        &block_rows[1],
+        "height",
+        &height_on_block("842000", BLOCK_PREV),
+    );
+    assert_cell(&block_rows[1], "hash", &block_link(BLOCK_PREV));
     assert_cell(&block_rows[1], "tx-count", "3");
     assert_cell(&block_rows[1], "time", "1699990000");
     let tx_rows = row_bodies(&dashboard, "tx-row");
     assert_eq!(tx_rows.len(), 2, "dashboard txs: {dashboard}");
-    assert_cell(&tx_rows[0], "txid", TXID_A);
+    assert_cell(&tx_rows[0], "txid", &txid_link(TXID_A));
     assert_cell(&tx_rows[0], "fee", "12345");
-    assert_cell(&tx_rows[1], "txid", TXID_B);
+    assert_cell(&tx_rows[1], "txid", &txid_link(TXID_B));
     assert_cell(&tx_rows[1], "fee", "50");
 
     let blocks = blocks_rows_markup(&blocks_json());
@@ -206,12 +226,20 @@ fn explorer_views_render_one_row_per_block_or_transaction() {
         row_bodies(&blocks, "tx-row").is_empty(),
         "blocks page invented tx rows: {blocks}"
     );
-    assert_cell(&block_rows[0], "height", "842001");
-    assert_cell(&block_rows[0], "hash", BLOCK_HASH);
+    assert_cell(
+        &block_rows[0],
+        "height",
+        &height_on_block("842001", BLOCK_HASH),
+    );
+    assert_cell(&block_rows[0], "hash", &block_link(BLOCK_HASH));
     assert_cell(&block_rows[0], "tx-count", "17");
     assert_cell(&block_rows[0], "time", "1700000000");
-    assert_cell(&block_rows[1], "height", "842000");
-    assert_cell(&block_rows[1], "hash", BLOCK_PREV);
+    assert_cell(
+        &block_rows[1],
+        "height",
+        &height_on_block("842000", BLOCK_PREV),
+    );
+    assert_cell(&block_rows[1], "hash", &block_link(BLOCK_PREV));
     assert_cell(&block_rows[1], "tx-count", "3");
     assert_cell(&block_rows[1], "time", "1699990000");
 
@@ -219,22 +247,26 @@ fn explorer_views_render_one_row_per_block_or_transaction() {
     assert_not_flat_sentence(&block);
     let block_rows = row_bodies(&block, "block-row");
     assert_eq!(block_rows.len(), 1, "block page: {block}");
-    assert_cell(&block_rows[0], "height", "842001");
-    assert_cell(&block_rows[0], "hash", BLOCK_HASH);
+    assert_cell(
+        &block_rows[0],
+        "height",
+        &height_on_block("842001", BLOCK_HASH),
+    );
+    assert_cell(&block_rows[0], "hash", &block_link(BLOCK_HASH));
     assert_cell(&block_rows[0], "tx-count", "17");
     assert_cell(&block_rows[0], "time", "1700000000");
     let tx_rows = row_bodies(&block, "tx-row");
     assert_eq!(tx_rows.len(), 2, "block txs: {block}");
-    assert_cell(&tx_rows[0], "txid", TXID_B);
+    assert_cell(&tx_rows[0], "txid", &txid_link(TXID_B));
     assert_cell(&tx_rows[0], "fee", "9");
-    assert_cell(&tx_rows[1], "txid", TXID_A);
+    assert_cell(&tx_rows[1], "txid", &txid_link(TXID_A));
     assert_cell(&tx_rows[1], "fee", "4");
 
     let transaction = transaction_row_markup(&one_tx_json());
     assert_not_flat_sentence(&transaction);
     let tx_rows = row_bodies(&transaction, "tx-row");
     assert_eq!(tx_rows.len(), 1, "transaction page: {transaction}");
-    assert_cell(&tx_rows[0], "txid", TXID_A);
+    assert_cell(&tx_rows[0], "txid", &txid_link(TXID_A));
     assert_cell(&tx_rows[0], "fee", "9");
     assert!(
         row_bodies(&transaction, "block-row").is_empty(),
@@ -244,7 +276,7 @@ fn explorer_views_render_one_row_per_block_or_transaction() {
     let with_parties = transaction_row_markup(&tx_with_parties_json());
     let party_rows = row_bodies(&with_parties, "tx-row");
     assert_eq!(party_rows.len(), 1, "parties must stay on one tx row");
-    assert_cell(&party_rows[0], "txid", TXID_A);
+    assert_cell(&party_rows[0], "txid", &txid_link(TXID_A));
     assert_cell(&party_rows[0], "fee", "584");
     assert!(
         party_rows[0].contains("bc1qinput"),
@@ -276,9 +308,9 @@ fn explorer_views_render_one_row_per_block_or_transaction() {
     assert_cell(&utxo_rows[1], "value", "7");
     let address_txs = row_bodies(&address, "tx-row");
     assert_eq!(address_txs.len(), 2, "address txs: {address}");
-    assert_cell(&address_txs[0], "txid", TXID_B);
+    assert_cell(&address_txs[0], "txid", &txid_link(TXID_B));
     assert_cell(&address_txs[0], "fee", "9");
-    assert_cell(&address_txs[1], "txid", TXID_A);
+    assert_cell(&address_txs[1], "txid", &txid_link(TXID_A));
     assert_cell(&address_txs[1], "fee", "4");
 
     assert!(
@@ -310,4 +342,61 @@ fn explorer_views_render_one_row_per_block_or_transaction() {
         "transaction_fields_text",
     );
     assert_view_uses_rows("AddressPage", "address_rows_markup", "address_fields_text");
+}
+
+#[test]
+fn utxo_omitted_value_paints_confidential_blank_or_zero() {
+    let commitment = "a".repeat(66);
+    let utxos = format!(
+        r#"[
+            {{"txid":"blind","vout":1,"status":{{"confirmed":false}},"valuecommitment":"{commitment}"}},
+            {{"txid":"plain","vout":1,"status":{{"confirmed":false}}}},
+            {{"txid":"emptyc","vout":1,"status":{{"confirmed":false}},"valuecommitment":"","assetcommitment":""}},
+            {{"txid":"zeroed","vout":1,"status":{{"confirmed":true}},"value":0}}
+        ]"#
+    );
+    let markup = address_rows_markup("", "", &utxos);
+    let rows = row_bodies(&markup, "utxo-row");
+    assert_eq!(rows.len(), 4, "{markup}");
+    assert_eq!(
+        cell(&rows[0], "value"),
+        "<span class=\"amount\">Confidential</span>"
+    );
+    assert!(rows[0].contains("Confidential"), "{}", rows[0]);
+    assert!(!rows[0].contains(&commitment), "{}", rows[0]);
+    assert!(!rows[0].contains('0'), "{}", rows[0]);
+    assert!(!rows[0].contains("Some("), "{}", rows[0]);
+    assert!(!rows[0].contains("0.001"), "{}", rows[0]);
+
+    assert_eq!(cell(&rows[1], "value"), "");
+    assert!(!rows[1].contains("Confidential"), "{}", rows[1]);
+    assert!(!rows[1].contains('0'), "{}", rows[1]);
+
+    assert_eq!(cell(&rows[2], "value"), "");
+    assert!(!rows[2].contains("Confidential"), "{}", rows[2]);
+    assert!(!rows[2].contains('0'), "{}", rows[2]);
+
+    assert_eq!(cell(&rows[3], "value"), "0");
+    assert!(!rows[3].contains("Confidential"), "{}", rows[3]);
+
+    let text = address_fields_text("", "", &utxos);
+    assert!(
+        text.contains("utxo blind vout 1 value Confidential confirmed false"),
+        "{text}"
+    );
+    assert!(
+        text.contains("utxo plain vout 1 value  confirmed false"),
+        "{text}"
+    );
+    assert!(
+        text.contains("utxo emptyc vout 1 value  confirmed false"),
+        "{text}"
+    );
+    assert!(
+        text.contains("utxo zeroed vout 1 value 0 confirmed true"),
+        "{text}"
+    );
+    assert!(!text.contains(&commitment), "{text}");
+    assert!(!text.contains("Some("), "{text}");
+    assert!(!text.contains("0.001"), "{text}");
 }

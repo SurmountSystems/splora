@@ -8,8 +8,8 @@ use std::fmt;
 use splora_api::{Network, api_root};
 use splora_frontend_shared::{
     address_path, block_path, blocks_tip_hash_path, blocks_tip_height_path, broadcast_body,
-    broadcast_path, mempool_recent_path, parse_blocks_tip_hash, parse_blocks_tip_height,
-    test_txs_body, test_txs_path, tx_path,
+    broadcast_path, mempool_recent_path, package_body, package_path, parse_blocks_tip_hash,
+    parse_blocks_tip_height, test_txs_body, test_txs_path, tx_path,
 };
 
 /// One indexer call the client built. `path` is the suffix after the network root.
@@ -217,6 +217,31 @@ impl<G: ExplorerGet + ExplorerPost> ExplorerClient<G> {
         Ok((request, body))
     }
 
+    /// `POST /txs/package` with a JSON array of raw transaction hex. At least two, at most 25.
+    pub fn broadcast_package(
+        &self,
+        raw_txs: &[String],
+    ) -> Result<(ClientRequest, String), ClientError> {
+        if raw_txs.len() < 2 || raw_txs.len() > 25 {
+            return Err(ClientError::BadPath);
+        }
+        let mut hexes = Vec::with_capacity(raw_txs.len());
+        for raw_tx in raw_txs {
+            hexes.push(raw_hex(raw_tx)?.to_string());
+        }
+        let hex_refs: Vec<&str> = hexes.iter().map(String::as_str).collect();
+        let path = package_path();
+        let request = ClientRequest {
+            method: "POST",
+            path: path.to_string(),
+            url: self.url(path),
+            content_type: "application/json",
+            body: package_body(&hex_refs),
+        };
+        let body = self.get.post_text(&request)?;
+        Ok((request, body))
+    }
+
     pub fn test_transactions(
         &self,
         raw_txs: &[String],
@@ -224,6 +249,25 @@ impl<G: ExplorerGet + ExplorerPost> ExplorerClient<G> {
         let request = self.test_transactions_request(raw_txs)?;
         let body = self.get.post_text(&request)?;
         Ok((request, body))
+    }
+
+    /// POST an indexer path the client can send. `path` has no `?`.
+    pub fn post_path(
+        &self,
+        path: &str,
+        content_type: &'static str,
+        body: String,
+    ) -> Result<(ClientRequest, String), ClientError> {
+        indexer_path(path)?;
+        let request = ClientRequest {
+            method: "POST",
+            path: path.to_string(),
+            url: self.url(path),
+            content_type,
+            body,
+        };
+        let response = self.get.post_text(&request)?;
+        Ok((request, response))
     }
 }
 

@@ -62,6 +62,26 @@ pub fn allowed_post_path(path: &str) -> bool {
         || path == splora_frontend_shared::test_txs_path()
 }
 
+/// One raw transaction and test submission stay on their existing paths.
+/// Package broadcast is `POST /txs/package` only when the body is a JSON
+/// array of more than one hex string. One hex is not a package.
+pub fn allowed_post(path: &str, body: &str) -> bool {
+    if allowed_post_path(path) {
+        return true;
+    }
+    if path != splora_frontend_shared::package_path() {
+        return false;
+    }
+    let Ok(rows) = serde_json::from_str::<Vec<String>>(body) else {
+        return false;
+    };
+    rows.len() > 1
+        && rows.iter().all(|row| {
+            let row = row.trim();
+            !row.is_empty() && row.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
 pub fn broadcast_request() -> IndexerRequest {
     IndexerRequest {
         method: "POST",

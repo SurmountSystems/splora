@@ -92,6 +92,146 @@ fn path_list_matches_indexer_routes_after_the_public_prefix() {
                 method: "GET",
                 pattern: "/fee-estimates",
             },
+            Route {
+                method: "GET",
+                pattern: "/block/:hash/status",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/outspends",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/outspend/:index",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/merkle-proof",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/hex",
+            },
+            Route {
+                method: "GET",
+                pattern: "/address/:script/txs/chain",
+            },
+            Route {
+                method: "GET",
+                pattern: "/address/:script/txs/chain/:last_seen_txid",
+            },
+            Route {
+                method: "GET",
+                pattern: "/address/:script/txs/mempool",
+            },
+            Route {
+                method: "GET",
+                pattern: "/address/:script/txs/summary",
+            },
+            Route {
+                method: "GET",
+                pattern: "/address/:script/txs/summary/:last_seen_txid",
+            },
+            Route {
+                method: "GET",
+                pattern: "/mempool/txids",
+            },
+            Route {
+                method: "GET",
+                pattern: "/mempool/txids/page/:last_seen_txid",
+            },
+            Route {
+                method: "GET",
+                pattern: "/address-prefix/:prefix",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/txs",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/txs/chain",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/txs/chain/:last_seen_txid",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/txs/mempool",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/utxo",
+            },
+            Route {
+                method: "POST",
+                pattern: "/txs/package",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/txs/summary",
+            },
+            Route {
+                method: "GET",
+                pattern: "/scripthash/:hash/txs/summary/:last_seen_txid",
+            },
+            Route {
+                method: "POST",
+                pattern: "/addresses/txs",
+            },
+            Route {
+                method: "POST",
+                pattern: "/scripthashes/txs",
+            },
+            Route {
+                method: "POST",
+                pattern: "/addresses/txs/summary",
+            },
+            Route {
+                method: "POST",
+                pattern: "/addresses/txs/summary/:last_seen_txid",
+            },
+            Route {
+                method: "POST",
+                pattern: "/scripthashes/txs/summary",
+            },
+            Route {
+                method: "POST",
+                pattern: "/scripthashes/txs/summary/:last_seen_txid",
+            },
+            Route {
+                method: "GET",
+                pattern: "/txs/outspends",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/status",
+            },
+            Route {
+                method: "GET",
+                pattern: "/block/:hash/txid/:index",
+            },
+            Route {
+                method: "GET",
+                pattern: "/block/:hash/header",
+            },
+            Route {
+                method: "GET",
+                pattern: "/block/:hash/raw",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/raw",
+            },
+            Route {
+                method: "GET",
+                pattern: "/tx/:txid/merkleblock-proof",
+            },
         ]
     );
 }
