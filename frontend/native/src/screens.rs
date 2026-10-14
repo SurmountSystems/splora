@@ -432,6 +432,13 @@ impl BlockScreen {
         let block_body = read_required(client, &block_path(&hash))?;
         let block = serde_json::from_str::<splora_frontend_shared::wire::Block>(&block_body)
             .map_err(http_parse)?;
+        // Body lines only. A row would paint each sentence a second time.
+        if block.height == 0 {
+            lines.push("Genesis".to_string());
+        }
+        if block.height > 100_000 && block.tx_count <= 1 {
+            lines.push("Why is this block empty?".to_string());
+        }
         lines.push(render_block_line(&block));
         lines.push(splora_frontend_shared::transaction_count_heading(
             block.tx_count,
@@ -580,8 +587,45 @@ impl BlocksScreen {
         if request.method != "GET" || request.path != path || request.path.contains("v1") {
             return Err(ClientError::BadPath);
         }
-        self.body = render_block_list(&body)?;
-        self.rows = block_row_lines(&body)?;
+        // A non-array still uses the whole-array parser's error. One bad element does not.
+        let elements = match serde_json::from_str::<serde_json::Value>(&body).map_err(http_parse)?
+        {
+            serde_json::Value::Array(elements) => elements,
+            _ => {
+                return match serde_json::from_str::<Vec<splora_frontend_shared::wire::Block>>(
+                    &body,
+                ) {
+                    Err(err) => Err(http_parse(err)),
+                    Ok(_) => Err(http_parse("blocks list was not an array")),
+                };
+            }
+        };
+        let mut kept = Vec::new();
+        for element in elements {
+            if let Ok(block) = serde_json::from_value::<splora_frontend_shared::wire::Block>(element)
+            {
+                kept.push(block);
+            }
+        }
+        if kept.is_empty() {
+            self.body = "blocks:".to_string();
+            self.rows.clear();
+            return Ok(());
+        }
+        self.body = kept
+            .iter()
+            .map(|block| {
+                let line = render_block_line(block);
+                let from = format!(" height {} tx_count ", block.height);
+                let to = format!(" Height height {} tx_count ", block.height);
+                line.replacen(&from, &to, 1)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.rows = kept
+            .iter()
+            .map(|block| paint_block_row(&BlockRow::from(block)))
+            .collect();
         Ok(())
     }
 
@@ -711,6 +755,8 @@ impl TxScreen {
             lines.push(words);
         }
         lines.push(fee_words(tx.fee));
+        lines.push(version_words(tx.version));
+        lines.push(locktime_words(tx.lock_time));
         lines.push(size_words(tx.size));
         if let Some(words) = virtual_size_words(&document) {
             lines.push(words);
@@ -1954,8 +2000,8 @@ fn render_block_line(block: &splora_frontend_shared::wire::Block) -> String {
         block.height,
         block.tx_count,
         block.timestamp,
-        block.size,
-        block.weight,
+        bytes_pipe_text(u64::from(block.size)),
+        wu_bytes_pipe_text(u64::from(block.weight)),
         block.previous_block_hash.as_deref().unwrap_or(""),
         block.median_time,
         block.version,
@@ -2418,9 +2464,24 @@ fn render_tx_parties(
             ));
             push_script_type(&mut lines, "input", &prevout.script_pubkey_type);
         }
+        if input.prevout.is_none()
+            && input.issuance.is_none()
+            && !input.is_coinbase
+            && input.is_pegin != Some(true)
+        {
+            lines.push("UNKNOWN".to_string());
+        }
         let raw = vin_json.get(index);
         push_input_coinbase(&mut lines, raw);
         push_input_sequence(&mut lines, raw);
+        // Missing, null, and "" omit this line. Do not trim. The asm stays plaintext.
+        if let Some(asm) = input
+            .inner_redeem_script_asm
+            .as_deref()
+            .filter(|text| !text.is_empty())
+        {
+            lines.push(format!("P2SH redeem script {asm}"));
+        }
         if let Some(issuance) = &input.issuance {
             lines.extend(issuance_lines(issuance));
         }
@@ -2447,17 +2508,20 @@ fn push_script_type(lines: &mut Vec<String>, side: &str, script_type: &str) {
 
 /// Shared `is_coinbase` is a bool, so a missing key is not false.
 /// Only JSON `true` paints. False, null, and a missing key stay off the screen.
+/// The parenthetical is the next plaintext line. There is no HTML class and no liquid switch.
 fn push_input_coinbase(lines: &mut Vec<String>, raw: Option<&serde_json::Value>) {
     let Some(raw) = raw else {
         return;
     };
     if raw.get("is_coinbase").and_then(|value| value.as_bool()) == Some(true) {
         lines.push("input coinbase".to_string());
+        lines.push("(Newly Generated Coins)".to_string());
     }
 }
 
 /// Shared `sequence` is `u32`, so a missing key is not zero.
-/// A present integer paints, including zero. A missing key omits the label.
+/// A present integer paints the decimal line and the Angular formatHex line,
+/// including zero. A missing key omits both.
 fn push_input_sequence(lines: &mut Vec<String>, raw: Option<&serde_json::Value>) {
     let Some(raw) = raw else {
         return;
@@ -2466,6 +2530,17 @@ fn push_input_sequence(lines: &mut Vec<String>, raw: Option<&serde_json::Value>)
         return;
     };
     lines.push(format!("sequence {sequence}"));
+    lines.push(format!("nSequence {}", nsequence_hex(sequence)));
+}
+
+/// Angular formatHex: lowercase hex, prefixed with `0x`, one leading zero when the digit count is odd.
+fn nsequence_hex(sequence: u64) -> String {
+    let digits = format!("{sequence:x}");
+    if digits.len() % 2 == 1 {
+        format!("0x0{digits}")
+    } else {
+        format!("0x{digits}")
+    }
 }
 
 fn vin_objects(value: &serde_json::Value) -> Vec<serde_json::Value> {
@@ -2636,6 +2711,19 @@ fn fee_words(fee: u64) -> String {
     format!("Fee {} sats", grouped_count(fee))
 }
 
+/// Details version. Angular `number` pipe. The row is always shown. Explicit 0 paints.
+/// Thousands separators, no fraction digits. The raw header `version N` stays ungrouped.
+fn version_words(version: u32) -> String {
+    format!("Version {}", grouped_count(u64::from(version)))
+}
+
+/// Details locktime. The row is always shown. Explicit 0 paints.
+/// The value is the raw integer. No thousands separator. No left-to-right mark.
+/// This does not call `grouped_count`. The raw header `locktime N` stays.
+fn locktime_words(lock_time: u32) -> String {
+    format!("Locktime {lock_time}")
+}
+
 /// en-US integer grouping. `1,500` not `1500`. No fraction digits.
 fn grouped_count(value: u64) -> String {
     let digits = value.to_string();
@@ -2780,13 +2868,20 @@ fn two_decimals_half_away_from_zero(value: f64) -> String {
 }
 
 /// Tip height minus the transaction block height, plus 1.
-/// A missing block height or a missing tip omits the line. An explicit zero
-/// height is present. The subtraction is `i128` so it does not wrap.
+/// Both heights present paint the count. A block height with an unparsed tip
+/// paints Confirmed. A parsed tip with no block height paints Unconfirmed.
+/// No block height and no tip omits the line. An explicit zero height is
+/// present. The subtraction is `i128` so it does not wrap.
 fn confirmation_words(block_height: Option<u64>, tip_height: Option<u64>) -> Option<String> {
-    let block_height = block_height?;
-    let tip_height = tip_height?;
-    let count = i128::from(tip_height) - i128::from(block_height) + 1;
-    Some(format!("confirmations {count}"))
+    match (block_height, tip_height) {
+        (Some(block_height), Some(tip_height)) => {
+            let count = i128::from(tip_height) - i128::from(block_height) + 1;
+            Some(format!("confirmations {count}"))
+        }
+        (Some(_), None) => Some("Confirmed".to_string()),
+        (None, Some(_)) => Some("Unconfirmed".to_string()),
+        (None, None) => None,
+    }
 }
 
 fn absent_tip_message(message: &str) -> bool {
@@ -3048,11 +3143,29 @@ fn append_tx_body(lines: &mut String, body: &str) {
     }
 }
 
+/// Angular `shortenString`. Prefix length is `length / 2`. Suffix length is
+/// `length - prefix`, because `substring` truncates a half of 6.5 toward zero.
+fn shorten_string(value: &str, length: usize) -> String {
+    let count = value.chars().count();
+    if value.is_empty() || count <= length {
+        return value.to_string();
+    }
+    let prefix = length / 2;
+    let suffix = length - prefix;
+    let head: String = value.chars().take(prefix).collect();
+    let tail: String = value.chars().skip(count - suffix).collect();
+    format!("{head}...{tail}")
+}
+
 fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
     // A missing key is None. Some(0) still prints. Do not substitute zero.
+    // Details version, bits, and nonce are the decimal beside 8 lowercase hex digits.
+    // The summary line stays decimal.
+    let version_hex = format!("0x{value:08x}", value = block.version);
     let mut text = format!(
-        "block details\nid {}\nheight {}\nversion {}\ntimestamp {}\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\npreviousblockhash {}\nmediantime {}",
+        "block details\nid {}\nHash {}\nheight {}\nversion {} {version_hex}\ntimestamp {}\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\npreviousblockhash {}\nmediantime {}",
         block.id,
+        shorten_string(&block.id, 13),
         block.height,
         block.version,
         block.timestamp,
@@ -3064,10 +3177,10 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
         block.median_time,
     );
     if let Some(nonce) = block.nonce {
-        text.push_str(&format!("\nnonce {nonce}"));
+        text.push_str(&format!("\nnonce {nonce} 0x{value:08x}", value = nonce));
     }
     if let Some(bits) = block.bits {
-        text.push_str(&format!("\nbits {bits}"));
+        text.push_str(&format!("\nbits {bits} 0x{value:08x}", value = bits));
     }
     if let Some(difficulty) = block.difficulty {
         text.push_str("\ndifficulty ");
@@ -5038,7 +5151,7 @@ mod tests {
             &[
                 "block hash abc123def456 height 800000",
                 "recent txid txidrecent222 fee 321 vsize 111 value 999",
-                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp",
+                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 B weight 800 WU previous_hash pp",
             ],
         );
         let painted = painted_of(&host);
@@ -5062,8 +5175,8 @@ mod tests {
         assert_view(
             &host,
             &[
-                "block hash abc123def456 height 800000",
-                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp",
+                "block hash abc123def456 Height height 800000",
+                "block hash abc123def456 Height height 800000 tx_count 2 timestamp 1700000000 size 200 B weight 800 WU previous_hash pp",
             ],
         );
     }
@@ -5083,8 +5196,8 @@ mod tests {
         assert_view(
             &host,
             &[
-                "block hash abc123def456 height 800000",
-                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp",
+                "block hash abc123def456 Height height 800000",
+                "block hash abc123def456 Height height 800000 tx_count 2 timestamp 1700000000 size 200 B weight 800 WU previous_hash pp",
             ],
         );
     }
@@ -5132,7 +5245,7 @@ mod tests {
                 "block hash abc123def456 height 800000",
                 "tx txid txidintx999 fee 50 confirmed true block_height",
                 "txid onlyintxids",
-                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp",
+                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 B weight 800 WU previous_hash pp",
                 "size 100",
                 "weight 400",
             ],
@@ -5184,7 +5297,7 @@ mod tests {
                 "block hash abc123def456 height 800000",
                 "tx txid txidintx999 fee 50 confirmed true block_height",
                 "txid onlyintxids",
-                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp",
+                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 B weight 800 WU previous_hash pp",
                 "size 100",
                 "weight 400",
             ],
@@ -5922,7 +6035,7 @@ mod tests {
         assert_view(
             &host,
             &[
-                "block hash abc123def456 height 800000 tx_count 2",
+                "block hash abc123def456 Height height 800000 tx_count 2",
                 "timestamp 1700000000",
                 "median_time 1700000000",
             ],
@@ -6101,7 +6214,7 @@ mod tests {
         assert_view(
             &host,
             &[
-                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 weight 800 previous_hash pp median_time 1700000000 version 1 merkle_root mm nonce 1 bits 2 difficulty 3",
+                "block hash abc123def456 height 800000 tx_count 2 timestamp 1700000000 size 200 B weight 800 WU previous_hash pp median_time 1700000000 version 1 merkle_root mm nonce 1 bits 2 difficulty 3",
                 "tx txid rate-tx",
             ],
         );

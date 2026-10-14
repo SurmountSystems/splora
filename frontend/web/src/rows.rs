@@ -241,15 +241,39 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|text| !text.is_empty())
 }
 
+// `half` is 13/2 as f64 (6.5). Truncating toward zero keeps the last 7 of a
+// 64-character id. Integer `length / 2` would keep the last 6.
+fn shorten_block_id(id: &str) -> String {
+    const LENGTH: f64 = 13.0;
+    if (id.len() as f64) <= LENGTH {
+        return id.to_string();
+    }
+    let half = LENGTH / 2.0;
+    let prefix_len = half.trunc() as usize;
+    let suffix_start = ((id.len() as f64) - half).trunc() as usize;
+    format!("{}...{}", &id[..prefix_len], &id[suffix_start..])
+}
+
 fn block_row(block: &Block) -> String {
     let row = BlockRow::from(block);
+    let (number, unit) = size_number_and_unit(block.size);
+    let (weight_number, weight_unit) = weight_number_and_unit(block.weight);
     let mut cells = vec![
+        td("height-label", "Height"),
         td("height", &height_on_block(row.height, &row.id)),
+        td("hash-label", "Hash"),
+        td("short-hash", &html_escape(&shorten_block_id(&row.id))),
         td("hash", &block_anchor(&row.id)),
         td("tx-count", &row.tx_count.to_string()),
         td("time", &row.timestamp.to_string()),
-        td("size", &block.size.to_string()),
-        td("weight", &block.weight.to_string()),
+        td(
+            "size",
+            &format!("{number} <span class=\"symbol\">{unit}</span>"),
+        ),
+        td(
+            "weight",
+            &format!("{weight_number} <span class=\"symbol\">{weight_unit}</span>"),
+        ),
         td("median-time", &block.median_time.to_string()),
     ];
     if let Some(previous) = nonempty(block.previous_block_hash.as_deref()) {
@@ -369,6 +393,14 @@ fn input_party(input: &TxInput) -> String {
                 "input script type {}",
                 prevout.script_pubkey_type
             )));
+            // Angular `toUpperCase()` on `prevout.scriptpubkey_type`, then escape.
+            let upper = html_escape(&prevout.script_pubkey_type.to_uppercase());
+            inner.push_str(
+                "<span class=\"previous-output-type-label\">Previous output type</span>",
+            );
+            inner.push_str(&format!(
+                "<span class=\"previous-output-type\">{upper}</span>"
+            ));
         }
     }
     if let Some(issuance) = &input.issuance {
@@ -378,11 +410,43 @@ fn input_party(input: &TxInput) -> String {
     // reaches here. Coinbase paints only when the bool is true.
     if input.is_coinbase {
         inner.push_str("<span class=\"coinbase\">coinbase</span>");
+        // No liquid or liquidtestnet gate on this markup. Coinbase true paints it.
+        inner.push_str("<span class=\"newly-generated-coins\">(Newly Generated Coins)</span>");
+    }
+    // Angular address cell, after coinbase and peg-in. JSON null is no prevout.
+    // Issuance and peg-in stay on their own branches. A present prevout does not
+    // paint this, including a prevout with no address.
+    if input.prevout.is_none()
+        && input.issuance.is_none()
+        && !input.is_coinbase
+        && input.is_pegin != Some(true)
+    {
+        inner.push_str("<span class=\"unknown-input\">UNKNOWN</span>");
     }
     inner.push_str(&format!(
         "<span class=\"sequence\">sequence {}</span>",
         input.sequence
     ));
+    // Angular formatHex: lowercase hex, one leading zero when the digit count is odd.
+    let digits = format!("{:x}", input.sequence);
+    let hex = if digits.len() % 2 == 1 {
+        format!("0x0{digits}")
+    } else {
+        format!("0x{digits}")
+    };
+    inner.push_str(&format!("<span class=\"nsequence\">nSequence {hex}</span>"));
+    // Angular `*ngIf` is falsy for a missing field and for an empty string.
+    if let Some(asm) = input
+        .inner_redeem_script_asm
+        .as_deref()
+        .filter(|text| !text.is_empty())
+    {
+        let escaped = html_escape(asm);
+        inner.push_str("<span class=\"p2sh-redeem-label\">P2SH redeem script</span>");
+        inner.push_str(&format!(
+            "<span class=\"p2sh-redeem-script\">{escaped}</span>"
+        ));
+    }
     format!("<span class=\"party\">{inner}</span>")
 }
 
@@ -507,11 +571,14 @@ fn tx_row(tx: &Transaction) -> String {
         td("virtual-size", &format!("Virtual size {}", tx.weight / 4)),
         td("adjusted-vsize", &format!("Adjusted vsize {n}")),
         td("version", &row.version.to_string()),
+        td("locktime-label", "Locktime"),
         td("locktime", &row.lock_time.to_string()),
         td("sigops-label", "Sigops"),
         td("sigops", &row.sigops.to_string()),
     ];
+    // The value cell stays the raw rate. The label is the cell before it.
     if let Some(rate) = finite_rate(row.sat_per_vbyte()) {
+        cells.push(td("fee-rate-label", "Fee rate"));
         cells.push(td("fee-rate", &rate));
     }
     let confirming_hash = tx
@@ -762,8 +829,10 @@ pub fn blocks_rows_markup(blocks_json: &str) -> String {
 }
 
 pub fn block_rows_markup(block_json: &str, txs_json: &str) -> String {
-    let block_rows = one_block(block_json)
-        .map(|block| vec![block_row(&block)])
+    let parsed = one_block(block_json);
+    let block_rows = parsed
+        .as_ref()
+        .map(|block| vec![block_row(block)])
         .unwrap_or_default();
     let mut out = table("block-rows", block_rows);
     if exact_empty_array(txs_json) {
@@ -775,6 +844,17 @@ pub fn block_rows_markup(block_json: &str, txs_json: &str) -> String {
         ));
     }
     out.push_str(&liquid_tx_labels(txs_json));
+    // Height 0 paints Genesis. A missing height fails parse, so this stays off.
+    // Height above 100000 and at most one transaction paints the empty-block
+    // sentence. Height 100000 stays off.
+    if let Some(block) = parsed.as_ref() {
+        if block.height == 0 {
+            out.push_str("<span class=\"genesis\">Genesis</span>");
+        }
+        if block.height > 100_000 && block.tx_count <= 1 {
+            out.push_str("<span class=\"empty-block\">Why is this block empty?</span>");
+        }
+    }
     out
 }
 
@@ -796,7 +876,9 @@ fn output_total_words(tx: &Transaction) -> Option<String> {
 pub fn transaction_row_markup(body: &str) -> String {
     let mut out = match one_tx(body) {
         Some(tx) => {
-            let mut markup = table("tx-rows", vec![tx_row(&tx)]);
+            // Angular subtitle, once, before the list. Empty vin and vout still show it.
+            let mut markup = String::from("<h2>Inputs & Outputs</h2>");
+            markup.push_str(&table("tx-rows", vec![tx_row(&tx)]));
             if let Some(words) = output_total_words(&tx) {
                 markup.push_str(&paragraph("output-total", &words));
             }
@@ -809,23 +891,27 @@ pub fn transaction_row_markup(body: &str) -> String {
 }
 
 /// Tip height minus `status.block_height`, plus 1.
-/// A missing block height, a missing status, or a tip body that is empty or
-/// not an integer omits the paragraph. The difference is `i128` so it does not wrap.
+/// An empty or non-integer tip omits the count and does not paint Unconfirmed.
+/// When that tip is absent and `status.block_height` is set, the label is Confirmed.
+/// A parsed tip with no block height paints Unconfirmed, not a zero count.
+/// The difference is `i128` so it does not wrap.
 pub fn confirmation_markup(tx_body: &str, tip_height_body: &str) -> String {
-    let Some(block_height) = one_tx(tx_body)
+    let block_height = one_tx(tx_body)
         .and_then(|tx| tx.status)
-        .and_then(|status| status.block_height)
-    else {
-        return String::new();
+        .and_then(|status| status.block_height);
+    let tip_height = match parse_blocks_tip_height(tip_height_body) {
+        Ok(tip_text) => tip_text.parse::<u64>().ok(),
+        Err(_) => None,
     };
-    let Ok(tip_text) = parse_blocks_tip_height(tip_height_body) else {
-        return String::new();
-    };
-    let Ok(tip_height) = tip_text.parse::<u64>() else {
-        return String::new();
-    };
-    let count = tip_height as i128 - block_height as i128 + 1;
-    paragraph("confirmations", &format!("Confirmations {count}"))
+    match (tip_height, block_height) {
+        (Some(tip_height), Some(block_height)) => {
+            let count = tip_height as i128 - block_height as i128 + 1;
+            paragraph("confirmations", &format!("Confirmations {count}"))
+        }
+        (Some(_), None) => paragraph("unconfirmed", "Unconfirmed"),
+        (None, Some(_)) => paragraph("confirmed", "Confirmed"),
+        (None, None) => String::new(),
+    }
 }
 
 pub fn summary_rows_markup(body: &str) -> String {
@@ -1129,19 +1215,26 @@ pub fn broadcast_txid_markup(txid: &str) -> String {
 }
 
 pub fn test_txid_markup(body: &str) -> String {
-    if let Ok(rows) = splora_frontend_shared::parse_test_txs(body) {
-        return rows.iter().map(|row| txid_anchor(&row.txid)).collect();
-    }
-    // A disallowed row can omit reject-reason. The public parser stops the
-    // whole array there. The txid is still on the object, and it still opens /tx/.
-    let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(body) else {
-        return String::new();
+    let anchors = if let Ok(rows) = splora_frontend_shared::parse_test_txs(body) {
+        rows.iter().map(|row| txid_anchor(&row.txid)).collect::<String>()
+    } else {
+        // A disallowed row can omit reject-reason. The public parser stops the
+        // whole array there. The txid is still on the object, and it still opens /tx/.
+        let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(body) else {
+            return String::new();
+        };
+        rows.iter()
+            .filter_map(|row| row.get("txid").and_then(|txid| txid.as_str()))
+            .filter(|txid| !txid.is_empty())
+            .map(txid_anchor)
+            .collect::<String>()
     };
-    rows.iter()
-        .filter_map(|row| row.get("txid").and_then(|txid| txid.as_str()))
-        .filter(|txid| !txid.is_empty())
-        .map(txid_anchor)
-        .collect()
+    // One column header for the table, not one header per txid.
+    if anchors.is_empty() {
+        String::new()
+    } else {
+        format!("<th class=\"allowed\">Allowed?</th>{anchors}")
+    }
 }
 
 pub fn package_txid_markup(body: &str) -> String {
@@ -1826,10 +1919,17 @@ pub fn block_details_markup(block_json: &str, open: bool) -> String {
         );
     };
     let id = html_escape(&block.id);
-    let mut rows = format!("<tr><td>Version</td><td>{}</td></tr>", block.version);
+    let version_hex = format!("0x{value:08x}", value = block.version);
+    let mut rows = format!(
+        "<tr><td>Version</td><td>{}</td><td class=\"version-hex\">{version_hex}</td></tr>",
+        block.version
+    );
     // A missing key is None. Some(0) still prints. Do not substitute zero.
     if let Some(bits) = block.bits {
-        rows.push_str(&format!("<tr><td>Bits</td><td>{bits}</td></tr>"));
+        let bits_hex = format!("0x{value:08x}", value = bits);
+        rows.push_str(&format!(
+            "<tr><td>Bits</td><td>{bits}</td><td class=\"bits-hex\">{bits_hex}</td></tr>"
+        ));
     }
     rows.push_str(&format!(
         "<tr><td>Merkle root</td><td>{}</td></tr>",
@@ -1841,8 +1941,13 @@ pub fn block_details_markup(block_json: &str, open: bool) -> String {
             "<tr><td>Difficulty</td><td>{difficulty}</td></tr>"
         ));
     }
+    // Decimal stays (`>9<` in block_transactions). Hex is decimal2hex, 4 bytes.
+    // A missing key is None. Some(0) still prints. Do not substitute zero.
     if let Some(nonce) = block.nonce {
-        rows.push_str(&format!("<tr><td>Nonce</td><td>{nonce}</td></tr>"));
+        let nonce_hex = format!("0x{value:08x}", value = nonce);
+        rows.push_str(&format!(
+            "<tr><td>Nonce</td><td>{nonce}</td><td class=\"nonce-hex\">{nonce_hex}</td></tr>"
+        ));
     }
     format!(
         "<div id=\"details\"{hidden}><table><tbody>{rows}</tbody></table><a href=\"/block/{id}/header\">Block Header Hex</a></div>"

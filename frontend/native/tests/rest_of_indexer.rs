@@ -1838,6 +1838,492 @@ fn transaction_screen_paints_coinbase_and_sequence() {
     );
 }
 
+/// Plaintext parenthetical, no HTML, no liquid switch.
+///
+/// `is_coinbase` true paints the whole line `input coinbase` and the whole
+/// line `(Newly Generated Coins)` once each. False paints neither line.
+#[test]
+fn transaction_screen_paints_newly_generated_coins() {
+    let coinbase = paint_tx_input("newcoins", r#","is_coinbase":true,"sequence":0"#);
+    assert_eq!(
+        coinbase
+            .lines()
+            .filter(|&line| line == "input coinbase")
+            .count(),
+        1,
+        "input coinbase was not exactly one whole line: {coinbase}"
+    );
+    assert_eq!(
+        coinbase.matches("(Newly Generated Coins)").count(),
+        1,
+        "(Newly Generated Coins) is absent: {coinbase}"
+    );
+    assert_eq!(
+        coinbase
+            .lines()
+            .filter(|&line| line == "(Newly Generated Coins)")
+            .count(),
+        1,
+        "(Newly Generated Coins) was not exactly one whole line: {coinbase}"
+    );
+    for needle in [
+        "UNKNOWN",
+        "<span",
+        "newly-generated-coins",
+        "unknown-input",
+        "deadbeef",
+        "OP_CHECKSIG",
+    ] {
+        assert!(
+            !coinbase.contains(needle),
+            "{needle} was painted: {coinbase}"
+        );
+    }
+
+    let ordinary = paint_tx_input("newcoinsf", r#","is_coinbase":false,"sequence":7"#);
+    assert!(
+        !ordinary.contains("(Newly Generated Coins)"),
+        "false coinbase painted the parenthetical: {ordinary}"
+    );
+    assert!(
+        !ordinary.contains("input coinbase"),
+        "false coinbase was painted: {ordinary}"
+    );
+}
+
+/// `nSequence` hex next to the decimal sequence line from `GET /tx/:txid`.
+///
+/// Angular formatHex: lowercase hex, prefixed with `0x`, and one leading
+/// zero when the hex digit count is odd. A present sequence paints both
+/// lines. A missing sequence omits `nSequence` and still paints the
+/// transaction. Script hex and RBF stay off the screen.
+#[test]
+fn transaction_screen_paints_nsequence() {
+    let zero = paint_tx_input("nseq0", r#","is_coinbase":false,"sequence":0"#);
+    let zero_hex = zero.lines().any(|line| line == "nSequence 0x00");
+    let zero_decimal = zero.lines().any(|line| line == "sequence 0");
+    assert!(
+        zero_hex,
+        "nSequence 0x00 was absent while sequence 0 was present ({zero_decimal}): {zero}"
+    );
+    assert!(zero_decimal, "sequence 0 was dropped: {zero}");
+    assert!(!zero.contains("deadbeef"), "{zero}");
+    assert!(!zero.contains("RBF"), "{zero}");
+
+    let padded = paint_tx_input("nseq256", r#","is_coinbase":false,"sequence":256"#);
+    assert!(
+        padded.lines().any(|line| line == "nSequence 0x0100"),
+        "sequence 256 did not paint nSequence 0x0100: {padded}"
+    );
+    assert!(
+        padded.lines().any(|line| line == "sequence 256"),
+        "sequence 256 decimal line was dropped: {padded}"
+    );
+    assert!(
+        !padded.lines().any(|line| line == "nSequence 0x100"),
+        "sequence 256 painted the unpadded hex line: {padded}"
+    );
+    assert!(!padded.contains("deadbeef"), "{padded}");
+    assert!(!padded.contains("RBF"), "{padded}");
+
+    let max = paint_tx_input("nseqmax", r#","is_coinbase":false,"sequence":4294967295"#);
+    assert!(
+        max.lines().any(|line| line == "nSequence 0xffffffff"),
+        "sequence 4294967295 did not paint nSequence 0xffffffff: {max}"
+    );
+    assert!(
+        max.lines().any(|line| line == "sequence 4294967295"),
+        "sequence 4294967295 decimal line was dropped: {max}"
+    );
+    assert!(
+        !max.contains("FFFFFFFF") && !max.contains("0xFFFFFFFF"),
+        "nSequence used uppercase hex: {max}"
+    );
+    assert!(!max.contains("deadbeef"), "{max}");
+    assert!(!max.contains("RBF"), "{max}");
+
+    let omitted = paint_tx_input("nseqomit", r#","is_coinbase":false"#);
+    assert!(
+        omitted.contains("input outpoint prev:1"),
+        "transaction did not paint without sequence: {omitted}"
+    );
+    assert!(
+        !omitted.lines().any(|line| line == "nSequence 0x00"),
+        "missing sequence painted nSequence 0x00: {omitted}"
+    );
+    assert!(
+        !omitted.contains("nSequence"),
+        "missing sequence painted nSequence: {omitted}"
+    );
+    assert!(!omitted.contains("deadbeef"), "{omitted}");
+    assert!(!omitted.contains("RBF"), "{omitted}");
+}
+
+const UNK_SIG: &str = "UNINSIGHEXDEAD";
+const UNK_SIG_ASM: &str = "UNINSIGASMDEAD";
+const UNK_WIT: &str = "UNINWITDEAD";
+const UNK_OUT_SCRIPT: &str = "UNINOUTHEXDEAD";
+const UNK_OUT_ASM: &str = "UNINOUTASMDEAD";
+const UNK_PREV_SCRIPT: &str = "UNINPREVHEXDEAD";
+const UNK_PREV_ASM: &str = "UNINPREVASMDEAD";
+const UNK_ASSET: &str = "ce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2";
+const UNK_ENTROPY: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+fn assert_unknown_sentinels_absent(painted: &str) {
+    for needle in [
+        UNK_SIG,
+        UNK_SIG_ASM,
+        UNK_WIT,
+        UNK_OUT_SCRIPT,
+        UNK_OUT_ASM,
+        UNK_PREV_SCRIPT,
+        UNK_PREV_ASM,
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn assert_no_unknown_chrome(painted: &str) {
+    for needle in [
+        "graph",
+        "tooltip",
+        "skeleton",
+        "mining",
+        "USD",
+        "$",
+        "<span",
+        "unknown-input",
+        "pool",
+        "ago",
+    ] {
+        assert!(!painted.contains(needle), "{needle} was painted: {painted}");
+    }
+}
+
+/// `UNKNOWN` once when `prevout` is missing, from `GET /tx/:txid`.
+///
+/// JSON null and an omitted key are the same missing prevout. A present
+/// prevout, coinbase, issuance, or peg-in does not paint it. Script hex,
+/// script asm, scriptsig, and witness stay off the screen.
+fn paint_unknown_input(txid: &str, prevout_field: &str, is_coinbase: bool, extra: &str) -> String {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    let tx = format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{{"txid":"prev","vout":1,{prevout_field}"scriptsig":"{UNK_SIG}","scriptsig_asm":"{UNK_SIG_ASM}","witness":["{UNK_WIT}"],"is_coinbase":{is_coinbase},"sequence":1{extra}}}],"vout":[{{"scriptpubkey":"{UNK_OUT_SCRIPT}","scriptpubkey_asm":"{UNK_OUT_ASM}","scriptpubkey_type":"p2pkh","value":1}}],"size":10,"weight":7,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), tx)]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not registered: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+#[test]
+fn transaction_screen_paints_unknown_input() {
+    let assert_one_unknown_line = |painted: &str| {
+        assert_eq!(
+            painted.lines().filter(|&line| line == "UNKNOWN").count(),
+            1,
+            "UNKNOWN was not exactly one whole line: {painted}"
+        );
+    };
+
+    let null_prevout = paint_unknown_input("unknull", r#""prevout":null,"#, false, "");
+    assert!(
+        null_prevout.contains("input outpoint prev:1"),
+        "null prevout dropped the input outpoint: {null_prevout}"
+    );
+    assert_eq!(
+        null_prevout.matches("UNKNOWN").count(),
+        1,
+        "UNKNOWN is absent while the input outpoint is present: {null_prevout}"
+    );
+    assert_one_unknown_line(&null_prevout);
+    assert_unknown_sentinels_absent(&null_prevout);
+    assert_no_unknown_chrome(&null_prevout);
+
+    let omitted = paint_unknown_input("unkomit", "", false, "");
+    assert!(
+        !omitted.is_empty(),
+        "omitted prevout key returned an empty screen"
+    );
+    assert!(
+        omitted.contains("input outpoint prev:1"),
+        "omitted prevout key dropped the input outpoint: {omitted}"
+    );
+    assert_eq!(
+        omitted.matches("UNKNOWN").count(),
+        1,
+        "omitted prevout key did not paint UNKNOWN once: {omitted}"
+    );
+    assert_one_unknown_line(&omitted);
+    assert_unknown_sentinels_absent(&omitted);
+    assert_no_unknown_chrome(&omitted);
+
+    let typed = paint_unknown_input(
+        "unktyped",
+        &format!(
+            r#""prevout":{{"scriptpubkey":"{UNK_PREV_SCRIPT}","scriptpubkey_asm":"{UNK_PREV_ASM}","scriptpubkey_type":"v0_p2wpkh"}},"#
+        ),
+        false,
+        "",
+    );
+    assert!(
+        !typed.contains("UNKNOWN"),
+        "present prevout painted UNKNOWN: {typed}"
+    );
+    assert!(
+        typed.contains("input script type v0_p2wpkh"),
+        "present prevout did not paint input script type: {typed}"
+    );
+    assert_unknown_sentinels_absent(&typed);
+    assert_no_unknown_chrome(&typed);
+
+    let coinbase = paint_unknown_input("unkcoin", r#""prevout":null,"#, true, "");
+    assert!(
+        !coinbase.contains("UNKNOWN"),
+        "coinbase painted UNKNOWN: {coinbase}"
+    );
+    assert!(
+        coinbase.contains("input coinbase"),
+        "coinbase input was not painted: {coinbase}"
+    );
+    assert_unknown_sentinels_absent(&coinbase);
+    assert_no_unknown_chrome(&coinbase);
+
+    let issuance = paint_unknown_input(
+        "unkiss",
+        r#""prevout":null,"#,
+        false,
+        &format!(
+            r#","issuance":{{"asset_id":"{UNK_ASSET}","is_reissuance":false,"asset_entropy":"{UNK_ENTROPY}"}}"#
+        ),
+    );
+    assert!(
+        !issuance.contains("UNKNOWN"),
+        "issuance painted UNKNOWN: {issuance}"
+    );
+    assert!(
+        issuance.contains(&format!("issuance asset {UNK_ASSET}")),
+        "issuance asset was not painted: {issuance}"
+    );
+    assert_unknown_sentinels_absent(&issuance);
+    assert_no_unknown_chrome(&issuance);
+
+    let peg_in = paint_unknown_input(
+        "unkpegin",
+        r#""prevout":null,"#,
+        false,
+        r#","is_pegin":true"#,
+    );
+    assert!(
+        !peg_in.contains("UNKNOWN"),
+        "peg-in painted UNKNOWN: {peg_in}"
+    );
+    assert_unknown_sentinels_absent(&peg_in);
+    assert_no_unknown_chrome(&peg_in);
+
+    let peg_false = paint_unknown_input(
+        "unkpegfalse",
+        r#""prevout":null,"#,
+        false,
+        r#","is_pegin":false"#,
+    );
+    assert!(
+        peg_false.contains("input outpoint prev:1"),
+        "is_pegin false dropped the input outpoint: {peg_false}"
+    );
+    assert_eq!(
+        peg_false.matches("UNKNOWN").count(),
+        1,
+        "is_pegin false did not paint UNKNOWN once: {peg_false}"
+    );
+    assert_one_unknown_line(&peg_false);
+    assert_unknown_sentinels_absent(&peg_false);
+    assert_no_unknown_chrome(&peg_false);
+}
+
+const P2SH_SIG: &str = "P2SHSIGHEXDEAD";
+const P2SH_SIG_ASM: &str = "P2SHSIGASMDEAD";
+const P2SH_WIT: &str = "P2SHWITDEAD";
+const P2SH_PUB: &str = "P2SHPUBHEXDEAD";
+const P2SH_PUB_ASM: &str = "P2SHPUBASMDEAD";
+const P2SH_WIT_ASM: &str = "P2SHWITASMDEAD";
+
+enum RedeemField {
+    Present(&'static str),
+    Missing,
+    Null,
+    Empty,
+}
+
+fn p2sh_redeem_body(txid: &str, redeem: RedeemField) -> String {
+    let redeem_field = match redeem {
+        RedeemField::Present(asm) => format!(r#","inner_redeemscript_asm":"{asm}""#),
+        RedeemField::Missing => String::new(),
+        RedeemField::Null => r#","inner_redeemscript_asm":null"#.to_string(),
+        RedeemField::Empty => r#","inner_redeemscript_asm":"""#.to_string(),
+    };
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{{"txid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","vout":0,"prevout":null,"scriptsig":"{P2SH_SIG}","scriptsig_asm":"{P2SH_SIG_ASM}","witness":["{P2SH_WIT}"],"is_coinbase":false,"sequence":1,"inner_witnessscript_asm":"{P2SH_WIT_ASM}"{redeem_field}}}],"vout":[{{"scriptpubkey":"{P2SH_PUB}","scriptpubkey_asm":"{P2SH_PUB_ASM}","scriptpubkey_type":"p2pkh","value":1}}],"size":10,"weight":7,"sigops":0,"fee":1}}"#
+    )
+}
+
+fn paint_p2sh_redeem(txid: &str, redeem: RedeemField) -> String {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    let body = p2sh_redeem_body(txid, redeem);
+    for needle in [
+        P2SH_SIG,
+        P2SH_SIG_ASM,
+        P2SH_WIT,
+        P2SH_PUB,
+        P2SH_PUB_ASM,
+        P2SH_WIT_ASM,
+    ] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not registered: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn p2sh_line_count(painted: &str, line: &str) -> usize {
+    painted.lines().filter(|row| *row == line).count()
+}
+
+fn assert_p2sh_sentinels_absent(painted: &str) {
+    for needle in [
+        P2SH_SIG,
+        P2SH_SIG_ASM,
+        P2SH_WIT,
+        P2SH_PUB,
+        P2SH_PUB_ASM,
+        P2SH_WIT_ASM,
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn assert_no_p2sh_html(painted: &str) {
+    for needle in ["<span", "p2sh-redeem-label", "&lt;", "unknown-input"] {
+        assert!(!painted.contains(needle), "{needle} was painted: {painted}");
+    }
+}
+
+/// `P2SH redeem script` from `GET /tx/:txid` when `inner_redeemscript_asm` is present.
+///
+/// A non-empty asm paints one plaintext line, and angle brackets stay as text.
+/// A missing key, JSON null, and an empty string omit the label. Script hex,
+/// scriptsig, scriptsig asm, witness, scriptpubkey, scriptpubkey asm, and the
+/// inner witness script stay off the screen.
+#[test]
+fn transaction_screen_paints_p2sh_redeem_script() {
+    let present = paint_p2sh_redeem("p2shdup", RedeemField::Present("OP_DUP OP_HASH160"));
+    assert!(
+        present.contains("input outpoint"),
+        "present asm dropped the input outpoint: {present}"
+    );
+    assert_eq!(
+        p2sh_line_count(&present, "P2SH redeem script OP_DUP OP_HASH160"),
+        1,
+        "present asm was not exactly one line `P2SH redeem script OP_DUP OP_HASH160`: {present}"
+    );
+    assert_eq!(
+        present.matches("P2SH redeem script").count(),
+        1,
+        "the label was not painted once: {present}"
+    );
+    assert_p2sh_sentinels_absent(&present);
+    assert_no_p2sh_html(&present);
+
+    let brackets = paint_p2sh_redeem("p2shbrack", RedeemField::Present("OP_DUP <OP_HASH160>"));
+    assert_eq!(
+        p2sh_line_count(&brackets, "P2SH redeem script OP_DUP <OP_HASH160>"),
+        1,
+        "angle brackets were not one plaintext line `P2SH redeem script OP_DUP <OP_HASH160>`: {brackets}"
+    );
+    assert_eq!(
+        brackets.matches("P2SH redeem script").count(),
+        1,
+        "the angle-bracket label was not painted once: {brackets}"
+    );
+    assert_no_p2sh_html(&brackets);
+    assert_p2sh_sentinels_absent(&brackets);
+
+    let missing = paint_p2sh_redeem("p2shmiss", RedeemField::Missing);
+    assert!(
+        missing.contains("input outpoint"),
+        "missing key dropped the input outpoint: {missing}"
+    );
+    assert!(
+        !missing.contains("P2SH redeem script"),
+        "missing key painted the label: {missing}"
+    );
+    assert_p2sh_sentinels_absent(&missing);
+    assert_no_p2sh_html(&missing);
+
+    let null = paint_p2sh_redeem("p2shnull", RedeemField::Null);
+    assert!(
+        null.contains("input outpoint"),
+        "JSON null dropped the input outpoint: {null}"
+    );
+    assert!(
+        !null.contains("P2SH redeem script"),
+        "JSON null painted the label: {null}"
+    );
+    assert_p2sh_sentinels_absent(&null);
+    assert_no_p2sh_html(&null);
+
+    let empty = paint_p2sh_redeem("p2shempty", RedeemField::Empty);
+    assert!(
+        empty.contains("input outpoint"),
+        "empty string dropped the input outpoint: {empty}"
+    );
+    assert!(
+        !empty.contains("P2SH redeem script"),
+        "empty string painted the label: {empty}"
+    );
+    assert_p2sh_sentinels_absent(&empty);
+    assert_no_p2sh_html(&empty);
+}
+
 fn paint_tx_input(txid: &str, input_tail: &str) -> String {
     let tx = format!(
         r#"{{
@@ -2142,6 +2628,131 @@ fn paint_tx_confirmations(txid: &str, tip: Option<&str>, block_height: Option<u6
     host.open_transaction(txid)
         .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
     painted(&host)
+}
+
+/// A block height whose tip does not parse paints the plaintext word Confirmed once.
+///
+/// A parsed tip with a block height paints only the count. A parsed tip with
+/// no block height does not paint Confirmed.
+#[test]
+fn transaction_screen_paints_confirmed_when_tip_does_not_parse() {
+    let bad_tip = paint_tx_confirmations("confwordbad", Some("not-a-height"), Some(90));
+    assert_eq!(
+        bad_tip.lines().filter(|line| *line == "Confirmed").count(),
+        1,
+        "a non-integer tip with a block height did not paint Confirmed once: {bad_tip}"
+    );
+    assert!(
+        bad_tip.contains("tx txid confwordbad"),
+        "a non-integer tip hid the transaction: {bad_tip}"
+    );
+    assert!(
+        !bad_tip.lines().any(|line| {
+            line.starts_with("confirmations ") || line.starts_with("Confirmations ")
+        }),
+        "a non-integer tip painted the count: {bad_tip}"
+    );
+
+    let empty_tip = paint_tx_confirmations("confwordempty", Some(""), Some(90));
+    assert_eq!(
+        empty_tip
+            .lines()
+            .filter(|line| *line == "Confirmed")
+            .count(),
+        1,
+        "an empty tip with a block height did not paint Confirmed once: {empty_tip}"
+    );
+
+    let missing_tip = paint_tx_confirmations("confwordmiss", None, Some(90));
+    assert_eq!(
+        missing_tip
+            .lines()
+            .filter(|line| *line == "Confirmed")
+            .count(),
+        1,
+        "a missing tip with a block height did not paint Confirmed once: {missing_tip}"
+    );
+
+    let counted = paint_tx_confirmations("confwordgap", Some("100"), Some(90));
+    assert!(
+        counted.lines().any(|line| line == "confirmations 11"),
+        "tip 100 and height 90 did not paint only the count: {counted}"
+    );
+    assert!(
+        !counted.lines().any(|line| line == "Confirmed"),
+        "a parsed tip with a block height painted Confirmed: {counted}"
+    );
+
+    let no_height = paint_tx_confirmations("confwordnone", Some("100"), None);
+    assert!(
+        no_height.contains("tx txid confwordnone"),
+        "a missing block height hid the transaction: {no_height}"
+    );
+    assert!(
+        !no_height.lines().any(|line| line == "Confirmed"),
+        "a parsed tip with no block height painted Confirmed: {no_height}"
+    );
+}
+
+/// A parsed tip with no block height paints the plaintext word Unconfirmed once.
+///
+/// No tip and no block height stay empty. A parsed tip with a block height
+/// still paints only the count. A block height whose tip does not parse still
+/// paints Confirmed, not Unconfirmed.
+#[test]
+fn transaction_screen_paints_unconfirmed() {
+    let no_height = paint_tx_confirmations("unconfword", Some("100"), None);
+    assert_eq!(
+        no_height
+            .lines()
+            .filter(|line| *line == "Unconfirmed")
+            .count(),
+        1,
+        "a parsed tip with no block height did not paint Unconfirmed once: {no_height}"
+    );
+    assert!(
+        no_height.contains("tx txid unconfword"),
+        "a missing block height hid the transaction: {no_height}"
+    );
+    assert!(
+        !no_height.lines().any(|line| line == "Confirmed"),
+        "a parsed tip with no block height painted Confirmed: {no_height}"
+    );
+
+    let neither = paint_tx_confirmations("unconfneither", None, None);
+    assert!(
+        neither.contains("tx txid unconfneither"),
+        "a missing tip and a missing block height hid the transaction: {neither}"
+    );
+    assert!(
+        !neither
+            .lines()
+            .any(|line| line == "Unconfirmed" || line == "Confirmed"),
+        "no tip and no block height painted a confirmation word: {neither}"
+    );
+
+    let counted = paint_tx_confirmations("unconfgap", Some("100"), Some(90));
+    assert!(
+        counted.lines().any(|line| line == "confirmations 11"),
+        "tip 100 and height 90 did not paint only the count: {counted}"
+    );
+    assert!(
+        !counted
+            .lines()
+            .any(|line| line == "Unconfirmed" || line == "Confirmed"),
+        "a parsed tip with a block height painted a confirmation word: {counted}"
+    );
+
+    let bad_tip = paint_tx_confirmations("unconfbad", Some("not-a-height"), Some(90));
+    assert_eq!(
+        bad_tip.lines().filter(|line| *line == "Confirmed").count(),
+        1,
+        "a non-integer tip with a block height did not paint Confirmed once: {bad_tip}"
+    );
+    assert!(
+        !bad_tip.lines().any(|line| line == "Unconfirmed"),
+        "a non-integer tip painted Unconfirmed: {bad_tip}"
+    );
 }
 
 const PACKAGE_TXID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -2688,6 +3299,202 @@ fn transaction_screen_paints_sigops() {
     assert_script_hex_stays_off(&null);
 }
 
+fn paint_tx_version(txid: &str, version: u32) -> String {
+    let tx = format!(
+        r#"{{
+        "txid":"{txid}",
+        "version":{version},
+        "locktime":0,
+        "vin":[{{
+            "txid":"prev",
+            "vout":0,
+            "prevout":null,
+            "scriptsig":"deadbeef",
+            "scriptsig_asm":"OP_CHECKSIG",
+            "witness":["abcdwitnesshex"],
+            "is_coinbase":false,
+            "sequence":1
+        }}],
+        "vout":[{{
+            "scriptpubkey":"0014aa",
+            "scriptpubkey_asm":"OP_RETURN",
+            "scriptpubkey_type":"op_return",
+            "value":9
+        }}],
+        "size":10,
+        "weight":40,
+        "sigops":1,
+        "fee":1,
+        "status":{{"confirmed":false}}
+    }}"#
+    );
+    let (mut host, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), tx)]),
+    );
+    host.open_transaction(txid)
+        .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+    painted(&host)
+}
+
+/// Transaction version from `GET /tx/:txid`.
+///
+/// Angular paints `Version` and the en-US `number` pipe. An integer gets
+/// thousands separators and no fraction digits. The row is always shown.
+/// Explicit 0 paints. The raw header is lowercase `version N` and stays.
+/// This is not that header. Script hex, asm, scriptsig, and witness stay off.
+#[test]
+fn transaction_screen_paints_version() {
+    let zero = paint_tx_version("ver0", 0);
+    assert!(
+        zero.lines().any(|line| line == "Version 0"),
+        "version 0 did not paint the line Version 0: {zero}"
+    );
+    assert!(
+        zero.contains("version 0"),
+        "version 0 dropped the raw header: {zero}"
+    );
+    assert!(!zero.contains("abcdwitnesshex"), "{zero}");
+    assert_script_hex_stays_off(&zero);
+
+    let one = paint_tx_version("ver1", 1);
+    assert!(
+        one.lines().any(|line| line == "Version 1"),
+        "version 1 did not paint the line Version 1: {one}"
+    );
+    assert!(
+        one.contains("version 1"),
+        "version 1 dropped the raw header: {one}"
+    );
+    assert_script_hex_stays_off(&one);
+
+    let two = paint_tx_version("ver2", 2);
+    assert!(
+        two.lines().any(|line| line == "Version 2"),
+        "version 2 did not paint the line Version 2: {two}"
+    );
+    assert!(
+        two.contains("version 2"),
+        "version 2 dropped the raw header: {two}"
+    );
+    assert_script_hex_stays_off(&two);
+
+    let fifteen = paint_tx_version("ver1500", 1500);
+    assert!(
+        fifteen.lines().any(|line| line == "Version 1,500"),
+        "version 1500 did not paint the line Version 1,500: {fifteen}"
+    );
+    assert!(
+        !fifteen.lines().any(|line| line == "Version 1500"),
+        "version 1500 painted an ungrouped Version line: {fifteen}"
+    );
+    assert!(
+        fifteen.contains("version 1500"),
+        "version 1500 dropped the raw header: {fifteen}"
+    );
+    assert_script_hex_stays_off(&fifteen);
+}
+
+fn paint_tx_locktime(txid: &str, locktime: u32) -> String {
+    let tx = format!(
+        r#"{{
+        "txid":"{txid}",
+        "version":1,
+        "locktime":{locktime},
+        "vin":[{{
+            "txid":"prev",
+            "vout":0,
+            "prevout":null,
+            "scriptsig":"deadbeef",
+            "scriptsig_asm":"OP_CHECKSIG",
+            "witness":["abcdwitnesshex"],
+            "is_coinbase":false,
+            "sequence":1
+        }}],
+        "vout":[{{
+            "scriptpubkey":"0014aa",
+            "scriptpubkey_asm":"OP_RETURN",
+            "scriptpubkey_type":"op_return",
+            "value":9
+        }}],
+        "size":10,
+        "weight":7,
+        "sigops":0,
+        "fee":1,
+        "status":{{"confirmed":false}}
+    }}"#
+    );
+    let (mut host, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), tx)]),
+    );
+    host.open_transaction(txid)
+        .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+    painted(&host)
+}
+
+/// Transaction locktime from `GET /tx/:txid`.
+///
+/// Angular paints `Locktime` whenever the transaction is shown, including
+/// locktime 0. The value is the raw integer, with no thousands separator
+/// and no left-to-right mark. The raw header is lowercase `locktime N`
+/// and stays. This is not that header. Script hex, asm, scriptsig, and
+/// witness stay off.
+#[test]
+fn transaction_screen_paints_locktime() {
+    let zero = paint_tx_locktime("lt0", 0);
+    assert!(
+        zero.lines().any(|line| line == "Locktime 0"),
+        "locktime 0 did not paint the line Locktime 0: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "virtual size 1"),
+        "locktime 0 dropped virtual size 1: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "locktime 0 dropped Adjusted vsize 1.75: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "Sigops 0"),
+        "locktime 0 dropped Sigops 0: {zero}"
+    );
+    assert!(
+        zero.contains("locktime 0"),
+        "locktime 0 dropped the raw header: {zero}"
+    );
+    assert!(
+        !zero.contains('\u{200e}'),
+        "locktime painted a left-to-right mark: {zero}"
+    );
+    assert!(!zero.contains("abcdwitnesshex"), "{zero}");
+    assert_script_hex_stays_off(&zero);
+
+    let raw = paint_tx_locktime("lt500m", 500_000_000);
+    assert!(
+        raw.lines().any(|line| line == "Locktime 500000000"),
+        "locktime 500000000 did not paint the line Locktime 500000000: {raw}"
+    );
+    assert!(
+        !raw.contains("500,000,000"),
+        "locktime 500000000 painted a thousands separator: {raw}"
+    );
+    assert!(
+        !raw.lines().any(|line| line == "Locktime 500,000,000"),
+        "locktime 500000000 painted the line Locktime 500,000,000: {raw}"
+    );
+    assert!(
+        raw.contains("locktime 500000000"),
+        "locktime 500000000 dropped the raw header: {raw}"
+    );
+    assert!(
+        !raw.contains('\u{200e}'),
+        "locktime painted a left-to-right mark: {raw}"
+    );
+    assert!(!raw.contains("abcdwitnesshex"), "{raw}");
+    assert_script_hex_stays_off(&raw);
+}
+
 fn paint_tx_screen_weight(txid: &str, weight_field: &str, sigops_field: &str) -> String {
     let weight_line = if weight_field.is_empty() {
         String::new()
@@ -2861,4 +3668,1520 @@ fn transaction_screen_paints_weight() {
         !null.contains("virtual size"),
         "null weight painted virtual size: {null}"
     );
+}
+
+fn paint_block_details(id: &str) -> String {
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_json(id)),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn assert_hash_line_has_no_mark(painted: &str, expected: &str) {
+    let line = painted
+        .lines()
+        .find(|line| *line == expected)
+        .unwrap_or_else(|| panic!("missing line {expected} in {painted}"));
+    assert!(
+        !line.contains('\u{2026}'),
+        "Hash line used a unicode ellipsis: {line}"
+    );
+    assert!(!line.contains('\u{200e}'), "Hash line used U+200E: {line}");
+}
+
+/// Block Hash from `GET /block/:hash`, shortened like Angular `shortenString` of length 13.
+///
+/// Prefix length is integer `length / 2` (6). Suffix length is `length - prefix` (7).
+/// The joiner is three ASCII dots. An id of length 13 or less stays whole.
+/// The raw `id` line and the `block hash` summary stay the full id.
+#[test]
+fn block_screen_paints_hash() {
+    let long = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    assert_eq!(long.len(), 64);
+    let painted = paint_block_details(long);
+    let id_line = format!("id {long}");
+    assert!(
+        painted.lines().any(|line| line == "Hash 012345...9abcdef"),
+        "Hash 012345...9abcdef is absent; id line present={}: {painted}",
+        painted.lines().any(|line| line == id_line)
+    );
+    assert!(
+        !painted.contains("012345...abcdef"),
+        "6-and-6 split leaked into the painted text: {painted}"
+    );
+    assert!(
+        painted.lines().any(|line| line == id_line),
+        "64-char id dropped the line {id_line}: {painted}"
+    );
+    assert!(
+        painted.contains(&format!("block hash {long}")),
+        "summary dropped the full id on block hash: {painted}"
+    );
+    assert_hash_line_has_no_mark(&painted, "Hash 012345...9abcdef");
+
+    let fourteen = "abcdefghijklmn";
+    assert_eq!(fourteen.len(), 14);
+    let painted = paint_block_details(fourteen);
+    assert!(
+        painted.lines().any(|line| line == "Hash abcdef...hijklmn"),
+        "14-char id did not paint the line Hash abcdef...hijklmn: {painted}"
+    );
+    assert_hash_line_has_no_mark(&painted, "Hash abcdef...hijklmn");
+
+    let thirteen = "abcdefghijklm";
+    assert_eq!(thirteen.len(), 13);
+    let painted = paint_block_details(thirteen);
+    assert!(
+        painted.lines().any(|line| line == "Hash abcdefghijklm"),
+        "13-char id did not paint the line Hash abcdefghijklm: {painted}"
+    );
+    let thirteen_line = painted
+        .lines()
+        .find(|line| *line == "Hash abcdefghijklm")
+        .expect("13-char Hash line");
+    assert!(
+        !thirteen_line.contains("..."),
+        "13-char Hash line was shortened: {thirteen_line}"
+    );
+    assert_hash_line_has_no_mark(&painted, "Hash abcdefghijklm");
+
+    let twelve = "abcdefghijkl";
+    assert_eq!(twelve.len(), 12);
+    let painted = paint_block_details(twelve);
+    assert!(
+        painted.lines().any(|line| line == "Hash abcdefghijkl"),
+        "12-char id did not paint the line Hash abcdefghijkl: {painted}"
+    );
+    let twelve_line = painted
+        .lines()
+        .find(|line| *line == "Hash abcdefghijkl")
+        .expect("12-char Hash line");
+    assert!(
+        !twelve_line.contains("..."),
+        "12-char Hash line was shortened: {twelve_line}"
+    );
+    assert_hash_line_has_no_mark(&painted, "Hash abcdefghijkl");
+
+    // A missing id fails serde before block_details_text. txs and txids are
+    // registered so a later read cannot hide that parse miss.
+    let missing = "missingidblock";
+    let missing_body = r#"{"height":800000,"version":1,"timestamp":1700000000,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","mediantime":1700000000}"#;
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{missing}"), missing_body.to_string()),
+            (format!("/block/{missing}/txs"), "[]".to_string()),
+            (format!("/block/{missing}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = missing.to_string();
+    let err = host
+        .activate(Screen::Block)
+        .expect_err("missing id must fail the block parse");
+    let message = err.to_string();
+    assert!(
+        message.contains("missing field `id`"),
+        "missing id was not a parse error: {message}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let popup = NpubPopupModel::new("npub1restofindexer").expect("npub");
+    let missing_painted = painted_shell_text(&host, &popup);
+    assert!(
+        !missing_painted.contains("Hash"),
+        "missing id painted Hash: {missing_painted}"
+    );
+}
+
+fn block_version_json(id: &str, version: u32) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":{version},"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","mediantime":1699990000,"bits":2,"nonce":9,"difficulty":1}}"#
+    )
+}
+
+/// Open block details for one version fixture. The id is not all digits, so
+/// load uses `GET /block/:id` and not the height route.
+fn paint_block_version(id: &str, version: u32) -> String {
+    assert!(
+        !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+        "id must not be all digits: {id}"
+    );
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_version_json(id, version)),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn assert_bits_stay_decimal(painted: &str) {
+    assert!(
+        painted.lines().any(|line| line == "bits 2 0x00000002"),
+        "bits 2 0x00000002 was not a details line: {painted}"
+    );
+    assert!(
+        painted
+            .lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x00000002")),
+        "0x00000002 was not the whole bits hex: {painted}"
+    );
+}
+
+fn assert_summary_version_stays_decimal(painted: &str, version: &str) {
+    let summary = painted
+        .lines()
+        .find(|line| line.starts_with("block hash "))
+        .unwrap_or_else(|| panic!("summary line missing: {painted}"));
+    assert!(
+        summary.contains(&format!(" version {version} ")),
+        "summary dropped the decimal version: {summary}"
+    );
+    assert!(
+        !summary.contains("0x"),
+        "summary line painted version hex: {summary}"
+    );
+}
+
+/// Block version hex beside the decimal on the details line.
+///
+/// Angular `decimal2hex` defaults to 4 bytes: `0x` plus exactly 8 lowercase
+/// hex digits. The summary line stays the decimal version only. Bits details
+/// are the decimal beside eight hex digits. Nonce and difficulty stay decimal.
+/// A missing version key fails serde before the
+/// details text, and that paint has no `0x`.
+#[test]
+fn block_screen_paints_version_hex() {
+    let segwit = paint_block_version("verhex536", 536870912);
+    let decimal_line = segwit.lines().any(|line| line == "version 536870912");
+    assert!(
+        segwit
+            .lines()
+            .any(|line| line == "version 536870912 0x20000000"),
+        "version 536870912 0x20000000 is absent while the decimal version line is present ({decimal_line}): {segwit}"
+    );
+    assert_summary_version_stays_decimal(&segwit, "536870912");
+    assert!(
+        !segwit.contains("0X"),
+        "version hex was uppercase: {segwit}"
+    );
+    assert_bits_stay_decimal(&segwit);
+
+    let zero = paint_block_version("verhex0", 0);
+    assert!(
+        zero.lines().any(|line| line == "version 0 0x00000000"),
+        "version 0 did not paint version 0 0x00000000: {zero}"
+    );
+    assert_summary_version_stays_decimal(&zero, "0");
+    assert_bits_stay_decimal(&zero);
+
+    let one = paint_block_version("verhex1", 1);
+    assert!(
+        one.lines().any(|line| line == "version 1 0x00000001"),
+        "version 1 did not paint version 1 0x00000001: {one}"
+    );
+    assert!(
+        !one.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x1")),
+        "version 1 painted 0x1: {one}"
+    );
+    assert_summary_version_stays_decimal(&one, "1");
+    assert_bits_stay_decimal(&one);
+    assert!(
+        one.lines().any(|line| line == "nonce 9 0x00000009"),
+        "nonce 9 0x00000009 was not a details line: {one}"
+    );
+    assert!(
+        one.lines().any(|line| line == "difficulty 1"),
+        "difficulty 1 was not a details line: {one}"
+    );
+
+    let missing = "verhexmiss";
+    assert!(
+        !missing.bytes().all(|byte| byte.is_ascii_digit()),
+        "{missing}"
+    );
+    let missing_body = format!(
+        r#"{{"id":"{missing}","height":2,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","mediantime":1699990000}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{missing}"), missing_body),
+            (format!("/block/{missing}/txs"), "[]".to_string()),
+            (format!("/block/{missing}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = missing.to_string();
+    let err = host
+        .activate(Screen::Block)
+        .expect_err("missing version must fail the block parse");
+    let message = err.to_string();
+    assert!(
+        message.contains("missing field `version`"),
+        "missing version was not a parse error: {message}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let missing_painted = painted(&host);
+    assert!(
+        !missing_painted.contains("0x"),
+        "missing version painted hex: {missing_painted}"
+    );
+}
+
+fn block_bits_json(id: &str, bits: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":{bits},"difficulty":1}}"#
+    )
+}
+
+fn missing_bits_json(id: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"nonce":9,"difficulty":1}}"#
+    )
+}
+
+/// Open block details for one bits fixture. The id is not all digits, so
+/// load uses `GET /block/:id` and not the height route. Version is 1 so the
+/// version hex is `0x00000001` and `0x00000000` is not already on that line.
+fn paint_block_bits(id: &str, body: String) -> String {
+    assert!(
+        !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+        "id must not be all digits: {id}"
+    );
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), body),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn assert_summary_bits_stays_decimal(painted: &str, bits: &str) {
+    let summary = painted
+        .lines()
+        .find(|line| line.starts_with("block hash "))
+        .unwrap_or_else(|| panic!("summary line missing: {painted}"));
+    assert!(
+        summary.contains(&format!(" bits {bits} ")),
+        "summary dropped the decimal bits: {summary}"
+    );
+    assert!(
+        !summary.contains("0x"),
+        "summary line painted bits hex: {summary}"
+    );
+}
+
+fn assert_bits_omitted(painted: &str) {
+    assert!(
+        painted.lines().all(|line| !line.starts_with("bits")),
+        "a line starts with bits: {painted}"
+    );
+    assert!(
+        !painted.contains("bits 0"),
+        "absent bits painted bits 0: {painted}"
+    );
+    assert!(
+        !painted.contains("bits 0 0x00000000"),
+        "absent bits painted bits 0 0x00000000: {painted}"
+    );
+    assert!(
+        !painted.contains("0x00000000"),
+        "absent bits painted 0x00000000: {painted}"
+    );
+    assert!(
+        painted.lines().any(|line| line == "version 1 0x00000001"),
+        "version 1 fixture did not paint version 1 0x00000001: {painted}"
+    );
+}
+
+/// Block bits hex beside the decimal on the details line.
+///
+/// Angular `decimal2hex` defaults to 4 bytes: `0x` plus exactly 8 lowercase
+/// hex digits. The summary line stays the decimal bits only. Nonce stays
+/// decimal. Difficulty stays `plain_number`. A missing bits key and JSON
+/// null are both `None` and omit the bits line. They do not substitute zero.
+#[test]
+fn block_screen_paints_bits_hex() {
+    let wide = paint_block_bits("bitshex386", block_bits_json("bitshex386", "386547056"));
+    let decimal_line = wide.lines().any(|line| line == "bits 386547056");
+    assert!(
+        wide.lines().any(|line| line == "bits 386547056 0x170a3d70"),
+        "bits 386547056 0x170a3d70 is absent while the decimal bits line is present ({decimal_line}): {wide}"
+    );
+    assert!(
+        !wide.lines().any(|line| line == "bits 386547056"),
+        "bare decimal bits line remained beside the hex line: {wide}"
+    );
+    assert!(
+        wide.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x170a3d70")),
+        "0x170a3d70 was not the whole hex word: {wide}"
+    );
+    assert!(!wide.contains("0X"), "bits hex was uppercase: {wide}");
+    assert_summary_bits_stays_decimal(&wide, "386547056");
+    assert!(
+        wide.lines().any(|line| line == "nonce 9 0x00000009"),
+        "nonce 9 0x00000009 was not a details line: {wide}"
+    );
+    assert!(
+        wide.lines().any(|line| line == "difficulty 1"),
+        "difficulty 1 was not a details line: {wide}"
+    );
+
+    let zero = paint_block_bits("bitshex0", block_bits_json("bitshex0", "0"));
+    assert!(
+        zero.lines().any(|line| line == "bits 0 0x00000000"),
+        "bits 0 did not paint bits 0 0x00000000: {zero}"
+    );
+    assert!(
+        zero.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x00000000")),
+        "0x00000000 was not the whole hex word beside bits 0: {zero}"
+    );
+    assert_summary_bits_stays_decimal(&zero, "0");
+    assert!(
+        zero.lines().any(|line| line == "version 1 0x00000001"),
+        "bits 0 fixture did not keep version 1 0x00000001: {zero}"
+    );
+
+    let one = paint_block_bits("bitshex1", block_bits_json("bitshex1", "1"));
+    assert!(
+        one.lines().any(|line| line == "bits 1 0x00000001"),
+        "bits 1 did not paint bits 1 0x00000001: {one}"
+    );
+    assert!(
+        !one.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x1")),
+        "bits 1 painted 0x1: {one}"
+    );
+    assert_summary_bits_stays_decimal(&one, "1");
+
+    let missing = paint_block_bits("bitshexmiss", missing_bits_json("bitshexmiss"));
+    assert_bits_omitted(&missing);
+
+    let null = paint_block_bits("bitshexnull", block_bits_json("bitshexnull", "null"));
+    assert_bits_omitted(&null);
+}
+
+fn block_nonce_json(id: &str, nonce: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"nonce":{nonce},"bits":386547056,"difficulty":1}}"#
+    )
+}
+
+fn missing_nonce_json(id: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"bits":386547056,"difficulty":1}}"#
+    )
+}
+
+fn assert_summary_nonce_stays_decimal(painted: &str, nonce: &str) {
+    let summary = painted
+        .lines()
+        .find(|line| line.starts_with("block hash "))
+        .unwrap_or_else(|| panic!("summary line missing: {painted}"));
+    assert!(
+        summary.contains(&format!(" nonce {nonce} ")),
+        "summary dropped the decimal nonce: {summary}"
+    );
+    assert!(
+        !summary.contains("0x"),
+        "summary line painted nonce hex: {summary}"
+    );
+}
+
+fn assert_nonce_omitted(painted: &str) {
+    assert!(
+        painted.lines().all(|line| !line.starts_with("nonce")),
+        "a line starts with nonce: {painted}"
+    );
+    assert!(
+        !painted.contains("nonce 0"),
+        "absent nonce painted nonce 0: {painted}"
+    );
+    assert!(
+        !painted.contains("nonce 0 0x00000000"),
+        "absent nonce painted nonce 0 0x00000000: {painted}"
+    );
+    assert!(
+        !painted.contains("0x00000000"),
+        "absent nonce painted 0x00000000: {painted}"
+    );
+    assert!(
+        painted.lines().any(|line| line == "version 1 0x00000001"),
+        "missing nonce fixture did not paint version 1 0x00000001: {painted}"
+    );
+    assert!(
+        painted
+            .lines()
+            .any(|line| line == "bits 386547056 0x170a3d70"),
+        "missing nonce fixture did not paint bits 386547056 0x170a3d70: {painted}"
+    );
+}
+
+/// Block nonce hex beside the decimal on the details line.
+///
+/// Angular `decimal2hex` defaults to 4 bytes: `0x` plus exactly 8 lowercase
+/// hex digits. The summary line stays the decimal nonce only. Bits details
+/// stay the decimal beside eight hex digits. Difficulty stays `plain_number`.
+/// A missing nonce key and JSON null are both `None` and omit the nonce line.
+/// They do not substitute zero. Version 1 and bits 386547056 keep
+/// `0x00000000` off those lines, so nonce 0 is the only source of that hex.
+#[test]
+fn block_screen_paints_nonce_hex() {
+    let nine = paint_block_bits("noncehex9", block_nonce_json("noncehex9", "9"));
+    let decimal_line = nine.lines().any(|line| line == "nonce 9");
+    assert!(
+        nine.lines().any(|line| line == "nonce 9 0x00000009"),
+        "nonce 9 0x00000009 is absent while the decimal nonce line is present ({decimal_line}): {nine}"
+    );
+    assert!(
+        !nine.lines().any(|line| line == "nonce 9"),
+        "bare decimal nonce line remained beside the hex line: {nine}"
+    );
+    assert!(
+        nine.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x00000009")),
+        "0x00000009 was not the whole hex word: {nine}"
+    );
+    assert!(!nine.contains("0X"), "nonce hex was uppercase: {nine}");
+    assert_summary_nonce_stays_decimal(&nine, "9");
+    assert!(
+        nine.lines().any(|line| line == "version 1 0x00000001"),
+        "nonce 9 fixture did not keep version 1 0x00000001: {nine}"
+    );
+    assert!(
+        nine.lines().any(|line| line == "bits 386547056 0x170a3d70"),
+        "nonce 9 fixture did not keep bits 386547056 0x170a3d70: {nine}"
+    );
+    assert!(
+        nine.lines().any(|line| line == "difficulty 1"),
+        "difficulty 1 was not a details line: {nine}"
+    );
+
+    let zero = paint_block_bits("noncehex0", block_nonce_json("noncehex0", "0"));
+    assert!(
+        zero.lines().any(|line| line == "nonce 0 0x00000000"),
+        "nonce 0 did not paint nonce 0 0x00000000: {zero}"
+    );
+    assert!(
+        zero.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x00000000")),
+        "0x00000000 was not the whole hex word beside nonce 0: {zero}"
+    );
+    let zero_hex_lines: Vec<_> = zero
+        .lines()
+        .filter(|line| line.contains("0x00000000"))
+        .collect();
+    assert_eq!(
+        zero_hex_lines,
+        vec!["nonce 0 0x00000000"],
+        "0x00000000 was not only the nonce line: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "version 1 0x00000001"),
+        "nonce 0 fixture did not keep version 1 0x00000001: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "bits 386547056 0x170a3d70"),
+        "nonce 0 fixture did not keep bits 386547056 0x170a3d70: {zero}"
+    );
+    assert_summary_nonce_stays_decimal(&zero, "0");
+
+    let one = paint_block_bits("noncehex1", block_nonce_json("noncehex1", "1"));
+    assert!(
+        one.lines().any(|line| line == "nonce 1 0x00000001"),
+        "nonce 1 did not paint nonce 1 0x00000001: {one}"
+    );
+    assert!(
+        !one.lines()
+            .any(|line| line.split_whitespace().any(|word| word == "0x1")),
+        "nonce 1 painted 0x1: {one}"
+    );
+    assert_summary_nonce_stays_decimal(&one, "1");
+
+    let missing = paint_block_bits("noncehexmiss", missing_nonce_json("noncehexmiss"));
+    assert_nonce_omitted(&missing);
+
+    let null = paint_block_bits("noncehexnull", block_nonce_json("noncehexnull", "null"));
+    assert_nonce_omitted(&null);
+}
+
+/// Single block page paints one plaintext line, `Why is this block empty?`,
+/// only when height is above 100000 and `tx_count` is at most 1.
+///
+/// Details stay closed. The sentence is not HTML. Height 100000, `tx_count`
+/// 2, a missing height key, a missing `tx_count` key, and height 0 stay off.
+/// Height 0 paints the plaintext line Genesis exactly once.
+#[test]
+fn block_screen_paints_empty_block() {
+    const SENTENCE: &str = "Why is this block empty?";
+
+    fn empty_block_json(id: &str, height: Option<u32>, tx_count: Option<u32>) -> String {
+        let mut fields = vec![format!(r#""id":"{id}""#)];
+        if let Some(height) = height {
+            fields.push(format!(r#""height":{height}"#));
+        }
+        fields.push(r#""version":1"#.to_string());
+        fields.push(r#""timestamp":1"#.to_string());
+        if let Some(tx_count) = tx_count {
+            fields.push(format!(r#""tx_count":{tx_count}"#));
+        }
+        fields.push(r#""size":20"#.to_string());
+        fields.push(r#""weight":80"#.to_string());
+        fields.push(r#""merkle_root":"merkle""#.to_string());
+        fields.push(r#""mediantime":1"#.to_string());
+        format!("{{{}}}", fields.join(","))
+    }
+
+    fn paint_empty_block(id: &str, body: String) -> Result<String, (ClientError, String)> {
+        assert!(
+            !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+            "id must not be all digits: {id}"
+        );
+        assert!(!id.contains('?') && !id.contains('#'), "{id}");
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{id}"), body),
+                (format!("/block/{id}/txs"), "[]".to_string()),
+                (format!("/block/{id}/txids"), "[]".to_string()),
+            ]),
+        );
+        host.block.query = id.to_string();
+        let opened = host.activate(Screen::Block);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/block/{id}")),
+            "load did not GET /block/{id}: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains("/block-height/")),
+            "load used /block-height/: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        let text = painted(&host);
+        match opened {
+            Ok(()) => Ok(text),
+            Err(err) => Err((err, text)),
+        }
+    }
+
+    fn assert_sentence_once(painted: &str) {
+        assert_eq!(
+            painted.matches(SENTENCE).count(),
+            1,
+            "Why is this block empty? is absent: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == SENTENCE).count(),
+            1,
+            "the sentence was not one plaintext line: {painted}"
+        );
+        for banned in [
+            "<span",
+            "empty-block",
+            "Previous Block",
+            "Genesis",
+            "tooltip",
+            "skeleton",
+        ] {
+            assert!(
+                !painted.contains(banned),
+                "{banned} leaked into the painted shell: {painted}"
+            );
+        }
+    }
+
+    fn assert_sentence_absent(painted: &str) {
+        assert_eq!(
+            painted.matches(SENTENCE).count(),
+            0,
+            "Why is this block empty? leaked: {painted}"
+        );
+    }
+
+    fn assert_height_painted(painted: &str, height: u32) {
+        let needle = format!("height {height}");
+        assert!(
+            painted.lines().any(|line| line.contains(&needle)),
+            "the page did not paint {needle}: {painted}"
+        );
+    }
+
+    let zero = paint_empty_block(
+        "emptyh100001z",
+        empty_block_json("emptyh100001z", Some(100_001), Some(0)),
+    )
+    .unwrap_or_else(|(err, painted)| {
+        panic!("height 100001 tx_count 0 did not open: {err}\n{painted}")
+    });
+    assert_sentence_once(&zero);
+
+    let one = paint_empty_block(
+        "emptyh100001o",
+        empty_block_json("emptyh100001o", Some(100_001), Some(1)),
+    )
+    .unwrap_or_else(|(err, painted)| {
+        panic!("height 100001 tx_count 1 did not open: {err}\n{painted}")
+    });
+    assert_sentence_once(&one);
+
+    let boundary = paint_empty_block(
+        "emptyh100000",
+        empty_block_json("emptyh100000", Some(100_000), Some(1)),
+    )
+    .unwrap_or_else(|(err, painted)| {
+        panic!("height 100000 tx_count 1 did not open: {err}\n{painted}")
+    });
+    assert_sentence_absent(&boundary);
+    assert_height_painted(&boundary, 100_000);
+
+    let two = paint_empty_block(
+        "emptyh100001t",
+        empty_block_json("emptyh100001t", Some(100_001), Some(2)),
+    )
+    .unwrap_or_else(|(err, painted)| {
+        panic!("height 100001 tx_count 2 did not open: {err}\n{painted}")
+    });
+    assert_sentence_absent(&two);
+    assert_height_painted(&two, 100_001);
+
+    let (missing_height, missing_height_paint) = paint_empty_block(
+        "emptyhmissh",
+        empty_block_json("emptyhmissh", None, Some(0)),
+    )
+    .expect_err("omitted height must fail the block parse");
+    let missing_height_message = missing_height.to_string();
+    assert!(
+        missing_height_message.contains("missing field `height`"),
+        "activate error did not mention missing field `height`: {missing_height_message}"
+    );
+    assert_sentence_absent(&missing_height_paint);
+
+    let (missing_tx_count, missing_tx_count_paint) = paint_empty_block(
+        "emptyhmisstx",
+        empty_block_json("emptyhmisstx", Some(100_001), None),
+    )
+    .expect_err("omitted tx_count must fail the block parse");
+    let missing_tx_count_message = missing_tx_count.to_string();
+    assert!(
+        missing_tx_count_message.contains("missing field `tx_count`"),
+        "activate error did not mention missing field `tx_count`: {missing_tx_count_message}"
+    );
+    assert_sentence_absent(&missing_tx_count_paint);
+
+    let genesis_zero = paint_empty_block(
+        "emptyhzeroz",
+        empty_block_json("emptyhzeroz", Some(0), Some(0)),
+    )
+    .unwrap_or_else(|(err, painted)| panic!("height 0 tx_count 0 did not open: {err}\n{painted}"));
+    assert_sentence_absent(&genesis_zero);
+    assert_eq!(
+        genesis_zero.matches("Genesis").count(),
+        1,
+        "height 0 tx_count 0 did not paint the plaintext line Genesis once: {genesis_zero}"
+    );
+    assert_eq!(
+        genesis_zero
+            .lines()
+            .filter(|line| *line == "Genesis")
+            .count(),
+        1,
+        "height 0 tx_count 0 Genesis was not one plaintext line: {genesis_zero}"
+    );
+    assert_height_painted(&genesis_zero, 0);
+
+    let genesis_one = paint_empty_block(
+        "emptyhzeroo",
+        empty_block_json("emptyhzeroo", Some(0), Some(1)),
+    )
+    .unwrap_or_else(|(err, painted)| panic!("height 0 tx_count 1 did not open: {err}\n{painted}"));
+    assert_sentence_absent(&genesis_one);
+    assert_eq!(
+        genesis_one.matches("Genesis").count(),
+        1,
+        "height 0 tx_count 1 did not paint the plaintext line Genesis once: {genesis_one}"
+    );
+    assert_eq!(
+        genesis_one
+            .lines()
+            .filter(|line| *line == "Genesis")
+            .count(),
+        1,
+        "height 0 tx_count 1 Genesis was not one plaintext line: {genesis_one}"
+    );
+    assert_height_painted(&genesis_one, 0);
+}
+
+/// Single block page paints the plaintext line `Genesis` only when height is 0.
+///
+/// Height 1 does not. The blocks list does not. Height 100001 with `tx_count`
+/// 0 or 1 still paints `Why is this block empty?` and does not paint Genesis.
+/// A missing height key fails parse, so neither sentence appears. The line is
+/// not a span and not HTML.
+#[test]
+fn block_screen_paints_genesis() {
+    const SENTENCE: &str = "Why is this block empty?";
+    const GENESIS: &str = "Genesis";
+
+    fn block_json(id: &str, height: Option<u32>, tx_count: Option<u32>) -> String {
+        let mut fields = vec![format!(r#""id":"{id}""#)];
+        if let Some(height) = height {
+            fields.push(format!(r#""height":{height}"#));
+        }
+        fields.push(r#""version":1"#.to_string());
+        fields.push(r#""timestamp":1"#.to_string());
+        if let Some(tx_count) = tx_count {
+            fields.push(format!(r#""tx_count":{tx_count}"#));
+        }
+        fields.push(r#""size":20"#.to_string());
+        fields.push(r#""weight":80"#.to_string());
+        fields.push(r#""merkle_root":"merkle""#.to_string());
+        fields.push(r#""mediantime":1"#.to_string());
+        format!("{{{}}}", fields.join(","))
+    }
+
+    fn assert_id_ok(id: &str) {
+        assert!(
+            !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+            "id must not be all digits: {id}"
+        );
+        assert!(!id.contains('?') && !id.contains('#'), "{id}");
+        assert!(
+            !id.to_ascii_lowercase().contains("genesis"),
+            "id must not contain Genesis: {id}"
+        );
+    }
+
+    fn assert_plain(painted: &str) {
+        for banned in ["<span", "genesis", "Previous Block"] {
+            assert!(
+                !painted.contains(banned),
+                "{banned} leaked into the painted shell: {painted}"
+            );
+        }
+        assert!(
+            !painted.contains('<'),
+            "HTML leaked into the painted shell: {painted}"
+        );
+    }
+
+    fn assert_height(painted: &str, height: u32) {
+        let needle = format!("height {height}");
+        assert!(
+            painted.lines().any(|line| line.contains(&needle)),
+            "the page did not paint {needle}: {painted}"
+        );
+    }
+
+    fn assert_genesis_once(label: &str, painted: &str) {
+        assert_eq!(
+            painted.matches(GENESIS).count(),
+            1,
+            "{label} did not paint Genesis once: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == GENESIS).count(),
+            1,
+            "{label} Genesis was not one plaintext line: {painted}"
+        );
+        assert_eq!(
+            painted.matches(SENTENCE).count(),
+            0,
+            "{label} painted Why is this block empty?: {painted}"
+        );
+        assert_height(painted, 0);
+        assert_plain(painted);
+    }
+
+    fn assert_no_genesis(label: &str, painted: &str) {
+        assert!(
+            !painted.contains(GENESIS),
+            "{label} painted Genesis: {painted}"
+        );
+        assert_eq!(
+            painted.matches(SENTENCE).count(),
+            0,
+            "{label} painted Why is this block empty?: {painted}"
+        );
+        assert_plain(painted);
+    }
+
+    fn assert_empty_once(label: &str, painted: &str) {
+        assert_eq!(
+            painted.matches(SENTENCE).count(),
+            1,
+            "{label} did not paint Why is this block empty? once: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == SENTENCE).count(),
+            1,
+            "{label} empty sentence was not one plaintext line: {painted}"
+        );
+        assert!(
+            !painted.contains(GENESIS),
+            "{label} painted Genesis: {painted}"
+        );
+        assert_plain(painted);
+    }
+
+    fn paint_block(id: &str, body: String) -> Result<String, (ClientError, String)> {
+        assert_id_ok(id);
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{id}"), body),
+                (format!("/block/{id}/txs"), "[]".to_string()),
+                (format!("/block/{id}/txids"), "[]".to_string()),
+            ]),
+        );
+        host.block.query = id.to_string();
+        let opened = host.activate(Screen::Block);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/block/{id}")),
+            "load did not GET /block/{id}: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains("/block-height/")),
+            "load used /block-height/: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        let text = painted(&host);
+        match opened {
+            Ok(()) => Ok(text),
+            Err(err) => Err((err, text)),
+        }
+    }
+
+    let zero = paint_block("blk0tx0", block_json("blk0tx0", Some(0), Some(0)))
+        .unwrap_or_else(|(err, painted)| panic!("height 0 tx_count 0 did not open: {err}\n{painted}"));
+    assert_genesis_once("height 0 tx_count 0", &zero);
+
+    let one = paint_block("blk0tx1", block_json("blk0tx1", Some(0), Some(1)))
+        .unwrap_or_else(|(err, painted)| panic!("height 0 tx_count 1 did not open: {err}\n{painted}"));
+    assert_genesis_once("height 0 tx_count 1", &one);
+
+    let height_one = paint_block("blkheight1", block_json("blkheight1", Some(1), Some(1)))
+        .unwrap_or_else(|(err, painted)| panic!("height 1 did not open: {err}\n{painted}"));
+    assert_height(&height_one, 1);
+    assert_no_genesis("height 1", &height_one);
+
+    let list_id = "listblk0";
+    assert_id_ok(list_id);
+    let list_body = format!("[{}]", block_json(list_id, Some(0), Some(0)));
+    let (mut list_host, list_rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), list_body)]),
+    );
+    list_host
+        .activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let list_paths = list_rec.gets();
+    assert!(
+        list_paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {list_paths:?}"
+    );
+    assert!(
+        list_paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{list_paths:?}"
+    );
+    let list = painted(&list_host);
+    assert!(
+        list.contains(list_id) && list.contains("height 0"),
+        "the blocks list did not paint the height 0 block: {list}"
+    );
+    assert_no_genesis("blocks list", &list);
+
+    let high_zero = paint_block(
+        "blk100001z",
+        block_json("blk100001z", Some(100_001), Some(0)),
+    )
+    .unwrap_or_else(|(err, painted)| {
+        panic!("height 100001 tx_count 0 did not open: {err}\n{painted}")
+    });
+    assert_empty_once("height 100001 tx_count 0", &high_zero);
+
+    let high_one = paint_block(
+        "blk100001o",
+        block_json("blk100001o", Some(100_001), Some(1)),
+    )
+    .unwrap_or_else(|(err, painted)| {
+        panic!("height 100001 tx_count 1 did not open: {err}\n{painted}")
+    });
+    assert_empty_once("height 100001 tx_count 1", &high_one);
+
+    let (missing, missing_paint) = paint_block("blkmissh", block_json("blkmissh", None, Some(0)))
+        .expect_err("omitted height must fail the block parse");
+    let missing_message = missing.to_string();
+    assert!(
+        missing_message.contains("missing field `height`"),
+        "activate error did not mention missing field `height`: {missing_message}"
+    );
+    assert_no_genesis("missing height", &missing_paint);
+}
+
+fn block_summary_json(id: &str, size: u32) -> String {
+    format!(
+        r#"{{"id":"{id}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":{size},"weight":4,"merkle_root":"merkle","mediantime":1}}"#
+    )
+}
+
+/// Summary line only. Block details stay closed so a raw `size N` details
+/// integer cannot satisfy the check.
+fn paint_block_summary(id: &str, size: u32) -> String {
+    assert!(
+        !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+        "id must not be all digits: {id}"
+    );
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_summary_json(id, size)),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn block_hash_summary_line(painted: &str) -> String {
+    painted
+        .lines()
+        .find(|line| line.starts_with("block hash "))
+        .unwrap_or_else(|| panic!("summary line missing: {painted}"))
+        .to_string()
+}
+
+fn assert_summary_size_has_no_mark(line: &str) {
+    assert!(
+        !line.contains("Size "),
+        "title-case Size leaked into the summary line: {line}"
+    );
+    assert!(!line.contains("&lrm;"), "summary line has &lrm;: {line}");
+    assert!(
+        !line.contains('\u{200e}'),
+        "summary line has U+200E: {line}"
+    );
+}
+
+/// Block summary size from `GET /block/:id`, scaled like Angular `bytes: 2`.
+///
+/// The value is the number, a space, and the unit. Powers of 1000. Divide in
+/// f64, then `(value * 100).round() / 100`. Size 1005 is `1` kB, not `1.01`.
+/// The word Size stays off this line. No left-to-right mark. A missing size
+/// key fails serde before the summary line and does not paint `size 0 B`.
+#[test]
+fn block_summary_paints_size() {
+    let one_kb = paint_block_summary("sizesum1005", 1005);
+    let line = block_hash_summary_line(&one_kb);
+    assert!(
+        line.contains("size 1 kB"),
+        "size 1005 still shows the raw integer and size 1 kB is absent: {line}"
+    );
+    assert!(
+        !line.contains("1.01"),
+        "size 1005 painted 1.01 on the summary line: {line}"
+    );
+    assert!(
+        !line.contains("size 1005"),
+        "size 1005 stayed the raw integer on the summary line: {line}"
+    );
+    assert_summary_size_has_no_mark(&line);
+
+    let nine = block_hash_summary_line(&paint_block_summary("sizesum999", 999));
+    assert!(
+        nine.contains("size 999 B"),
+        "size 999 did not paint size 999 B on the summary line: {nine}"
+    );
+    assert!(
+        !nine.contains("kB"),
+        "size 999 painted kB on the summary line: {nine}"
+    );
+    assert_summary_size_has_no_mark(&nine);
+
+    let zero = block_hash_summary_line(&paint_block_summary("sizesum0", 0));
+    assert!(
+        zero.contains("size 0 B"),
+        "size 0 did not paint size 0 B on the summary line: {zero}"
+    );
+    assert_summary_size_has_no_mark(&zero);
+
+    let kib = block_hash_summary_line(&paint_block_summary("sizesum1234", 1234));
+    assert!(
+        kib.contains("size 1.23 kB"),
+        "size 1234 did not paint size 1.23 kB on the summary line: {kib}"
+    );
+    assert!(
+        !kib.contains("size 1234"),
+        "size 1234 stayed the raw integer on the summary line: {kib}"
+    );
+    assert_summary_size_has_no_mark(&kib);
+
+    let missing = "sizesummiss";
+    assert!(
+        !missing.bytes().all(|byte| byte.is_ascii_digit()),
+        "{missing}"
+    );
+    let missing_body = format!(
+        r#"{{"id":"{missing}","height":1,"version":1,"timestamp":1,"tx_count":1,"weight":4,"merkle_root":"merkle","mediantime":1}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{missing}"), missing_body),
+            (format!("/block/{missing}/txs"), "[]".to_string()),
+            (format!("/block/{missing}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = missing.to_string();
+    let err = host
+        .activate(Screen::Block)
+        .expect_err("missing size must fail the block parse");
+    let message = err.to_string();
+    assert!(
+        message.contains("missing field `size`"),
+        "missing size was not a parse error: {message}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let missing_painted = painted(&host);
+    assert!(
+        !missing_painted.contains("size 0 B"),
+        "missing size painted size 0 B: {missing_painted}"
+    );
+}
+
+fn block_summary_weight_json(id: &str, weight: u32) -> String {
+    format!(
+        r#"{{"id":"{id}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":1,"weight":{weight},"merkle_root":"merkle","mediantime":1}}"#
+    )
+}
+
+/// Summary line only. Block details stay closed so a raw `weight N` details
+/// integer cannot satisfy the check.
+fn paint_block_weight_summary(id: &str, weight: u32) -> String {
+    assert!(
+        !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+        "id must not be all digits: {id}"
+    );
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                format!("/block/{id}"),
+                block_summary_weight_json(id, weight),
+            ),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn assert_summary_weight_has_no_mark(line: &str) {
+    assert!(
+        !line.contains("Weight "),
+        "title-case Weight leaked into the summary line: {line}"
+    );
+    assert!(!line.contains("&lrm;"), "summary line has &lrm;: {line}");
+    assert!(
+        !line.contains('\u{200e}'),
+        "summary line has U+200E: {line}"
+    );
+}
+
+/// Block summary weight from `GET /block/:id`, scaled like Angular `wuBytes: 2`.
+///
+/// The value is the number, a space, and the unit. Powers of 1000, not 1024.
+/// The unit is chosen from the raw weight before rounding. The word Weight
+/// stays off this line. No left-to-right mark. A missing weight key fails
+/// serde before the summary line and does not paint `weight 0 WU`.
+#[test]
+fn block_summary_paints_weight() {
+    let one_and_half = paint_block_weight_summary("weightsum1500", 1500);
+    let line = block_hash_summary_line(&one_and_half);
+    assert!(
+        line.contains("weight 1.5 kWU"),
+        "weight 1500 still shows the raw integer and weight 1.5 kWU is absent: {line}"
+    );
+    assert!(
+        !line.contains("weight 1500"),
+        "weight 1500 stayed the raw integer on the summary line: {line}"
+    );
+    assert_summary_weight_has_no_mark(&line);
+
+    let zero = block_hash_summary_line(&paint_block_weight_summary("weightsum0", 0));
+    assert!(
+        zero.contains("weight 0 WU"),
+        "weight 0 did not paint weight 0 WU on the summary line: {zero}"
+    );
+    assert_summary_weight_has_no_mark(&zero);
+
+    let nine = block_hash_summary_line(&paint_block_weight_summary("weightsum999", 999));
+    assert!(
+        nine.contains("weight 999 WU"),
+        "weight 999 did not paint weight 999 WU on the summary line: {nine}"
+    );
+    assert!(
+        !nine.contains("kWU"),
+        "weight 999 painted kWU on the summary line: {nine}"
+    );
+    assert_summary_weight_has_no_mark(&nine);
+
+    let almost = block_hash_summary_line(&paint_block_weight_summary("weightsum999999", 999999));
+    assert!(
+        almost.contains("weight 1000 kWU"),
+        "weight 999999 did not paint weight 1000 kWU on the summary line: {almost}"
+    );
+    assert!(
+        !almost.contains("MWU"),
+        "weight 999999 painted MWU on the summary line: {almost}"
+    );
+    assert!(
+        !almost.contains("weight 999999"),
+        "weight 999999 stayed the raw integer on the summary line: {almost}"
+    );
+    assert_summary_weight_has_no_mark(&almost);
+
+    let missing = "weightsummiss";
+    assert!(
+        !missing.bytes().all(|byte| byte.is_ascii_digit()),
+        "{missing}"
+    );
+    let missing_body = format!(
+        r#"{{"id":"{missing}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":1,"merkle_root":"merkle","mediantime":1}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{missing}"), missing_body),
+            (format!("/block/{missing}/txs"), "[]".to_string()),
+            (format!("/block/{missing}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = missing.to_string();
+    let err = host
+        .activate(Screen::Block)
+        .expect_err("missing weight must fail the block parse");
+    let message = err.to_string();
+    assert!(
+        message.contains("missing field `weight`"),
+        "missing weight was not a parse error: {message}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let missing_painted = painted(&host);
+    assert!(
+        !missing_painted.contains("weight 0 WU"),
+        "missing weight painted weight 0 WU: {missing_painted}"
+    );
+}
+
+/// Blocks list paints the word Height once beside height 1 and height 0.
+///
+/// A missing height key or JSON null drops that element. One bad element does
+/// not fail the list. The list does not paint Genesis. The row stays
+/// `row block height`, so Height is not counted a second time.
+#[test]
+fn blocks_list_paints_height_header() {
+    fn assert_id_ok(id: &str) {
+        assert!(
+            !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+            "id must not be all digits: {id}"
+        );
+        assert!(!id.contains('?') && !id.contains('#'), "{id}");
+        let lower = id.to_ascii_lowercase();
+        for letter in ["h", "e", "i", "g", "t", "n", "s"] {
+            assert!(
+                !lower.contains(letter),
+                "id must not contain the letters of Height or Genesis: {id}"
+            );
+        }
+    }
+
+    fn block_json(id: &str, height: Option<&str>) -> String {
+        let mut fields = vec![format!(r#""id":"{id}""#)];
+        if let Some(height) = height {
+            fields.push(format!(r#""height":{height}"#));
+        }
+        fields.push(r#""version":1"#.to_string());
+        fields.push(r#""timestamp":1"#.to_string());
+        fields.push(r#""tx_count":1"#.to_string());
+        fields.push(r#""size":20"#.to_string());
+        fields.push(r#""weight":80"#.to_string());
+        fields.push(r#""merkle_root":"mm""#.to_string());
+        fields.push(r#""mediantime":1"#.to_string());
+        format!("{{{}}}", fields.join(","))
+    }
+
+    fn paint_blocks(body: String) -> Result<String, ClientError> {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/blocks".to_string(), body)]),
+        );
+        let opened = host.activate(Screen::Blocks);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == "/blocks"),
+            "list did not GET /blocks: {paths:?}"
+        );
+        assert!(
+            paths.iter().all(|path| {
+                !path.contains('?') && !path.contains('#') && !path.contains("/block-height/")
+            }),
+            "{paths:?}"
+        );
+        opened?;
+        Ok(painted(&host))
+    }
+
+    fn assert_plain(painted: &str) {
+        for banned in ["<td", "height-label", "<", "Previous Block", "Genesis"] {
+            assert!(
+                !painted.contains(banned),
+                "{banned} leaked into the painted shell: {painted}"
+            );
+        }
+    }
+
+    fn assert_no_extra(painted: &str) {
+        for banned in [
+            "Previous Block",
+            "tooltip",
+            "graph",
+            "mining",
+            "pool",
+            "fiat",
+            "USD",
+            "$",
+        ] {
+            assert!(
+                !painted.contains(banned),
+                "{banned} leaked into the painted shell: {painted}"
+            );
+        }
+    }
+
+    let id_one = "abcd1";
+    assert_id_ok(id_one);
+    let one = paint_blocks(format!("[{}]", block_json(id_one, Some("1"))))
+        .unwrap_or_else(|err| panic!("height 1 blocks list did not open: {err}"));
+    assert!(
+        one.contains("Height height 1"),
+        "the blocks list did not paint Height height 1: {one}"
+    );
+    assert_eq!(
+        one.matches("Height").count(),
+        1,
+        "Height was not once on the blocks list: {one}"
+    );
+    assert!(
+        one.contains(id_one) && one.contains("height 1"),
+        "the blocks list dropped the block id or height 1: {one}"
+    );
+    assert_plain(&one);
+
+    let id_zero = "abcd0";
+    assert_id_ok(id_zero);
+    let zero = paint_blocks(format!("[{}]", block_json(id_zero, Some("0"))))
+        .unwrap_or_else(|err| panic!("height 0 blocks list did not open: {err}"));
+    assert!(
+        zero.contains("Height height 0"),
+        "the blocks list did not paint Height height 0: {zero}"
+    );
+    assert_eq!(
+        zero.matches("Height").count(),
+        1,
+        "Height was not once on the height 0 blocks list: {zero}"
+    );
+    assert!(
+        zero.contains(id_zero) && zero.contains("height 0"),
+        "the blocks list dropped the block id or height 0: {zero}"
+    );
+    assert!(
+        !zero.contains("Genesis"),
+        "the blocks list painted Genesis: {zero}"
+    );
+    assert_plain(&zero);
+
+    let id_miss = "qqqbad";
+    assert_id_ok(id_miss);
+    let missing = paint_blocks(format!("[{}]", block_json(id_miss, None)))
+        .unwrap_or_else(|err| panic!("missing height did not open the blocks list: {err}"));
+    assert!(
+        !missing.contains(id_miss),
+        "missing height stayed on the blocks list: {missing}"
+    );
+    assert!(
+        !missing.contains("Height"),
+        "missing height painted Height: {missing}"
+    );
+    assert!(
+        !missing.contains("Genesis"),
+        "missing height painted Genesis: {missing}"
+    );
+    assert_plain(&missing);
+
+    let id_null = "zzzbad";
+    assert_id_ok(id_null);
+    let null_height = paint_blocks(format!("[{}]", block_json(id_null, Some("null"))))
+        .unwrap_or_else(|err| panic!("null height did not open the blocks list: {err}"));
+    assert!(
+        !null_height.contains(id_null),
+        "null height stayed on the blocks list: {null_height}"
+    );
+    assert!(
+        !null_height.contains("Height"),
+        "null height painted Height: {null_height}"
+    );
+    assert!(
+        !null_height.contains("Genesis"),
+        "null height painted Genesis: {null_height}"
+    );
+    assert_plain(&null_height);
+
+    let id_keep = "blkok1";
+    assert_id_ok(id_keep);
+    let mixed = paint_blocks(format!(
+        "[{},{}]",
+        block_json(id_keep, Some("1")),
+        block_json(id_miss, None)
+    ))
+    .unwrap_or_else(|err| panic!("mixed blocks list did not open: {err}"));
+    assert_eq!(
+        mixed.matches("Height").count(),
+        1,
+        "mixed list did not paint Height once: {mixed}"
+    );
+    assert!(
+        mixed.contains("Height height 1"),
+        "mixed list did not paint Height height 1: {mixed}"
+    );
+    assert!(
+        mixed.contains(id_keep),
+        "mixed list dropped the valid block: {mixed}"
+    );
+    assert!(
+        !mixed.contains(id_miss),
+        "mixed list painted the bad block: {mixed}"
+    );
+    assert!(
+        !mixed.contains("Genesis"),
+        "mixed list painted Genesis: {mixed}"
+    );
+    assert_plain(&mixed);
+
+    for painted in [&one, &zero, &missing, &null_height, &mixed] {
+        assert_no_extra(painted);
+    }
 }
