@@ -146,6 +146,15 @@ fn transactions_words(chain_count: u64, mempool_count: u64) -> String {
     format!("Transactions {sum}")
 }
 
+/// Chain funded count minus chain spent count.
+/// Both counts are present on a successful parse. The difference is signed, not saturating.
+/// Mempool counts are not in it. `0 - 0` is `Unspent TXOs 0`.
+/// A missing stats parse never reaches this function.
+fn unspent_txo_words(funded: u64, spent: u64) -> String {
+    let count = funded as i128 - spent as i128;
+    format!("Unspent TXOs {count}")
+}
+
 fn table(class: &str, rows: Vec<String>) -> String {
     if rows.is_empty() {
         String::new()
@@ -264,6 +273,7 @@ fn block_row(block: &Block) -> String {
         td("hash-label", "Hash"),
         td("short-hash", &html_escape(&shorten_block_id(&row.id))),
         td("hash", &block_anchor(&row.id)),
+        td("tx-count-label", "TXs"),
         td("tx-count", &row.tx_count.to_string()),
         td("time", &row.timestamp.to_string()),
         td(
@@ -395,9 +405,8 @@ fn input_party(input: &TxInput) -> String {
             )));
             // Angular `toUpperCase()` on `prevout.scriptpubkey_type`, then escape.
             let upper = html_escape(&prevout.script_pubkey_type.to_uppercase());
-            inner.push_str(
-                "<span class=\"previous-output-type-label\">Previous output type</span>",
-            );
+            inner
+                .push_str("<span class=\"previous-output-type-label\">Previous output type</span>");
             inner.push_str(&format!(
                 "<span class=\"previous-output-type\">{upper}</span>"
             ));
@@ -414,8 +423,12 @@ fn input_party(input: &TxInput) -> String {
         inner.push_str("<span class=\"newly-generated-coins\">(Newly Generated Coins)</span>");
     }
     // Angular address cell, after coinbase and peg-in. JSON null is no prevout.
-    // Issuance and peg-in stay on their own branches. A present prevout does not
-    // paint this, including a prevout with no address.
+    // `vin.issuance ? 'Issuance' : 'UNKNOWN'` when there is no prevout.
+    // Coinbase and peg-in stay on their own branches. A present prevout does
+    // not paint either word, including a prevout with no address.
+    if input.prevout.is_none() && input.issuance.is_some() {
+        inner.push_str("<span class=\"issuance-label\">Issuance</span>");
+    }
     if input.prevout.is_none()
         && input.issuance.is_none()
         && !input.is_coinbase
@@ -447,6 +460,15 @@ fn input_party(input: &TxInput) -> String {
             "<span class=\"p2sh-redeem-script\">{escaped}</span>"
         ));
     }
+    // Angular cell when `vin.prevout.scriptpubkey_type` is `v1_p2tr`.
+    // The inner witness script stays off the page.
+    if input
+        .prevout
+        .as_ref()
+        .is_some_and(|prevout| prevout.script_pubkey_type == "v1_p2tr")
+    {
+        inner.push_str("<span class=\"p2tr-tapscript-label\">P2TR tapscript</span>");
+    }
     format!("<span class=\"party\">{inner}</span>")
 }
 
@@ -460,6 +482,20 @@ fn output_party(output: &TxOutput) -> String {
         inner.push_str("<span class=\"op-return\">OP_RETURN</span>");
     } else if !output.script_pubkey_type.is_empty() {
         inner.push_str(&script_type_span(&output.script_pubkey_type));
+    }
+    // Angular output cell: `scriptpubkeyType` pipe, then escape.
+    // `fee` is Transaction fee. Every other nonempty type is uppercase.
+    // Empty omits the row. The lowercase scriptpubkey-type span stays.
+    // An input of type fee still uppercases on the previous-output path.
+    if !output.script_pubkey_type.is_empty() {
+        let type_text = if output.script_pubkey_type == "fee" {
+            "Transaction fee".to_string()
+        } else {
+            output.script_pubkey_type.to_uppercase()
+        };
+        let escaped = html_escape(&type_text);
+        inner.push_str("<span class=\"output-type-label\">Type</span>");
+        inner.push_str(&format!("<span class=\"output-type\">{escaped}</span>"));
     }
     if let Some(value) = output.value {
         inner.push_str(&value_span(value));
@@ -597,6 +633,8 @@ fn tx_row(tx: &Transaction) -> String {
             cells.push(td("block-hash", &block_anchor(hash)));
         }
         if let Some(time) = status.block_time {
+            // Angular timestamp row. The value cell stays the raw integer.
+            cells.push(td("timestamp-label", "Timestamp"));
             cells.push(td("block-time", &time.to_string()));
         }
     }
@@ -743,6 +781,13 @@ fn address_summary(stats: &AddressStats) -> String {
         "transactions",
         &transactions_words(stats.chain_stats.tx_count, stats.mempool_stats.tx_count),
     ));
+    out.push_str(&paragraph(
+        "unspent-txos",
+        &unspent_txo_words(
+            stats.chain_stats.funded_txo_count,
+            stats.chain_stats.spent_txo_count,
+        ),
+    ));
     out
 }
 
@@ -752,7 +797,17 @@ pub fn recent_rows_markup(recent_json: &str) -> String {
     }
     let rows = recent_from(recent_json);
     let rows = splora_frontend_shared::cap_recent_transactions(&rows);
-    table("tx-rows", rows.iter().map(recent_row).collect())
+    let painted: Vec<String> = rows.iter().map(recent_row).collect();
+    if painted.is_empty() {
+        return String::new();
+    }
+    // Recent transactions page. TXID, Amount, vSize, and Fee, once each, not once per row.
+    // The txid cell stays the raw id. `value`, `vsize`, and `fee` stay raw integers.
+    // The blocks list does not get these headers.
+    format!(
+        "<table class=\"tx-rows\"><thead><th class=\"table-cell-txid\">TXID</th><th class=\"table-cell-satoshis\">Amount</th><th class=\"table-cell-vsize\">vSize</th><th class=\"table-cell-fees\">Fee</th></thead><tbody>{}</tbody></table>",
+        painted.concat()
+    )
 }
 
 pub fn block_txid_links_markup(body: &str) -> String {
@@ -1216,7 +1271,9 @@ pub fn broadcast_txid_markup(txid: &str) -> String {
 
 pub fn test_txid_markup(body: &str) -> String {
     let anchors = if let Ok(rows) = splora_frontend_shared::parse_test_txs(body) {
-        rows.iter().map(|row| txid_anchor(&row.txid)).collect::<String>()
+        rows.iter()
+            .map(|row| txid_anchor(&row.txid))
+            .collect::<String>()
     } else {
         // A disallowed row can omit reject-reason. The public parser stops the
         // whole array there. The txid is still on the object, and it still opens /tx/.
@@ -1359,11 +1416,14 @@ pub fn asset_markup(asset_json: &str, txs_json: &str, liquid: bool) -> String {
     }
     let mut out = String::new();
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        // Angular `asset|Liquid Asset page title`. Once, before the id and the Name row.
+        out.push_str("<h1>Asset</h1>");
+        let loose_at = out.len();
         if let Some(name) = value.get("name").and_then(|item| item.as_str()) {
             out.push_str(&html_escape(name));
         }
         if let Some(ticker) = value.get("ticker").and_then(|item| item.as_str()) {
-            if !out.is_empty() {
+            if out.len() > loose_at {
                 out.push(' ');
             }
             out.push_str(&html_escape(ticker));
@@ -1437,6 +1497,23 @@ fn issued_stat_rows(issued: &IssuedRegistryAsset) -> Vec<String> {
     let blinded =
         issued.chain_stats.has_blinded_issuances || issued.mempool_stats.has_blinded_issuances;
     let mut rows = Vec::new();
+    if let Some(name) = issued
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        let mut value = html_escape(name);
+        if let Some(ticker) = issued
+            .ticker
+            .as_deref()
+            .filter(|ticker| !ticker.trim().is_empty())
+        {
+            value.push_str(" (");
+            value.push_str(&html_escape(ticker));
+            value.push(')');
+        }
+        rows.push(stat_row("Name", &value));
+    }
     if let Some(precision) = issued.precision {
         rows.push(stat_row("Precision", &precision.to_string()));
     }
@@ -1949,9 +2026,58 @@ pub fn block_details_markup(block_json: &str, open: bool) -> String {
             "<tr><td>Nonce</td><td>{nonce}</td><td class=\"nonce-hex\">{nonce_hex}</td></tr>"
         ));
     }
-    format!(
-        "<div id=\"details\"{hidden}><table><tbody>{rows}</tbody></table><a href=\"/block/{id}/header\">Block Header Hex</a></div>"
-    )
+    // The next cell is the header link, not the hex digits. The row stays when the body is absent.
+    rows.push_str(&format!(
+        "<tr><td>Block Header Hex</td><td><a href=\"/block/{id}/header\"></a></td></tr>"
+    ));
+    format!("<div id=\"details\"{hidden}><table><tbody>{rows}</tbody></table></div>")
+}
+
+/// Eighty-byte `GET /block/:hash/header` hex beside the Block Header Hex label.
+/// A missing, failed, or short body leaves the link row unchanged.
+pub fn block_header_hex_markup(details: &str, header_body: &str) -> String {
+    let Some(hex) = eighty_byte_header_hex(header_body) else {
+        return details.to_string();
+    };
+    let needle = "<td>Block Header Hex</td>";
+    let Some(at) = details.find(needle) else {
+        return details.to_string();
+    };
+    let after = at + needle.len();
+    let Some(end_rel) = details[after..].find("</tr>") else {
+        return details.to_string();
+    };
+    let insert_at = after + end_rel;
+    let mut out = String::with_capacity(details.len() + hex.len() + 32);
+    out.push_str(&details[..insert_at]);
+    out.push_str("<td class=\"block-header-hex\">");
+    out.push_str(&hex);
+    out.push_str("</td>");
+    out.push_str(&details[insert_at..]);
+    out
+}
+
+/// Notice for a failed header body. An 80-byte header is painted on the details row instead.
+pub fn block_header_aside_markup(body: &str) -> String {
+    if eighty_byte_header_hex(body).is_some() {
+        String::new()
+    } else {
+        indexed_bytes_markup(body, "block-header")
+    }
+}
+
+fn eighty_byte_header_hex(body: &str) -> Option<String> {
+    let text = splora_frontend_shared::parse_block_header(body).ok()?;
+    let text = text.to_ascii_lowercase();
+    if text.len() == 160
+        && text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        Some(text)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

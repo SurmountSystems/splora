@@ -74,6 +74,22 @@ fn assert_sentinels_stay_off(markup: &str) {
     assert_absent(markup, WITNESS);
 }
 
+fn class_span_values<'a>(markup: &'a str, class: &str) -> Vec<&'a str> {
+    let open = format!("<span class=\"{class}\">");
+    let close = "</span>";
+    let mut rest = markup;
+    let mut values = Vec::new();
+    while let Some(at) = rest.find(&open) {
+        let after = &rest[at + open.len()..];
+        let end = after
+            .find(close)
+            .unwrap_or_else(|| panic!("unclosed {class} span in {markup}"));
+        values.push(&after[..end]);
+        rest = &after[end + close.len()..];
+    }
+    values
+}
+
 #[test]
 fn prevout_type_paints_the_label_and_the_uppercase_type() {
     let body = tx(&input(&prevout("v0_p2wpkh")), &output("p2pkh"));
@@ -85,7 +101,17 @@ fn prevout_type_paints_the_label_and_the_uppercase_type() {
         "<span class=\"scriptpubkey-type\">input script type v0_p2wpkh</span>",
     );
     assert_one(&markup, "<span class=\"scriptpubkey-type\">p2pkh</span>");
-    assert_absent(&markup, "P2PKH");
+    assert_eq!(
+        class_span_values(&markup, "previous-output-type"),
+        ["V0_P2WPKH"],
+        "previous-output-type span must be V0_P2WPKH, not P2PKH: {markup}"
+    );
+    assert!(
+        class_span_values(&markup, "output-type")
+            .iter()
+            .any(|value| *value == "P2PKH"),
+        "the output-type span may contain P2PKH: {markup}"
+    );
     assert_sentinels_stay_off(&markup);
 }
 
@@ -101,7 +127,11 @@ fn type_with_markup_characters_is_uppercased_then_escaped() {
 
 #[test]
 fn two_prevouts_paint_the_label_twice() {
-    let vin = format!("{},{}", input(&prevout("v0_p2wpkh")), input(&prevout("p2sh")));
+    let vin = format!(
+        "{},{}",
+        input(&prevout("v0_p2wpkh")),
+        input(&prevout("p2sh"))
+    );
     let markup = transaction_row_markup(&tx(&vin, &output("p2pkh")));
     assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, &label_spans("V0_P2WPKH"));
@@ -125,7 +155,18 @@ fn output_type_alone_is_not_the_previous_output_label() {
     let markup = transaction_row_markup(&body);
     assert_absent(&markup, LABEL);
     assert_absent(&markup, "previous-output-type");
-    assert_absent(&markup, "P2PKH");
+    assert!(
+        class_span_values(&markup, "previous-output-type")
+            .iter()
+            .all(|value| !value.contains("P2PKH")),
+        "P2PKH leaked into the previous-output-type span: {markup}"
+    );
+    assert!(
+        class_span_values(&markup, "output-type")
+            .iter()
+            .any(|value| *value == "P2PKH"),
+        "the output-type span may contain P2PKH: {markup}"
+    );
     assert_one(&markup, "<span class=\"scriptpubkey-type\">p2pkh</span>");
     assert_sentinels_stay_off(&markup);
 }
@@ -164,9 +205,7 @@ fn null_scriptpubkey_type_omits_the_label() {
 
 #[test]
 fn missing_scriptpubkey_type_key_omits_the_label() {
-    let prevout = format!(
-        r#"{{"scriptpubkey":"{SCRIPT_HEX}","scriptpubkey_asm":"{SCRIPT_ASM}"}}"#
-    );
+    let prevout = format!(r#"{{"scriptpubkey":"{SCRIPT_HEX}","scriptpubkey_asm":"{SCRIPT_ASM}"}}"#);
     let markup = transaction_row_markup(&tx(&input(&prevout), &output("p2pkh")));
     assert_absent(&markup, LABEL);
     assert_absent(&markup, "<h2>Inputs & Outputs</h2>");

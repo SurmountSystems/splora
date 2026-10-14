@@ -18,15 +18,15 @@ use crate::models::{
 use crate::paths::{docs_api_type_page, mempool_paths, static_page_requests, tx_path};
 use crate::rows::{
     address_highlight_markup, address_rows_markup, asset_markup, batch_outspends_markup,
-    block_details_markup, block_raw_beside, block_rows_markup, block_status_markup,
-    block_transactions_markup, block_txid_index_markup, block_txid_links_markup,
-    blocks_rows_markup, broadcast_txid_markup, chain_tip_markup, confirmation_markup,
-    dashboard_rows_markup, details_open_after_click, height_body_markup, indexed_bytes_markup,
-    mempool_txids_markup, merkle_proof_markup, multi_address_links_markup, one_outspend_markup,
-    outspends_markup, package_txid_markup, poison_alert_markup, recent_rows_markup,
-    rows_with_notices, scripthash_markup, summary_rows_markup, summary_rows_with_status,
-    test_txid_markup, tip_links_markup, transaction_hex_markup, transaction_row_markup,
-    tx_raw_beside, tx_status_markup,
+    block_details_markup, block_header_aside_markup, block_header_hex_markup, block_raw_beside,
+    block_rows_markup, block_status_markup, block_transactions_markup, block_txid_index_markup,
+    block_txid_links_markup, blocks_rows_markup, broadcast_txid_markup, chain_tip_markup,
+    confirmation_markup, dashboard_rows_markup, details_open_after_click, height_body_markup,
+    indexed_bytes_markup, mempool_txids_markup, merkle_proof_markup, multi_address_links_markup,
+    one_outspend_markup, outspends_markup, package_txid_markup, poison_alert_markup,
+    recent_rows_markup, rows_with_notices, scripthash_markup, summary_rows_markup,
+    summary_rows_with_status, test_txid_markup, tip_links_markup, transaction_hex_markup,
+    transaction_row_markup, tx_raw_beside, tx_status_markup,
 };
 use crate::screens::{
     address_chain_request, address_fields_text, address_mempool_txs_request, address_requests,
@@ -443,7 +443,11 @@ pub fn submission_links(path: &str, body: &str) -> String {
     if path == broadcast_path() {
         let mut html = package_txid_markup(body);
         let trimmed = body.trim();
-        if !trimmed.starts_with('{') && !trimmed.starts_with('[') && !indexer_failure(trimmed) {
+        if !trimmed.starts_with('{')
+            && !trimmed.starts_with('[')
+            && !indexer_failure(trimmed)
+            && !trimmed.contains(char::is_whitespace)
+        {
             html.push_str(&broadcast_txid_markup(trimmed));
         }
         html
@@ -706,7 +710,12 @@ fn BlockPage() -> impl IntoView {
     });
     view! {
         <h1>"Block"</h1>
-        <div inner_html=move || block_details_markup(&block_body.get(), details_open.get())></div>
+        <div inner_html=move || {
+            block_header_hex_markup(
+                &block_details_markup(&block_body.get(), details_open.get()),
+                &header_body.get(),
+            )
+        }></div>
         <button
             type="button"
             class="btn btn-outline-info"
@@ -756,7 +765,7 @@ fn BlockPage() -> impl IntoView {
                 &block_txid_links_markup(&txids),
             )
         }></div>
-        <div inner_html=move || indexed_bytes_markup(&header_body.get(), "block-header")></div>
+        <div inner_html=move || block_header_aside_markup(&header_body.get())></div>
         <label>
             "Transaction index"
             <input
@@ -1007,7 +1016,7 @@ fn post_screen(
     let submit_path = path.clone();
     let link_path = path;
     view! {
-        <h2>{heading}</h2>
+        {(!heading.is_empty()).then(|| view! { <h2>{heading}</h2> })}
         <p>{method}" "{path_label}</p>
         <textarea on:input=move |event| raw.set(event_target_value(&event))></textarea>
         <button on:click=move |_| {
@@ -1167,14 +1176,19 @@ fn BroadcastPage() -> impl IntoView {
     } else {
         broadcast_path().to_string()
     };
-    post_screen(
-        call.method,
-        path,
-        "Broadcast",
-        "Broadcast",
-        broadcast_payload,
-        broadcast_fields_text,
-    )
+    let heading = "<h1>Broadcast Transaction</h1>";
+    view! {
+        <div inner_html=heading></div>
+        <label>"Maximum burn amount (sats)"</label>
+        {post_screen(
+            call.method,
+            path,
+            "",
+            "Broadcast",
+            broadcast_payload,
+            broadcast_fields_text,
+        )}
+    }
 }
 
 #[component]
@@ -1577,7 +1591,6 @@ fn AssetPage() -> impl IntoView {
         }
     });
     view! {
-        <h2>"Asset"</h2>
         <div inner_html=move || {
             asset_markup(
                 &asset_body.get(),

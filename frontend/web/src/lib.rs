@@ -49,8 +49,8 @@ pub use paths::{
 };
 pub use rows::{
     address_highlight_markup, address_rows_markup, asset_markup, batch_outspends_markup,
-    block_details_markup, block_raw_beside, block_rows_markup, block_status_markup,
-    block_transactions_markup, block_tx_page_path, block_txid_index_markup,
+    block_details_markup, block_header_hex_markup, block_raw_beside, block_rows_markup,
+    block_status_markup, block_transactions_markup, block_tx_page_path, block_txid_index_markup,
     block_txid_links_markup, blocks_rows_markup, broadcast_txid_markup, chain_tip_markup,
     confirmation_markup, dashboard_rows_markup, details_open_after_click, height_body_markup,
     indexed_bytes_markup, mempool_txids_markup, merkle_proof_markup, multi_address_links_markup,

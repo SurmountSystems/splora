@@ -796,6 +796,15 @@ pub fn broadcast_fields_text(body: &str) -> String {
     if let Some(line) = closed_notice(body) {
         return line.to_string();
     }
+    let trimmed = body.trim();
+    // A sentence from POST /tx is the indexer error. It is not a txid.
+    if !trimmed.is_empty()
+        && !trimmed.starts_with('{')
+        && !trimmed.starts_with('[')
+        && trimmed.contains(char::is_whitespace)
+    {
+        return trimmed.to_string();
+    }
     match parse_broadcast_result_json(body) {
         Ok(result) => format!("txid {}", result.txid),
         Err(_) => String::new(),

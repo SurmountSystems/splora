@@ -1,9 +1,9 @@
 //! Transactions is the chain tx count plus the mempool tx count.
 //!
-//! The address page and the scripthash page paint that sum after Pending
-//! UTXOs. A missing tx count fails the stats object and is not zero.
-//! Explicit `0` stays `0`. The add is `u128` so it does not wrap.
-//! The separate chain and mempool count paragraphs stay.
+//! The address page and the scripthash page paint that sum after the
+//! pending amount and Balance. A missing tx count fails the stats object
+//! and is not zero. Explicit `0` stays `0`. The add is `u128` so it does
+//! not wrap. The separate chain and mempool count paragraphs stay.
 //! A scripthash body that fails the wire parse does not invent the line
 //! from those separate strings.
 
@@ -67,8 +67,41 @@ fn assert_transactions(markup: &str, count: &str) {
         .map(|offset| pending + offset + "</p>".len())
         .unwrap_or_else(|| panic!("pending paragraph did not close: {markup}"));
     assert!(
-        markup[pending_end..].starts_with("<p class=\"transactions\">"),
-        "Transactions is not immediately after Pending UTXOs: {markup}"
+        markup[pending_end..].starts_with("<p class=\"pending-amount\">"),
+        "pending amount is not immediately after Pending UTXOs: {markup}"
+    );
+    let amount_end = markup[pending_end..]
+        .find("</p>")
+        .map(|offset| pending_end + offset + "</p>".len())
+        .unwrap_or_else(|| panic!("pending amount paragraph did not close: {markup}"));
+    assert!(
+        markup[amount_end..].starts_with("<p class=\"balance\">"),
+        "Balance is not immediately after the pending amount: {markup}"
+    );
+    let transactions_at = markup[pending_end..]
+        .find("<p class=\"transactions\">")
+        .map(|offset| pending_end + offset)
+        .unwrap_or_else(|| panic!("transactions missing after Pending UTXOs: {markup}"));
+    let before_transactions = &markup[pending_end..transactions_at];
+    assert!(
+        !markup[pending_end..].starts_with("<p class=\"transactions\">"),
+        "Transactions must not be the next bytes after Pending UTXOs: {markup}"
+    );
+    assert!(
+        before_transactions.contains("<p class=\"pending-amount\">"),
+        "the slice before Transactions is missing the pending-amount paragraph: {markup}"
+    );
+    assert!(
+        before_transactions.contains("<p class=\"balance\">"),
+        "the slice before Transactions is missing the Balance paragraph: {markup}"
+    );
+    let balance_end = markup[amount_end..]
+        .find("</p>")
+        .map(|offset| amount_end + offset + "</p>".len())
+        .unwrap_or_else(|| panic!("Balance paragraph did not close: {markup}"));
+    assert!(
+        balance_end <= transactions_at,
+        "Balance does not close before Transactions: {markup}"
     );
 }
 

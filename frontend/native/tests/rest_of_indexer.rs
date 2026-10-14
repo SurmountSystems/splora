@@ -1508,6 +1508,105 @@ fn address_screen_paints_combined_balance() {
     );
 }
 
+/// Chain funded count minus chain spent count. Mempool counts are not in it.
+/// Both zeros paint `Unspent TXOs 0`. A failed address-stats parse omits the
+/// line. The scripthash summary does not paint it. Confirmed UTXOs stays.
+#[test]
+fn address_screen_paints_unspent_txos() {
+    let funded = paint_address(
+        "bc1qunspent",
+        r#"{"address":"bc1qunspent","chain_stats":{"tx_count":4,"funded_txo_count":5,"spent_txo_count":2,"funded_txo_sum":9000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}"#,
+    );
+    assert!(funded.contains("Transactions 5"), "{funded}");
+    assert!(funded.contains("Confirmed UTXOs 3"), "{funded}");
+    assert!(funded.contains("mempool_funded_txo_count 9"), "{funded}");
+    assert!(funded.contains("mempool_spent_txo_count 1"), "{funded}");
+    assert_eq!(
+        funded.matches("Unspent TXOs 3").count(),
+        1,
+        "chain funded 5 minus chain spent 2 was not painted once: {funded}"
+    );
+    assert!(
+        !funded.contains("Unspent TXOs 8"),
+        "mempool count difference painted: {funded}"
+    );
+    assert!(
+        !funded.contains("Unspent TXOs 5"),
+        "chain funded count was painted without subtracting chain spent: {funded}"
+    );
+    assert!(
+        !funded.contains("Unspent TXOs 11"),
+        "mempool counts were folded into Unspent TXOs: {funded}"
+    );
+    assert!(!funded.contains("<p"), "html tag painted: {funded}");
+    assert!(
+        !funded.contains("unspent-txos"),
+        "html class painted: {funded}"
+    );
+    let transactions_at = funded.find("Transactions 5").expect("transactions");
+    let unspent_at = funded.find("Unspent TXOs 3").expect("unspent");
+    assert!(
+        unspent_at > transactions_at,
+        "Unspent TXOs does not come after Transactions: {funded}"
+    );
+
+    let zero = paint_address(
+        "bc1qunspent0",
+        r#"{"address":"bc1qunspent0","chain_stats":{"tx_count":4,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":9000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}"#,
+    );
+    assert!(zero.contains("Unspent TXOs 0"), "{zero}");
+    assert!(
+        !zero.contains("Unspent TXOs 8"),
+        "mempool count difference painted: {zero}"
+    );
+    assert!(zero.contains("Confirmed UTXOs 0"), "{zero}");
+
+    let omitted = paint_address(
+        "bc1qunspentomit",
+        r#"{"address":"bc1qunspentomit","chain_stats":{"tx_count":4,"funded_txo_count":5,"funded_txo_sum":9000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}"#,
+    );
+    assert!(omitted.contains("chain_funded_txo_count 5"), "{omitted}");
+    assert!(!omitted.contains("Unspent TXOs"), "{omitted}");
+    assert!(!omitted.contains("Unspent TXOs 0"), "{omitted}");
+    assert!(!omitted.contains("Unspent TXOs -"), "{omitted}");
+    assert!(
+        !omitted.split_whitespace().any(|token| token == "0"),
+        "failed address-stats parse was painted as 0: {omitted}"
+    );
+
+    let (mut host, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                "/address/bc1qunspentbad".to_string(),
+                "not-json".to_string(),
+            ),
+            ("/address/bc1qunspentbad/txs".to_string(), "[]".to_string()),
+            ("/address/bc1qunspentbad/utxo".to_string(), "[]".to_string()),
+        ]),
+    );
+    let opened = host.open_address("bc1qunspentbad");
+    assert!(opened.is_err(), "not-json parsed as address stats");
+    let failed = painted(&host);
+    assert!(!failed.contains("Unspent TXOs"), "{failed}");
+    assert!(!failed.contains("Unspent TXOs 0"), "{failed}");
+    assert!(!failed.contains("Unspent TXOs -"), "{failed}");
+
+    let hash = "d1".repeat(32);
+    let script = paint_scripthash(
+        &hash,
+        &format!(
+            r#"{{"scripthash":"{hash}","chain_stats":{{"tx_count":4,"funded_txo_count":5,"spent_txo_count":2,"funded_txo_sum":9000,"spent_txo_sum":1000}},"mempool_stats":{{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}}}"#
+        ),
+    );
+    assert!(script.contains("Confirmed UTXOs 3"), "{script}");
+    assert!(script.contains("Transactions 5"), "{script}");
+    assert!(
+        !script.contains("Unspent TXOs"),
+        "scripthash summary painted Unspent TXOs: {script}"
+    );
+}
+
 /// `GET /scripthash/:hash` uses the same four sums as an address.
 /// Balance is the signed difference. A missing sum omits the label.
 #[test]
@@ -1630,7 +1729,7 @@ fn transaction_screen_paints_script_pubkey_type() {
     );
     assert!(!text.contains("0014aa"), "{text}");
     assert!(!text.contains("deadbeef"), "{text}");
-    assert!(!text.contains("OP_RETURN"), "{text}");
+    assert_op_return_asm_stays_off(&text);
     assert!(!text.contains("scriptpubkey"), "{text}");
 }
 
@@ -1663,7 +1762,7 @@ fn transaction_screen_paints_output_total() {
     );
     assert!(!sum.contains("0014aa"), "{sum}");
     assert!(!sum.contains("deadbeef"), "{sum}");
-    assert!(!sum.contains("OP_RETURN"), "{sum}");
+    assert_op_return_asm_stays_off(&sum);
     assert!(!sum.contains("scriptpubkey"), "{sum}");
 
     let missing = paint_tx_outputs(
@@ -2324,6 +2423,246 @@ fn transaction_screen_paints_p2sh_redeem_script() {
     assert_no_p2sh_html(&empty);
 }
 
+const P2TR_LABEL: &str = "P2TR tapscript";
+const P2TR_ASM: &str = "TAPSCRIPTASMDEAD";
+const P2TR_SIG: &str = "TAPSIGHEXDEAD";
+const P2TR_SIG_ASM: &str = "TAPSIGASMDEAD";
+const P2TR_WIT: &str = "TAPWITDEAD";
+const P2TR_PUB: &str = "TAPPUBHEXDEAD";
+const P2TR_PUB_ASM: &str = "TAPPUBASMDEAD";
+const P2TR_LEAF: &str = "TAPLEAFVERDEAD";
+
+fn p2tr_tx_body(
+    txid: &str,
+    prevout_type: Option<&str>,
+    inner_witness: bool,
+    redeem_asm: Option<&str>,
+    vout_type: &str,
+) -> String {
+    let prevout_field = match prevout_type {
+        Some(kind) => format!(
+            r#""prevout":{{"scriptpubkey":"{P2TR_PUB}","scriptpubkey_asm":"{P2TR_PUB_ASM}","scriptpubkey_type":"{kind}","value":5}},"#
+        ),
+        None => r#""prevout":null,"#.to_string(),
+    };
+    let witness_field = if inner_witness {
+        format!(r#","inner_witnessscript_asm":"{P2TR_ASM}""#)
+    } else {
+        String::new()
+    };
+    let redeem_field = match redeem_asm {
+        Some(asm) => format!(r#","inner_redeemscript_asm":"{asm}""#),
+        None => String::new(),
+    };
+    let vin = format!(
+        r#"{{"txid":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","vout":0,{prevout_field}"scriptsig":"{P2TR_SIG}","scriptsig_asm":"{P2TR_SIG_ASM}","witness":["{P2TR_WIT}"],"is_coinbase":false,"sequence":1,"leaf_version":"{P2TR_LEAF}"{witness_field}{redeem_field}}}"#
+    );
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin}],"vout":[{{"scriptpubkey":"{P2TR_PUB}","scriptpubkey_asm":"{P2TR_PUB_ASM}","scriptpubkey_type":"{vout_type}","value":1}}],"size":10,"weight":7,"sigops":0,"fee":1}}"#
+    )
+}
+
+fn paint_p2tr(
+    txid: &str,
+    prevout_type: Option<&str>,
+    inner_witness: bool,
+    redeem_asm: Option<&str>,
+    vout_type: &str,
+) -> String {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    let body = p2tr_tx_body(txid, prevout_type, inner_witness, redeem_asm, vout_type);
+    for needle in [
+        P2TR_SIG,
+        P2TR_SIG_ASM,
+        P2TR_WIT,
+        P2TR_PUB,
+        P2TR_PUB_ASM,
+        P2TR_LEAF,
+    ] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    if inner_witness {
+        assert!(
+            body.contains(P2TR_ASM),
+            "fixture omitted {P2TR_ASM}: {body}"
+        );
+    } else {
+        assert!(
+            !body.contains(P2TR_ASM),
+            "fixture included {P2TR_ASM}: {body}"
+        );
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not registered: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn p2tr_line_count(painted: &str) -> usize {
+    painted.lines().filter(|line| *line == P2TR_LABEL).count()
+}
+
+fn assert_p2tr_script_stays_off(painted: &str) {
+    for needle in [
+        P2TR_ASM,
+        P2TR_SIG,
+        P2TR_SIG_ASM,
+        P2TR_WIT,
+        P2TR_PUB,
+        P2TR_PUB_ASM,
+        P2TR_LEAF,
+        "leaf version",
+        "Leaf version",
+        "P2TR control block",
+        "P2TR Simplicity script",
+        "P2WSH witness script",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+/// `P2TR tapscript` from `GET /tx/:txid` when `prevout.scriptpubkey_type` is `v1_p2tr`.
+///
+/// The line is exactly `P2TR tapscript`, once for that input. A p2sh input does
+/// not gain it. Any other prevout type does not gain it. An output whose type
+/// is `v1_p2tr` does not gain it. The inner witness script, script asm, script
+/// hex, scriptsig, witness, and leaf version stay off the screen. `P2SH redeem
+/// script` stays on a p2sh input that has a redeem script.
+#[test]
+fn transaction_screen_paints_p2tr_tapscript_label() {
+    let present = paint_p2tr("p2trtap", Some("v1_p2tr"), true, None, "p2pkh");
+    assert!(
+        present.contains("input outpoint"),
+        "v1_p2tr dropped the input outpoint: {present}"
+    );
+    assert_eq!(
+        p2tr_line_count(&present),
+        1,
+        "v1_p2tr was not exactly one line `P2TR tapscript`: {present}"
+    );
+    assert_eq!(
+        present.matches(P2TR_LABEL).count(),
+        1,
+        "the label was not painted once: {present}"
+    );
+    assert!(
+        present
+            .lines()
+            .any(|line| line == "Previous output type V1_P2TR"),
+        "Previous output type was dropped: {present}"
+    );
+    assert!(
+        !present.contains("P2SH redeem script"),
+        "a v1_p2tr input gained P2SH redeem script: {present}"
+    );
+    assert_p2tr_script_stays_off(&present);
+
+    let bare = paint_p2tr("p2trbare", Some("v1_p2tr"), false, None, "p2pkh");
+    assert_eq!(
+        p2tr_line_count(&bare),
+        1,
+        "a v1_p2tr input without an inner script was not one line `P2TR tapscript`: {bare}"
+    );
+    assert_eq!(
+        bare.matches(P2TR_LABEL).count(),
+        1,
+        "the bare v1_p2tr label was not painted once: {bare}"
+    );
+    assert_p2tr_script_stays_off(&bare);
+
+    let p2sh = paint_p2tr(
+        "p2trnotsh",
+        Some("p2sh"),
+        true,
+        Some("OP_DUP OP_HASH160"),
+        "p2pkh",
+    );
+    assert_eq!(
+        p2tr_line_count(&p2sh),
+        0,
+        "a p2sh input gained `P2TR tapscript`: {p2sh}"
+    );
+    assert!(
+        !p2sh.contains(P2TR_LABEL),
+        "a p2sh input gained `P2TR tapscript`: {p2sh}"
+    );
+    assert_eq!(
+        p2sh.lines()
+            .filter(|line| *line == "P2SH redeem script OP_DUP OP_HASH160")
+            .count(),
+        1,
+        "P2SH redeem script was dropped: {p2sh}"
+    );
+    assert_p2tr_script_stays_off(&p2sh);
+
+    let other = paint_p2tr("p2trwsh", Some("v0_p2wsh"), true, None, "p2pkh");
+    assert_eq!(
+        p2tr_line_count(&other),
+        0,
+        "a non-v1_p2tr input gained `P2TR tapscript`: {other}"
+    );
+    assert!(
+        !other.contains(P2TR_LABEL),
+        "a non-v1_p2tr input gained `P2TR tapscript`: {other}"
+    );
+    assert!(
+        other.contains("input outpoint"),
+        "a non-v1_p2tr input dropped the outpoint: {other}"
+    );
+    assert_p2tr_script_stays_off(&other);
+
+    let missing_prevout = paint_p2tr("p2trnoprev", None, true, None, "p2pkh");
+    assert_eq!(
+        p2tr_line_count(&missing_prevout),
+        0,
+        "a missing prevout gained `P2TR tapscript`: {missing_prevout}"
+    );
+    assert!(
+        !missing_prevout.contains(P2TR_LABEL),
+        "a missing prevout gained `P2TR tapscript`: {missing_prevout}"
+    );
+    assert!(
+        missing_prevout.contains("input outpoint"),
+        "a missing prevout dropped the outpoint: {missing_prevout}"
+    );
+    assert_p2tr_script_stays_off(&missing_prevout);
+
+    let output_only = paint_p2tr("p2trout", Some("v0_p2wpkh"), true, None, "v1_p2tr");
+    assert_eq!(
+        p2tr_line_count(&output_only),
+        0,
+        "an output of type v1_p2tr gained `P2TR tapscript`: {output_only}"
+    );
+    assert!(
+        !output_only.contains(P2TR_LABEL),
+        "an output of type v1_p2tr gained `P2TR tapscript`: {output_only}"
+    );
+    assert!(
+        output_only.lines().any(|line| line == "Type V1_P2TR"),
+        "the output type line was dropped: {output_only}"
+    );
+    assert_p2tr_script_stays_off(&output_only);
+}
+
 fn paint_tx_input(txid: &str, input_tail: &str) -> String {
     let tx = format!(
         r#"{{
@@ -2382,7 +2721,7 @@ fn transaction_screen_paints_virtual_size() {
     );
     assert!(!five.contains("0014aa"), "{five}");
     assert!(!five.contains("deadbeef"), "{five}");
-    assert!(!five.contains("OP_RETURN"), "{five}");
+    assert_op_return_asm_stays_off(&five);
     assert!(!five.contains("OP_CHECKSIG"), "{five}");
     assert!(!five.contains("abcdwitnesshex"), "{five}");
     assert!(!five.contains("scriptpubkey"), "{five}");
@@ -2755,6 +3094,635 @@ fn transaction_screen_paints_unconfirmed() {
     );
 }
 
+const INPUTS_OUTPUTS_HEADING: &str = "Inputs & Outputs";
+
+fn tx_with_parties(txid: &str, vin: &str, vout: &str) -> String {
+    format!(
+        r#"{{
+        "txid":"{txid}",
+        "version":1,
+        "locktime":0,
+        "vin":[{vin}],
+        "vout":[{vout}],
+        "size":10,
+        "weight":40,
+        "sigops":0,
+        "fee":1,
+        "status":{{"confirmed":false}}
+    }}"#
+    )
+}
+
+fn paint_tx_body(txid: &str, body: &str) -> String {
+    let (mut host, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body.to_string())]),
+    );
+    let _opened = host.open_transaction(txid);
+    painted(&host)
+}
+
+fn assert_inputs_outputs_heading_once(painted: &str, txid: &str) {
+    assert!(
+        painted.contains(&format!("tx txid {txid}")),
+        "the parsed transaction was hidden: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == INPUTS_OUTPUTS_HEADING)
+            .count(),
+        1,
+        "the parsed transaction did not paint {INPUTS_OUTPUTS_HEADING} once: {painted}"
+    );
+    assert_eq!(
+        painted.matches(INPUTS_OUTPUTS_HEADING).count(),
+        1,
+        "the heading was not exactly once: {painted}"
+    );
+    assert_heading_stays_plaintext(painted);
+}
+
+fn assert_heading_absent(painted: &str) {
+    assert!(
+        !painted.contains(INPUTS_OUTPUTS_HEADING),
+        "the heading leaked: {painted}"
+    );
+    assert_heading_stays_plaintext(painted);
+}
+
+fn assert_heading_stays_plaintext(painted: &str) {
+    assert!(!painted.contains("<h2"), "an h2 tag leaked: {painted}");
+    assert!(!painted.contains("<td"), "a td tag leaked: {painted}");
+    for banned in ["Allowed?", "Previous output type", "Transaction hex"] {
+        assert!(
+            !painted.contains(banned),
+            "{banned} leaked into the painted shell: {painted}"
+        );
+    }
+}
+
+/// Angular subtitle on the parsed transaction from `GET /tx/:txid`.
+///
+/// The plaintext line is `Inputs & Outputs`, once, including empty `vin`
+/// and empty `vout`. An empty body, invalid JSON, and `[]` do not paint it.
+/// The blocks list does not. There is no HTML.
+#[test]
+fn transaction_screen_paints_inputs_outputs_heading() {
+    let vin = r#"{"txid":"prev","vout":0,"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}"#;
+    let vout = r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"","value":9}"#;
+    let one = paint_tx_body("inoutone", &tx_with_parties("inoutone", vin, vout));
+    assert_inputs_outputs_heading_once(&one, "inoutone");
+
+    let empty = paint_tx_body("inoutempty", &tx_with_parties("inoutempty", "", ""));
+    assert_inputs_outputs_heading_once(&empty, "inoutempty");
+    assert!(
+        !empty.lines().any(|line| {
+            line.starts_with("input outpoint ") || line.starts_with("output address ")
+        }),
+        "empty vin and vout painted a party: {empty}"
+    );
+
+    for (txid, body) in [
+        ("inoutblank", ""),
+        ("inoutbad", "not-json"),
+        ("inoutarr", "[]"),
+    ] {
+        let painted = paint_tx_body(txid, body);
+        assert!(
+            painted.contains(txid),
+            "the unparsed body hid the transaction screen: {painted}"
+        );
+        assert!(
+            !painted.contains(&format!("tx txid {txid}")),
+            "an unparsed body painted a transaction row: {painted}"
+        );
+        assert_heading_absent(&painted);
+    }
+
+    let (mut host, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), format!("[{}]", block_json("blkio1")))]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let blocks = painted(&host);
+    assert!(
+        blocks.contains("blkio1"),
+        "the blocks list hid the block: {blocks}"
+    );
+    assert_heading_absent(&blocks);
+}
+
+const PREVIOUS_OUTPUT_TYPE: &str = "Previous output type";
+
+fn pot_prevout(kind: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"POTPUBHEX","scriptpubkey_asm":"POTASM","scriptpubkey_type":"{kind}","value":5}}"#
+    )
+}
+
+fn pot_input(prevout: &str) -> String {
+    format!(
+        r#"{{"txid":"prev","vout":0,"prevout":{prevout},"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}}"#
+    )
+}
+
+fn pot_output(kind: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"POTOUTHEX","scriptpubkey_asm":"POTOUTASM","scriptpubkey_type":"{kind}","value":1}}"#
+    )
+}
+
+fn previous_output_type_lines(painted: &str) -> Vec<&str> {
+    painted
+        .lines()
+        .filter(|line| line.starts_with(PREVIOUS_OUTPUT_TYPE))
+        .collect()
+}
+
+fn assert_previous_output_lines(painted: &str, expected: &[&str]) {
+    assert_eq!(previous_output_type_lines(painted), expected, "{painted}");
+    assert_eq!(
+        painted.matches(PREVIOUS_OUTPUT_TYPE).count(),
+        expected.len(),
+        "the label appeared outside its own line: {painted}"
+    );
+}
+
+fn assert_previous_output_omitted(painted: &str) {
+    assert_previous_output_lines(painted, &[]);
+    assert_previous_output_stays_plaintext(painted);
+}
+
+fn assert_previous_output_stays_plaintext(painted: &str) {
+    assert!(
+        !painted.contains("&amp;"),
+        "the type was HTML-escaped: {painted}"
+    );
+    assert!(
+        !painted.contains("&lt;"),
+        "the type was HTML-escaped: {painted}"
+    );
+    assert!(
+        !painted.contains("<span"),
+        "an HTML span was painted for this label: {painted}"
+    );
+    assert!(
+        !painted.contains("previous-output-type"),
+        "an HTML class was painted for this label: {painted}"
+    );
+}
+
+fn assert_output_type_stays_lowercase(painted: &str, kind: &str) {
+    assert!(
+        painted.contains(&format!("output script type {kind}")),
+        "the lowercase output type was dropped: {painted}"
+    );
+    let upper = kind.to_uppercase();
+    assert_ne!(upper, kind, "{kind}");
+    // The script-type line stays as the indexer spelled it. The separate
+    // output Type line is the one uppercase form.
+    let type_line = format!("Type {upper}");
+    assert!(
+        painted
+            .lines()
+            .all(|line| line == type_line || !line.contains(&upper)),
+        "an output type was painted in uppercase: {painted}"
+    );
+}
+
+fn assert_pot_sentinels_off(painted: &str) {
+    for needle in ["POTPUBHEX", "POTASM", "POTOUTHEX", "POTOUTASM"] {
+        assert!(!painted.contains(needle), "{needle} leaked: {painted}");
+    }
+}
+
+/// `prevout.scriptpubkey_type` on the transaction screen from `GET /tx/:txid`.
+///
+/// A nonempty type paints one plaintext line: `Previous output type` and the
+/// uppercased type. Two prevouts paint that line twice, in input order. An
+/// empty type, JSON null `prevout`, a missing `prevout` key, and a missing or
+/// null `scriptpubkey_type` omit the label. `&` and `<` stay characters.
+/// An output type stays lowercase. This is not that output row.
+#[test]
+fn transaction_screen_paints_previous_output_type() {
+    let output = pot_output("p2pkh");
+    let one = paint_tx_body(
+        "potone",
+        &tx_with_parties("potone", &pot_input(&pot_prevout("v0_p2wpkh")), &output),
+    );
+    assert!(
+        one.contains("tx txid potone"),
+        "the parsed transaction was hidden: {one}"
+    );
+    assert!(
+        one.contains(INPUTS_OUTPUTS_HEADING),
+        "Inputs & Outputs was dropped: {one}"
+    );
+    assert_previous_output_lines(&one, &["Previous output type V0_P2WPKH"]);
+    assert!(
+        one.contains("input script type v0_p2wpkh"),
+        "the lowercase input script type line was dropped: {one}"
+    );
+    assert_output_type_stays_lowercase(&one, "p2pkh");
+    assert_previous_output_stays_plaintext(&one);
+    assert_pot_sentinels_off(&one);
+
+    let two_vin = format!(
+        "{},{}",
+        pot_input(&pot_prevout("v0_p2wpkh")),
+        pot_input(&pot_prevout("p2sh"))
+    );
+    let two = paint_tx_body("pottwo", &tx_with_parties("pottwo", &two_vin, &output));
+    assert_previous_output_lines(
+        &two,
+        &[
+            "Previous output type V0_P2WPKH",
+            "Previous output type P2SH",
+        ],
+    );
+    assert_output_type_stays_lowercase(&two, "p2pkh");
+    assert_previous_output_stays_plaintext(&two);
+    assert_pot_sentinels_off(&two);
+
+    let empty = paint_tx_body(
+        "potempty",
+        &tx_with_parties("potempty", &pot_input(&pot_prevout("")), &output),
+    );
+    assert!(
+        empty.contains("tx txid potempty"),
+        "an empty type hid the transaction: {empty}"
+    );
+    assert_previous_output_omitted(&empty);
+    assert_output_type_stays_lowercase(&empty, "p2pkh");
+    assert_pot_sentinels_off(&empty);
+
+    let null_prevout = paint_tx_body(
+        "potnullprev",
+        &tx_with_parties(
+            "potnullprev",
+            r#"{"txid":"prev","vout":0,"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}"#,
+            &output,
+        ),
+    );
+    assert!(
+        null_prevout.contains("tx txid potnullprev"),
+        "JSON null prevout hid the transaction: {null_prevout}"
+    );
+    assert_previous_output_omitted(&null_prevout);
+    assert_output_type_stays_lowercase(&null_prevout, "p2pkh");
+
+    let missing_prevout = paint_tx_body(
+        "potmissprev",
+        &tx_with_parties(
+            "potmissprev",
+            r#"{"txid":"prev","vout":0,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}"#,
+            &output,
+        ),
+    );
+    assert!(
+        missing_prevout.contains("tx txid potmissprev"),
+        "a missing prevout key hid the transaction: {missing_prevout}"
+    );
+    assert_previous_output_omitted(&missing_prevout);
+    assert_output_type_stays_lowercase(&missing_prevout, "p2pkh");
+
+    let null_type = paint_tx_body(
+        "potnulltype",
+        &tx_with_parties(
+            "potnulltype",
+            &pot_input(
+                r#"{"scriptpubkey":"POTPUBHEX","scriptpubkey_asm":"POTASM","scriptpubkey_type":null,"value":5}"#,
+            ),
+            &output,
+        ),
+    );
+    assert!(
+        null_type.contains("potnulltype"),
+        "JSON null scriptpubkey_type hid the transaction screen: {null_type}"
+    );
+    assert_previous_output_omitted(&null_type);
+
+    let missing_type = paint_tx_body(
+        "potmisstype",
+        &tx_with_parties(
+            "potmisstype",
+            &pot_input(r#"{"scriptpubkey":"POTPUBHEX","scriptpubkey_asm":"POTASM","value":5}"#),
+            &output,
+        ),
+    );
+    assert!(
+        missing_type.contains("potmisstype"),
+        "a missing scriptpubkey_type hid the transaction screen: {missing_type}"
+    );
+    assert_previous_output_omitted(&missing_type);
+
+    let marked = paint_tx_body(
+        "potmark",
+        &tx_with_parties("potmark", &pot_input(&pot_prevout("a&b<c")), &output),
+    );
+    assert!(
+        marked
+            .lines()
+            .any(|line| line == "Previous output type A&B<C"),
+        "markup characters were not painted as plaintext: {marked}"
+    );
+    assert_previous_output_lines(&marked, &["Previous output type A&B<C"]);
+    assert!(
+        marked.contains("input script type a&b<c"),
+        "the lowercase input script type line was dropped: {marked}"
+    );
+    assert_output_type_stays_lowercase(&marked, "p2pkh");
+    assert_previous_output_stays_plaintext(&marked);
+    assert_pot_sentinels_off(&marked);
+}
+
+fn otype_output(kind: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"OTYPUBHEX","scriptpubkey_asm":"OTYASM","scriptpubkey_type":"{kind}","value":1}}"#
+    )
+}
+
+fn otype_prevout(kind: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"OTYPREVPUB","scriptpubkey_asm":"OTYPREVASM","scriptpubkey_type":"{kind}","value":5}}"#
+    )
+}
+
+fn otype_input(prevout: &str) -> String {
+    format!(
+        r#"{{"txid":"prev","vout":0,"prevout":{prevout},"scriptsig":"OTYSIG","scriptsig_asm":"OTYSIGASM","witness":["OTYWIT"],"is_coinbase":false,"sequence":1}}"#
+    )
+}
+
+fn otype_input_null() -> &'static str {
+    r#"{"txid":"prev","vout":0,"prevout":null,"scriptsig":"OTYSIG","scriptsig_asm":"OTYSIGASM","witness":["OTYWIT"],"is_coinbase":false,"sequence":1}"#
+}
+
+fn output_type_lines(painted: &str) -> Vec<&str> {
+    painted
+        .lines()
+        .filter(|line| line.starts_with("Type "))
+        .collect()
+}
+
+fn assert_output_type_lines(painted: &str, expected: &[&str]) {
+    assert_eq!(output_type_lines(painted), expected, "{painted}");
+    assert_eq!(
+        painted.matches("Type ").count(),
+        expected.len(),
+        "Type appeared outside its own line: {painted}"
+    );
+}
+
+fn assert_output_type_plaintext(painted: &str) {
+    assert!(
+        !painted.contains("&amp;"),
+        "the type was HTML-escaped: {painted}"
+    );
+    assert!(
+        !painted.contains("&lt;"),
+        "the type was HTML-escaped: {painted}"
+    );
+    assert!(
+        !painted.contains("<span"),
+        "an HTML span was painted: {painted}"
+    );
+    assert!(
+        !painted.contains("output-type"),
+        "an HTML class was painted: {painted}"
+    );
+    assert!(
+        !painted.contains("Type:"),
+        "the label used a colon: {painted}"
+    );
+}
+
+fn assert_otype_sentinels_off(painted: &str) {
+    for needle in [
+        "OTYPUBHEX",
+        "OTYASM",
+        "OTYSIG",
+        "OTYSIGASM",
+        "OTYPREVPUB",
+        "OTYPREVASM",
+        "OTYWIT",
+    ] {
+        assert!(!painted.contains(needle), "{needle} leaked: {painted}");
+    }
+}
+
+/// `vout.scriptpubkey_type` on the transaction screen from `GET /tx/:txid`.
+///
+/// A nonempty type paints one plaintext line: `Type` and the uppercased type.
+/// Two outputs paint that line twice. An empty string omits it for that output.
+/// A missing key, JSON null, an empty body, `not-json`, and `[]` omit it.
+/// `&` and `<` stay characters. This is not Previous output type.
+#[test]
+fn transaction_screen_paints_output_type() {
+    let marked = paint_tx_body(
+        "otypemark",
+        &tx_with_parties("otypemark", otype_input_null(), &otype_output("a&b<c")),
+    );
+    assert!(
+        marked.contains("tx txid otypemark"),
+        "the parsed transaction was hidden: {marked}"
+    );
+    assert!(
+        marked.contains(INPUTS_OUTPUTS_HEADING),
+        "Inputs & Outputs was dropped: {marked}"
+    );
+    assert_output_type_lines(&marked, &["Type A&B<C"]);
+    assert!(
+        marked.lines().any(|line| line == "Type A&B<C"),
+        "markup characters were not painted as plaintext: {marked}"
+    );
+    assert!(
+        marked.contains("output script type a&b<c"),
+        "the lowercase output script type was dropped: {marked}"
+    );
+    let address_at = marked.find("output address").expect("output row");
+    let type_at = marked.find("\nType A&B<C").expect("type line");
+    assert!(
+        type_at > address_at,
+        "Type was not in the output row: {marked}"
+    );
+    assert_output_type_plaintext(&marked);
+    assert_otype_sentinels_off(&marked);
+    assert!(
+        !marked.contains("Previous output type"),
+        "a null prevout painted Previous output type: {marked}"
+    );
+
+    let two_vout = format!("{},{}", otype_output("v0_p2wpkh"), otype_output("p2sh"));
+    let two = paint_tx_body(
+        "otypetwo",
+        &tx_with_parties("otypetwo", otype_input_null(), &two_vout),
+    );
+    assert_output_type_lines(&two, &["Type V0_P2WPKH", "Type P2SH"]);
+    assert!(
+        two.contains("output script type v0_p2wpkh"),
+        "the first lowercase output script type was dropped: {two}"
+    );
+    assert!(
+        two.contains("output script type p2sh"),
+        "the second lowercase output script type was dropped: {two}"
+    );
+    assert_output_type_plaintext(&two);
+    assert_otype_sentinels_off(&two);
+
+    let mixed_vout = format!("{},{}", otype_output(""), otype_output("p2pkh"));
+    let mixed = paint_tx_body(
+        "otypemix",
+        &tx_with_parties("otypemix", otype_input_null(), &mixed_vout),
+    );
+    assert!(
+        mixed.contains("tx txid otypemix"),
+        "an empty type hid the transaction: {mixed}"
+    );
+    assert!(
+        mixed.contains(INPUTS_OUTPUTS_HEADING),
+        "Inputs & Outputs was dropped: {mixed}"
+    );
+    assert_output_type_lines(&mixed, &["Type P2PKH"]);
+    assert!(
+        mixed.contains("output script type p2pkh"),
+        "the typed output lost its lowercase script type: {mixed}"
+    );
+    assert_eq!(
+        mixed
+            .lines()
+            .filter(|line| line.contains("output script type"))
+            .count(),
+        1,
+        "the empty type painted a script type line: {mixed}"
+    );
+    assert_output_type_plaintext(&mixed);
+    assert_otype_sentinels_off(&mixed);
+
+    let only_empty = paint_tx_body(
+        "otypeempty",
+        &tx_with_parties("otypeempty", otype_input_null(), &otype_output("")),
+    );
+    assert!(
+        only_empty.contains("tx txid otypeempty"),
+        "an empty type hid the transaction: {only_empty}"
+    );
+    assert!(
+        only_empty.contains(INPUTS_OUTPUTS_HEADING),
+        "Inputs & Outputs was dropped: {only_empty}"
+    );
+    assert_output_type_lines(&only_empty, &[]);
+    assert!(
+        !only_empty.contains("output script type"),
+        "an empty type painted a script type line: {only_empty}"
+    );
+    assert_output_type_plaintext(&only_empty);
+
+    let op_return = paint_tx_body(
+        "otypeop",
+        &tx_with_parties("otypeop", otype_input_null(), &otype_output("op_return")),
+    );
+    assert!(
+        op_return.contains("tx txid otypeop"),
+        "op_return hid the transaction: {op_return}"
+    );
+    assert_output_type_lines(&op_return, &["Type OP_RETURN"]);
+    assert!(
+        op_return.contains("output script type op_return"),
+        "the lowercase op_return script type was dropped: {op_return}"
+    );
+    assert_eq!(
+        op_return
+            .lines()
+            .filter(|line| *line == "OP_RETURN")
+            .count(),
+        1,
+        "the op_return address cell did not paint OP_RETURN once: {op_return}"
+    );
+    assert_output_type_plaintext(&op_return);
+    assert_otype_sentinels_off(&op_return);
+
+    let beside = paint_tx_body(
+        "otypeboth",
+        &tx_with_parties(
+            "otypeboth",
+            &otype_input(&otype_prevout("v0_p2wpkh")),
+            &otype_output("p2pkh"),
+        ),
+    );
+    assert!(
+        beside.contains("tx txid otypeboth"),
+        "the parsed transaction was hidden: {beside}"
+    );
+    assert_output_type_lines(&beside, &["Type P2PKH"]);
+    assert!(
+        beside
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WPKH"),
+        "Previous output type was dropped or reworded: {beside}"
+    );
+    assert!(
+        beside.contains("output script type p2pkh"),
+        "the lowercase output script type was dropped: {beside}"
+    );
+    assert!(
+        beside.contains("input script type v0_p2wpkh"),
+        "the lowercase input script type was dropped: {beside}"
+    );
+    assert_output_type_plaintext(&beside);
+    assert_otype_sentinels_off(&beside);
+
+    let missing = paint_tx_body(
+        "otypemiss",
+        &tx_with_parties(
+            "otypemiss",
+            otype_input_null(),
+            r#"{"scriptpubkey":"OTYPUBHEX","scriptpubkey_asm":"OTYASM","value":1}"#,
+        ),
+    );
+    assert!(
+        missing.contains("otypemiss"),
+        "a missing scriptpubkey_type hid the screen: {missing}"
+    );
+    assert_output_type_lines(&missing, &[]);
+    assert_output_type_plaintext(&missing);
+
+    let null_type = paint_tx_body(
+        "otypenull",
+        &tx_with_parties(
+            "otypenull",
+            otype_input_null(),
+            r#"{"scriptpubkey":"OTYPUBHEX","scriptpubkey_asm":"OTYASM","scriptpubkey_type":null,"value":1}"#,
+        ),
+    );
+    assert!(
+        null_type.contains("otypenull"),
+        "JSON null scriptpubkey_type hid the screen: {null_type}"
+    );
+    assert_output_type_lines(&null_type, &[]);
+    assert_output_type_plaintext(&null_type);
+
+    for (txid, body) in [
+        ("otypeblank", ""),
+        ("otypebad", "not-json"),
+        ("otypearr", "[]"),
+    ] {
+        let painted = paint_tx_body(txid, body);
+        assert!(
+            painted.contains(txid),
+            "the unparsed body hid the screen: {painted}"
+        );
+        assert_output_type_lines(&painted, &[]);
+        assert_output_type_plaintext(&painted);
+        assert!(
+            !painted.contains(&format!("tx txid {txid}")),
+            "an unparsed body painted a transaction row: {painted}"
+        );
+    }
+}
+
 const PACKAGE_TXID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn paint_package(error_field: &str) -> String {
@@ -2899,10 +3867,27 @@ fn paint_tx_adjusted(txid: &str, weight_field: &str, sigops_field: &str) -> Stri
     painted(&host)
 }
 
+/// Script asm `OP_RETURN` stays off the screen. `Type OP_RETURN` is the
+/// uppercased output `scriptpubkey_type`, not that asm. `Previous output type
+/// OP_RETURN` is the same uppercase spelling on an input. The address cell
+/// paints one exact line `OP_RETURN` for an `op_return` output. Any other
+/// line that contains `OP_RETURN` is asm or script text and stays off.
+fn assert_op_return_asm_stays_off(painted: &str) {
+    assert!(
+        painted.lines().all(|line| {
+            line == "Type OP_RETURN"
+                || line == "Previous output type OP_RETURN"
+                || line == "OP_RETURN"
+                || !line.contains("OP_RETURN")
+        }),
+        "OP_RETURN leaked outside the type lines and the address cell: {painted}"
+    );
+}
+
 fn assert_script_hex_stays_off(painted: &str) {
     assert!(!painted.contains("0014aa"), "{painted}");
     assert!(!painted.contains("deadbeef"), "{painted}");
-    assert!(!painted.contains("OP_RETURN"), "{painted}");
+    assert_op_return_asm_stays_off(painted);
     assert!(!painted.contains("OP_CHECKSIG"), "{painted}");
     assert!(!painted.contains("scriptpubkey"), "{painted}");
 }
@@ -3205,6 +4190,176 @@ fn transaction_screen_paints_fee() {
     assert_script_hex_stays_off(&million);
 }
 
+fn paint_tx_fee_rate(txid: &str, fee: u64, weight_field: &str) -> String {
+    let weight_line = if weight_field.is_empty() {
+        String::new()
+    } else {
+        format!("{weight_field},")
+    };
+    let tx = format!(
+        r#"{{
+        "txid":"{txid}",
+        "version":1,
+        "locktime":0,
+        "vin":[{{
+            "txid":"prev",
+            "vout":0,
+            "prevout":null,
+            "scriptsig":"deadbeef",
+            "scriptsig_asm":"OP_CHECKSIG",
+            "witness":["abcdwitnesshex"],
+            "is_coinbase":false,
+            "sequence":1
+        }}],
+        "vout":[{{
+            "scriptpubkey":"0014aa",
+            "scriptpubkey_asm":"OP_RETURN",
+            "scriptpubkey_type":"op_return",
+            "value":9
+        }}],
+        "size":10,
+        {weight_line}
+        "sigops":1,
+        "fee":{fee},
+        "status":{{"confirmed":false}}
+    }}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), tx)]),
+    );
+    host.open_transaction(txid)
+        .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a transaction open used a query or a fragment: {paths:?}"
+    );
+    painted(&host)
+}
+
+/// Transaction fee rate from `GET /tx/:txid`.
+///
+/// Angular paints `Fee rate`, then `fee / (weight / 4)` through the default
+/// `feeRounding` pipe, then `sat/vB`. A rate under 10 keeps two fraction
+/// digits. A rate from 10 up to but not including 100 keeps one. A rate of
+/// 100 or more is an integer with thousands separators. Explicit fee 0
+/// paints. A missing weight, JSON null, or zero weight omits the line.
+/// The raw header `fee_rate N` stays and uses integer virtual size. This
+/// line is not that header, not Effective fee rate, and not Maximum fee
+/// rate. Script hex, asm, scriptsig, and witness stay off the screen.
+#[test]
+fn transaction_screen_paints_fee_rate() {
+    let half = paint_tx_fee_rate("ratehalf", 50, r#""weight":400"#);
+    assert!(
+        half.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+        "fee 50 and weight 400 did not paint Fee rate 0.50 sat/vB: {half}"
+    );
+    assert!(
+        half.contains("fee_rate 0.5"),
+        "fee 50 and weight 400 dropped the raw fee_rate header: {half}"
+    );
+    assert!(
+        half.lines().any(|line| line == "Fee 50 sats"),
+        "fee 50 dropped Fee 50 sats: {half}"
+    );
+    assert_script_hex_stays_off(&half);
+    assert!(!half.contains("abcdwitnesshex"), "{half}");
+
+    let zero = paint_tx_fee_rate("ratezero", 0, r#""weight":400"#);
+    assert!(
+        zero.lines().any(|line| line == "Fee rate 0.00 sat/vB"),
+        "fee 0 did not paint Fee rate 0.00 sat/vB: {zero}"
+    );
+    assert!(
+        zero.contains("fee_rate 0"),
+        "fee 0 dropped the raw fee_rate header: {zero}"
+    );
+    assert_script_hex_stays_off(&zero);
+
+    let thirds = paint_tx_fee_rate("ratethird", 1, r#""weight":7"#);
+    assert!(
+        thirds.lines().any(|line| line == "Fee rate 0.57 sat/vB"),
+        "fee 1 and weight 7 did not paint Fee rate 0.57 sat/vB: {thirds}"
+    );
+    assert!(
+        thirds.contains("fee_rate 1"),
+        "fee 1 and weight 7 dropped the integer fee_rate header: {thirds}"
+    );
+    assert!(
+        !thirds.lines().any(|line| line == "Fee rate 1 sat/vB"),
+        "fee 1 and weight 7 painted the integer rate: {thirds}"
+    );
+    assert_script_hex_stays_off(&thirds);
+
+    let fifteen = paint_tx_fee_rate("rate15", 15, r#""weight":4"#);
+    assert!(
+        fifteen.lines().any(|line| line == "Fee rate 15.0 sat/vB"),
+        "fee 15 and weight 4 did not paint Fee rate 15.0 sat/vB: {fifteen}"
+    );
+    assert_script_hex_stays_off(&fifteen);
+
+    let grouped = paint_tx_fee_rate("rate1500", 1500, r#""weight":4"#);
+    assert!(
+        grouped.lines().any(|line| line == "Fee rate 1,500 sat/vB"),
+        "fee 1500 and weight 4 did not paint Fee rate 1,500 sat/vB: {grouped}"
+    );
+    assert!(
+        !grouped.lines().any(|line| line == "Fee rate 1500 sat/vB"),
+        "fee 1500 painted an ungrouped Fee rate line: {grouped}"
+    );
+    assert!(
+        grouped.contains("fee_rate 1500"),
+        "fee 1500 dropped the raw fee_rate header: {grouped}"
+    );
+    assert_script_hex_stays_off(&grouped);
+
+    let absent = paint_tx_fee_rate("rateabs", 50, "");
+    assert!(
+        absent.contains("tx txid rateabs"),
+        "missing weight hid the transaction: {absent}"
+    );
+    assert!(
+        !absent.lines().any(|line| line.starts_with("Fee rate ")),
+        "missing weight painted Fee rate: {absent}"
+    );
+    assert_script_hex_stays_off(&absent);
+
+    let null = paint_tx_fee_rate("ratenull", 50, r#""weight":null"#);
+    assert!(
+        null.contains("tx txid ratenull"),
+        "null weight hid the transaction: {null}"
+    );
+    assert!(
+        !null.lines().any(|line| line.starts_with("Fee rate ")),
+        "null weight painted Fee rate: {null}"
+    );
+    assert_script_hex_stays_off(&null);
+
+    let zero_weight = paint_tx_fee_rate("ratew0", 50, r#""weight":0"#);
+    assert!(
+        zero_weight.contains("tx txid ratew0"),
+        "weight 0 hid the transaction: {zero_weight}"
+    );
+    assert!(
+        !zero_weight
+            .lines()
+            .any(|line| line.starts_with("Fee rate ")),
+        "weight 0 painted Fee rate: {zero_weight}"
+    );
+    assert!(
+        !zero_weight.contains("fee_rate"),
+        "weight 0 painted a fee rate: {zero_weight}"
+    );
+    assert_script_hex_stays_off(&zero_weight);
+}
+
 /// Transaction sigops from `GET /tx/:txid`.
 ///
 /// Angular paints `Sigops` and the en-US `number` pipe. An integer gets
@@ -3493,6 +4648,1669 @@ fn transaction_screen_paints_locktime() {
     );
     assert!(!raw.contains("abcdwitnesshex"), "{raw}");
     assert_script_hex_stays_off(&raw);
+}
+
+/// Address word `Issuance` on one input from `GET /tx/:txid`.
+///
+/// The line is exact and appears only when that input has an issuance object
+/// and no prevout. JSON null and an omitted prevout key are both no prevout.
+/// An ordinary prevout does not gain the line. A missing issuance key and
+/// JSON null issuance do not gain it. An issuance object that also has a
+/// prevout keeps the field lines and does not gain this word. Existing input
+/// lines stay. No amount is invented. The path has no query and no fragment.
+#[test]
+fn transaction_screen_paints_issuance_label() {
+    const LABEL: &str = "Issuance";
+    const ASSET: &str = "ce091c998b83c78bb71a632313ba3760f1763d9cfcffae02258ffa9865a37bd2";
+    const ENTROPY: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    fn issuance_object() -> String {
+        format!(r#"{{"asset_id":"{ASSET}","is_reissuance":false,"asset_entropy":"{ENTROPY}"}}"#)
+    }
+
+    fn vin(prevout_field: &str, issuance_field: &str) -> String {
+        format!(
+            r#"{{"txid":"prev","vout":0,{prevout_field}{issuance_field}"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, vins: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vins}],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_RETURN","scriptpubkey_type":"op_return","value":9}}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vins: &str) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, vins))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn label_count(text: &str) -> usize {
+        text.lines().filter(|line| *line == LABEL).count()
+    }
+
+    fn assert_screen_keeps_existing_rows(text: &str, txid: &str) {
+        let lines: Vec<&str> = text.lines().collect();
+        let marker = "block_time 1600000000 ";
+        assert!(
+            lines.windows(2).any(|pair| {
+                pair[0] == "Timestamp"
+                    && pair[1].contains(&format!("tx txid {txid} "))
+                    && pair[1].contains(marker)
+                    && !pair[1].contains("Timestamp")
+                    && !pair[1].contains(',')
+            }),
+            "Timestamp was not immediately before the raw block_time line: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+            "Fee rate was dropped: {text}"
+        );
+        assert!(
+            text.contains("fee_rate 0.5"),
+            "the raw fee_rate header was dropped: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Confirmed"),
+            "Confirmed was dropped or the letter case changed: {text}"
+        );
+        assert!(
+            text.contains("confirmed true"),
+            "the raw confirmed header changed letter case: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Inputs & Outputs"),
+            "Inputs & Outputs was dropped: {text}"
+        );
+        assert!(!text.contains("1,600,000,000"), "{text}");
+        assert!(!text.contains("abcdwitnesshex"), "{text}");
+        assert_script_hex_stays_off(text);
+        assert_paint_is_not_html(text);
+    }
+
+    fn assert_no_amount(text: &str) {
+        assert!(
+            !text.lines().any(|line| {
+                line.starts_with("issuance asset amount")
+                    || line.starts_with("issuance token amount")
+                    || line.contains("Confidential")
+            }),
+            "an amount was invented: {text}"
+        );
+    }
+
+    let issued_vin = vin(
+        r#""prevout":null,"#,
+        &format!(r#""issuance":{},"#, issuance_object()),
+    );
+    let ordinary_vin = vin(
+        r#""prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_RETURN","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qordinary","value":5},"#,
+        "",
+    );
+    let issued = paint("issuelabel", &format!("{issued_vin},{ordinary_vin}"));
+    assert_eq!(
+        label_count(&issued),
+        1,
+        "{LABEL} was not one exact line on the issuance input with no prevout: {issued}"
+    );
+    let rows: Vec<&str> = issued.lines().collect();
+    let outpoint = rows
+        .iter()
+        .position(|line| *line == "input outpoint prev:0");
+    let label_at = rows.iter().position(|line| *line == LABEL);
+    let asset_line = format!("issuance asset {ASSET}");
+    let asset_at = rows.iter().position(|line| *line == asset_line);
+    assert!(
+        outpoint.is_some() && label_at.is_some() && asset_at.is_some(),
+        "the outpoint, {LABEL}, or the asset line was missing: {issued}"
+    );
+    assert!(
+        outpoint.unwrap() < label_at.unwrap() && label_at.unwrap() < asset_at.unwrap(),
+        "{LABEL} was not on the issuance input before its field lines: {issued}"
+    );
+    assert!(
+        issued
+            .lines()
+            .any(|line| line == "issuance reissuance false"),
+        "the reissuance line was dropped: {issued}"
+    );
+    assert!(
+        issued
+            .lines()
+            .any(|line| line == format!("issuance entropy {ENTROPY}")),
+        "the entropy line was dropped: {issued}"
+    );
+    assert!(
+        issued.lines().any(|line| line == "sequence 1"),
+        "sequence was dropped: {issued}"
+    );
+    assert!(
+        issued
+            .lines()
+            .any(|line| line == "input address bc1qordinary value 5"),
+        "the ordinary input address was dropped: {issued}"
+    );
+    assert!(
+        issued
+            .lines()
+            .any(|line| line == "input script type v0_p2wpkh"),
+        "the ordinary input script type was dropped: {issued}"
+    );
+    assert!(
+        issued
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WPKH"),
+        "Previous output type was dropped: {issued}"
+    );
+    assert!(
+        !issued.lines().any(|line| line == "UNKNOWN"),
+        "the issuance input painted UNKNOWN: {issued}"
+    );
+    assert_no_amount(&issued);
+    assert_screen_keeps_existing_rows(&issued, "issuelabel");
+
+    let omitted = paint(
+        "issueomit",
+        &vin("", &format!(r#""issuance":{},"#, issuance_object())),
+    );
+    assert_eq!(
+        label_count(&omitted),
+        1,
+        "an omitted prevout key did not paint {LABEL} once: {omitted}"
+    );
+    assert!(
+        omitted.contains(&format!("issuance asset {ASSET}")),
+        "an omitted prevout key dropped the asset line: {omitted}"
+    );
+    assert!(
+        omitted.lines().any(|line| line == "input outpoint prev:0"),
+        "an omitted prevout key dropped the outpoint: {omitted}"
+    );
+    assert_no_amount(&omitted);
+    assert_screen_keeps_existing_rows(&omitted, "issueomit");
+
+    let missing = paint("issuemiss", &vin(r#""prevout":null,"#, ""));
+    assert_eq!(
+        label_count(&missing),
+        0,
+        "a missing issuance key painted {LABEL}: {missing}"
+    );
+    assert_eq!(
+        missing.lines().filter(|line| *line == "UNKNOWN").count(),
+        1,
+        "a missing issuance key did not keep UNKNOWN: {missing}"
+    );
+    assert!(
+        missing.lines().any(|line| line == "input outpoint prev:0"),
+        "a missing issuance key dropped the outpoint: {missing}"
+    );
+    assert_screen_keeps_existing_rows(&missing, "issuemiss");
+
+    let null_issuance = paint(
+        "issuenull",
+        &vin(r#""prevout":null,"#, r#""issuance":null,"#),
+    );
+    assert_eq!(
+        label_count(&null_issuance),
+        0,
+        "JSON null issuance painted {LABEL}: {null_issuance}"
+    );
+    assert_eq!(
+        null_issuance
+            .lines()
+            .filter(|line| *line == "UNKNOWN")
+            .count(),
+        1,
+        "JSON null issuance did not keep UNKNOWN: {null_issuance}"
+    );
+    assert_screen_keeps_existing_rows(&null_issuance, "issuenull");
+
+    let with_prevout = paint(
+        "issueprev",
+        &vin(
+            r#""prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_RETURN","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qwithprev","value":8},"#,
+            &format!(r#""issuance":{},"#, issuance_object()),
+        ),
+    );
+    assert_eq!(
+        label_count(&with_prevout),
+        0,
+        "an issuance input that has a prevout painted {LABEL}: {with_prevout}"
+    );
+    assert!(
+        with_prevout.contains(&format!("issuance asset {ASSET}")),
+        "a prevout dropped the issuance field lines: {with_prevout}"
+    );
+    assert!(
+        with_prevout
+            .lines()
+            .any(|line| line == "input address bc1qwithprev value 8"),
+        "the prevout address was dropped: {with_prevout}"
+    );
+    assert!(
+        !with_prevout.lines().any(|line| line == "UNKNOWN"),
+        "a prevout painted UNKNOWN: {with_prevout}"
+    );
+    assert_screen_keeps_existing_rows(&with_prevout, "issueprev");
+}
+
+/// Output address cell from `GET /tx/:txid` when `scriptpubkey_type` is `fee`.
+///
+/// The scriptpubkeyType pipe returns the exact line `Transaction fee` for the
+/// lowercase type `fee`. The output cell calls that pipe only when the output
+/// has no address, is not a peg-out, and is not OP_RETURN. An omitted address,
+/// an empty address, and JSON null `pegout` are that case. An address, a
+/// peg-out object, an OP_RETURN output, and an ordinary output do not gain the
+/// line. An input whose prevout type is `fee` stays `Previous output type FEE`
+/// and does not gain this line. `output script type fee` and `Type FEE` stay.
+/// The details Fee row and the Fee rate row stay one each. The path has no
+/// query and no fragment.
+#[test]
+fn transaction_screen_paints_transaction_fee_label() {
+    const LABEL: &str = "Transaction fee";
+
+    fn vin(prevout_field: &str) -> String {
+        format!(
+            r#"{{"txid":"prev","vout":0,{prevout_field}"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin_json}],"vout":[{vout_json}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, vin_json, vout_json))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn label_count(text: &str) -> usize {
+        text.lines().filter(|line| *line == LABEL).count()
+    }
+
+    fn assert_one_fee_row_and_one_fee_rate(text: &str) {
+        assert_eq!(
+            text.lines().filter(|line| *line == "Fee 50 sats").count(),
+            1,
+            "the details Fee row was dropped or repeated: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| *line == "Fee rate 0.50 sat/vB")
+                .count(),
+            1,
+            "the Fee rate row was dropped or repeated: {text}"
+        );
+        assert!(
+            text.contains("fee_rate 0.5"),
+            "the raw fee_rate header was dropped: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+                .count(),
+            1,
+            "a second Fee row was painted: {text}"
+        );
+    }
+
+    fn assert_screen_keeps_timestamp(text: &str, txid: &str) {
+        let lines: Vec<&str> = text.lines().collect();
+        let marker = "block_time 1600000000 ";
+        assert!(
+            lines.windows(2).any(|pair| {
+                pair[0] == "Timestamp"
+                    && pair[1].contains(&format!("tx txid {txid} "))
+                    && pair[1].contains(marker)
+                    && !pair[1].contains("Timestamp")
+                    && !pair[1].contains(',')
+            }),
+            "Timestamp was not immediately before the raw block_time line: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Inputs & Outputs"),
+            "Inputs & Outputs was dropped: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Confirmed"),
+            "Confirmed was dropped: {text}"
+        );
+        assert!(!text.contains("1,600,000,000"), "{text}");
+        assert!(
+            !text.contains("2020") && !text.contains("ago"),
+            "the block time was formatted: {text}"
+        );
+        assert!(!text.contains("abcdwitnesshex"), "{text}");
+        assert!(
+            !text.lines().any(|line| line.contains("Confidential")),
+            "a value was unblinded or invented as Confidential: {text}"
+        );
+        assert_script_hex_stays_off(text);
+        assert_paint_is_not_html(text);
+    }
+
+    let ordinary_vin = vin(
+        r#""prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qin","value":8},"#,
+    );
+    let fee_vout =
+        r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":0}"#;
+    let ordinary_vout = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qordinary","value":9}"#;
+    let fee_out = paint(
+        "feelabel",
+        &ordinary_vin,
+        &format!("{fee_vout},{ordinary_vout}"),
+    );
+    assert_eq!(
+        label_count(&fee_out),
+        1,
+        "{LABEL} was not one exact line on the fee output with no address: {fee_out}"
+    );
+    let rows: Vec<&str> = fee_out.lines().collect();
+    let fee_address = rows
+        .iter()
+        .position(|line| *line == "output address  value 0");
+    let script_type = rows
+        .iter()
+        .position(|line| *line == "output script type fee");
+    let type_fee = rows.iter().position(|line| *line == "Type FEE");
+    let label_at = rows.iter().position(|line| *line == LABEL);
+    let ordinary_at = rows
+        .iter()
+        .position(|line| *line == "output address bc1qordinary value 9");
+    assert!(
+        fee_address.is_some()
+            && script_type.is_some()
+            && type_fee.is_some()
+            && label_at.is_some()
+            && ordinary_at.is_some(),
+        "the fee output lines or the ordinary output were dropped: {fee_out}"
+    );
+    assert!(
+        fee_address.unwrap() < script_type.unwrap()
+            && script_type.unwrap() < type_fee.unwrap()
+            && type_fee.unwrap() < label_at.unwrap()
+            && label_at.unwrap() < ordinary_at.unwrap(),
+        "{LABEL} was not on the fee output after Type FEE and before the ordinary output: {fee_out}"
+    );
+    assert!(
+        fee_out
+            .lines()
+            .any(|line| line == "output script type v0_p2wpkh"),
+        "the ordinary output script type was dropped: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "Type V0_P2WPKH"),
+        "the ordinary output type was dropped: {fee_out}"
+    );
+    assert_eq!(
+        fee_out
+            .lines()
+            .filter(|line| *line == "output script type fee")
+            .count(),
+        1,
+        "output script type fee was dropped or repeated: {fee_out}"
+    );
+    assert_eq!(
+        fee_out.lines().filter(|line| *line == "Type FEE").count(),
+        1,
+        "Type FEE was dropped or repeated: {fee_out}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&fee_out);
+    assert_screen_keeps_timestamp(&fee_out, "feelabel");
+
+    let empty_address = r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","scriptpubkey_address":"","value":2}"#;
+    let empty = paint("feeempty", &ordinary_vin, empty_address);
+    assert_eq!(
+        label_count(&empty),
+        1,
+        "an empty address did not paint {LABEL} once: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "output address  value 2"),
+        "the empty address output row was dropped: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "output script type fee"),
+        "output script type fee was dropped for an empty address: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped for an empty address: {empty}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&empty);
+    assert_screen_keeps_timestamp(&empty, "feeempty");
+
+    let null_peg = r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":0,"pegout":null}"#;
+    let null_pegout = paint("feenullpeg", &ordinary_vin, null_peg);
+    assert_eq!(
+        label_count(&null_pegout),
+        1,
+        "JSON null pegout did not paint {LABEL} once: {null_pegout}"
+    );
+    assert!(
+        !null_pegout.lines().any(|line| line == "Liquid Peg Out"),
+        "JSON null pegout painted Liquid Peg Out: {null_pegout}"
+    );
+    assert!(
+        null_pegout
+            .lines()
+            .any(|line| line == "output script type fee"),
+        "output script type fee was dropped for null pegout: {null_pegout}"
+    );
+    assert!(
+        null_pegout.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped for null pegout: {null_pegout}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&null_pegout);
+
+    let with_address = r#"{"scriptpubkey":"0014bb","scriptpubkey_asm":"OP_0","scriptpubkey_type":"fee","scriptpubkey_address":"bc1qfeeaddr","value":3}"#;
+    let addressed = paint("feeaddr", &ordinary_vin, with_address);
+    assert_eq!(
+        label_count(&addressed),
+        0,
+        "a fee output with an address painted {LABEL}: {addressed}"
+    );
+    assert!(
+        addressed
+            .lines()
+            .any(|line| line == "output address bc1qfeeaddr value 3"),
+        "the addressed fee output was dropped: {addressed}"
+    );
+    assert!(
+        addressed
+            .lines()
+            .any(|line| line == "output script type fee"),
+        "output script type fee was dropped when the output has an address: {addressed}"
+    );
+    assert!(
+        addressed.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped when the output has an address: {addressed}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&addressed);
+    assert_screen_keeps_timestamp(&addressed, "feeaddr");
+
+    let pegout = r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":0,"pegout":{"genesis_hash":"aa","scriptpubkey":"bb","scriptpubkey_asm":"OP_TRUE"}}"#;
+    let pegged = paint("feepeg", &ordinary_vin, pegout);
+    assert_eq!(
+        label_count(&pegged),
+        0,
+        "a peg-out painted {LABEL}: {pegged}"
+    );
+    assert!(
+        pegged.lines().any(|line| line == "Liquid Peg Out"),
+        "Liquid Peg Out was dropped: {pegged}"
+    );
+    assert!(
+        pegged.lines().any(|line| line == "output script type fee"),
+        "output script type fee was dropped on a peg-out: {pegged}"
+    );
+    assert!(
+        pegged.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped on a peg-out: {pegged}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&pegged);
+    assert_screen_keeps_timestamp(&pegged, "feepeg");
+
+    let fee_prevout = vin(
+        r#""prevout":{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":5},"#,
+    );
+    let input_fee = paint("feein", &fee_prevout, ordinary_vout);
+    assert_eq!(
+        label_count(&input_fee),
+        0,
+        "an input whose prevout type is fee painted {LABEL}: {input_fee}"
+    );
+    assert!(
+        input_fee
+            .lines()
+            .any(|line| line == "input script type fee"),
+        "input script type fee was dropped: {input_fee}"
+    );
+    assert!(
+        input_fee
+            .lines()
+            .any(|line| line == "Previous output type FEE"),
+        "Previous output type FEE was dropped: {input_fee}"
+    );
+    assert!(
+        !input_fee.lines().any(|line| line == "Type FEE"),
+        "Type FEE was painted on the input path: {input_fee}"
+    );
+    assert!(
+        input_fee
+            .lines()
+            .any(|line| line == "output address bc1qordinary value 9"),
+        "the ordinary output was dropped beside a fee input: {input_fee}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&input_fee);
+    assert_screen_keeps_timestamp(&input_fee, "feein");
+
+    let op_return = r#"{"scriptpubkey":"6a","scriptpubkey_asm":"OP_RETURN","scriptpubkey_type":"op_return","value":0}"#;
+    let ordinary = paint("feeord", &ordinary_vin, op_return);
+    assert_eq!(
+        label_count(&ordinary),
+        0,
+        "an OP_RETURN output painted {LABEL}: {ordinary}"
+    );
+    assert!(
+        ordinary.lines().any(|line| line == "Type OP_RETURN"),
+        "Type OP_RETURN was dropped: {ordinary}"
+    );
+    assert!(
+        ordinary
+            .lines()
+            .any(|line| line == "output script type op_return"),
+        "output script type op_return was dropped: {ordinary}"
+    );
+    assert!(
+        !ordinary.lines().any(|line| line == "Type FEE"),
+        "an ordinary output painted Type FEE: {ordinary}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&ordinary);
+    assert_screen_keeps_timestamp(&ordinary, "feeord");
+}
+
+/// Output address cell from `GET /tx/:txid` when `scriptpubkey_type` is `p2pk`.
+///
+/// The scriptpubkeyType pipe returns the exact line `P2PK` for the lowercase
+/// type `p2pk`. The output address cell prints that word when the output has
+/// no address. That branch is earlier than peg-out and earlier than the pipe
+/// call, so a peg-out object does not remove the line. An omitted address, an
+/// empty address, and JSON null address are that case. An address does not
+/// gain the line. An input whose prevout type is `p2pk` stays `Previous output
+/// type P2PK` and does not gain this line. `output script type p2pk` and
+/// `Type P2PK` stay. The details Fee row and the Fee rate row stay one each.
+/// `Transaction fee` stays only on a fee output. The path has no query and no
+/// fragment.
+#[test]
+fn transaction_screen_paints_p2pk_label() {
+    const LABEL: &str = "P2PK";
+
+    fn vin(prevout_field: &str) -> String {
+        format!(
+            r#"{{"txid":"prev","vout":0,{prevout_field}"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin_json}],"vout":[{vout_json}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, vin_json, vout_json))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn label_count(text: &str) -> usize {
+        text.lines().filter(|line| *line == LABEL).count()
+    }
+
+    fn assert_one_fee_row_and_one_fee_rate(text: &str) {
+        assert_eq!(
+            text.lines().filter(|line| *line == "Fee 50 sats").count(),
+            1,
+            "the details Fee row was dropped or repeated: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| *line == "Fee rate 0.50 sat/vB")
+                .count(),
+            1,
+            "the Fee rate row was dropped or repeated: {text}"
+        );
+        assert!(
+            text.contains("fee_rate 0.5"),
+            "the raw fee_rate header was dropped: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+                .count(),
+            1,
+            "a second Fee row was painted: {text}"
+        );
+    }
+
+    fn assert_screen_keeps_timestamp(text: &str, txid: &str) {
+        let lines: Vec<&str> = text.lines().collect();
+        let marker = "block_time 1600000000 ";
+        assert!(
+            lines.windows(2).any(|pair| {
+                pair[0] == "Timestamp"
+                    && pair[1].contains(&format!("tx txid {txid} "))
+                    && pair[1].contains(marker)
+                    && !pair[1].contains("Timestamp")
+                    && !pair[1].contains(',')
+            }),
+            "Timestamp was not immediately before the raw block_time line: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Inputs & Outputs"),
+            "Inputs & Outputs was dropped: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Confirmed"),
+            "Confirmed was dropped: {text}"
+        );
+        assert!(!text.contains("1,600,000,000"), "{text}");
+        assert!(
+            !text.contains("2020") && !text.contains("ago"),
+            "the block time was formatted: {text}"
+        );
+        assert!(!text.contains("abcdwitnesshex"), "{text}");
+        assert!(
+            !text.lines().any(|line| line.contains("Confidential")),
+            "a value was unblinded or invented as Confidential: {text}"
+        );
+        assert_script_hex_stays_off(text);
+        assert_paint_is_not_html(text);
+    }
+
+    fn assert_p2pk_type_lines(text: &str) {
+        assert_eq!(
+            text.lines()
+                .filter(|line| *line == "output script type p2pk")
+                .count(),
+            1,
+            "output script type p2pk was dropped or repeated: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == "Type P2PK").count(),
+            1,
+            "Type P2PK was dropped or repeated: {text}"
+        );
+    }
+
+    let ordinary_vin = vin(
+        r#""prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qin","value":8},"#,
+    );
+    let p2pk_vout = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":1}"#;
+    let ordinary_vout = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qordinary","value":9}"#;
+    let p2pk_out = paint(
+        "p2pklabel",
+        &ordinary_vin,
+        &format!("{p2pk_vout},{ordinary_vout}"),
+    );
+    assert_eq!(
+        label_count(&p2pk_out),
+        1,
+        "{LABEL} was not one exact line on the p2pk output with no address: {p2pk_out}"
+    );
+    let rows: Vec<&str> = p2pk_out.lines().collect();
+    let p2pk_address = rows
+        .iter()
+        .position(|line| *line == "output address  value 1");
+    let script_type = rows
+        .iter()
+        .position(|line| *line == "output script type p2pk");
+    let type_p2pk = rows.iter().position(|line| *line == "Type P2PK");
+    let label_at = rows.iter().position(|line| *line == LABEL);
+    let ordinary_at = rows
+        .iter()
+        .position(|line| *line == "output address bc1qordinary value 9");
+    assert!(
+        p2pk_address.is_some()
+            && script_type.is_some()
+            && type_p2pk.is_some()
+            && label_at.is_some()
+            && ordinary_at.is_some(),
+        "the p2pk output lines or the ordinary output were dropped: {p2pk_out}"
+    );
+    assert!(
+        p2pk_address.unwrap() < script_type.unwrap()
+            && script_type.unwrap() < type_p2pk.unwrap()
+            && type_p2pk.unwrap() < label_at.unwrap()
+            && label_at.unwrap() < ordinary_at.unwrap(),
+        "{LABEL} was not on the p2pk output after Type P2PK and before the ordinary output: {p2pk_out}"
+    );
+    assert!(
+        p2pk_out
+            .lines()
+            .any(|line| line == "output script type v0_p2wpkh"),
+        "the ordinary output script type was dropped: {p2pk_out}"
+    );
+    assert!(
+        p2pk_out.lines().any(|line| line == "Type V0_P2WPKH"),
+        "the ordinary output type was dropped: {p2pk_out}"
+    );
+    assert_eq!(
+        p2pk_out
+            .lines()
+            .filter(|line| *line == "Transaction fee")
+            .count(),
+        0,
+        "a p2pk output painted Transaction fee: {p2pk_out}"
+    );
+    assert_p2pk_type_lines(&p2pk_out);
+    assert_one_fee_row_and_one_fee_rate(&p2pk_out);
+    assert_screen_keeps_timestamp(&p2pk_out, "p2pklabel");
+
+    let empty_address = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","scriptpubkey_address":"","value":2}"#;
+    let empty = paint("p2pkempty", &ordinary_vin, empty_address);
+    assert_eq!(
+        label_count(&empty),
+        1,
+        "an empty address did not paint {LABEL} once: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "output address  value 2"),
+        "the empty address output row was dropped: {empty}"
+    );
+    assert_p2pk_type_lines(&empty);
+    assert_one_fee_row_and_one_fee_rate(&empty);
+    assert_screen_keeps_timestamp(&empty, "p2pkempty");
+
+    let null_address = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","scriptpubkey_address":null,"value":4}"#;
+    let null_addr = paint("p2pknulladdr", &ordinary_vin, null_address);
+    assert_eq!(
+        label_count(&null_addr),
+        1,
+        "JSON null address did not paint {LABEL} once: {null_addr}"
+    );
+    assert!(
+        null_addr
+            .lines()
+            .any(|line| line == "output address  value 4"),
+        "the null address output row was dropped: {null_addr}"
+    );
+    assert_p2pk_type_lines(&null_addr);
+    assert_one_fee_row_and_one_fee_rate(&null_addr);
+
+    let null_peg = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":1,"pegout":null}"#;
+    let null_pegout = paint("p2pknullpeg", &ordinary_vin, null_peg);
+    assert_eq!(
+        label_count(&null_pegout),
+        1,
+        "JSON null pegout did not paint {LABEL} once: {null_pegout}"
+    );
+    assert!(
+        !null_pegout.lines().any(|line| line == "Liquid Peg Out"),
+        "JSON null pegout painted Liquid Peg Out: {null_pegout}"
+    );
+    assert_p2pk_type_lines(&null_pegout);
+    assert_one_fee_row_and_one_fee_rate(&null_pegout);
+
+    let pegout = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":1,"pegout":{"genesis_hash":"aa","scriptpubkey":"bb","scriptpubkey_asm":"OP_TRUE"}}"#;
+    let pegged = paint("p2pkpeg", &ordinary_vin, pegout);
+    assert_eq!(
+        label_count(&pegged),
+        1,
+        "a peg-out p2pk output did not paint {LABEL} once: {pegged}"
+    );
+    assert!(
+        pegged.lines().any(|line| line == "Liquid Peg Out"),
+        "Liquid Peg Out was dropped: {pegged}"
+    );
+    assert_p2pk_type_lines(&pegged);
+    assert_one_fee_row_and_one_fee_rate(&pegged);
+    assert_screen_keeps_timestamp(&pegged, "p2pkpeg");
+
+    let with_address = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","scriptpubkey_address":"bc1qp2pk","value":3}"#;
+    let addressed = paint("p2pkaddr", &ordinary_vin, with_address);
+    assert_eq!(
+        label_count(&addressed),
+        0,
+        "a p2pk output with an address painted {LABEL}: {addressed}"
+    );
+    assert!(
+        addressed
+            .lines()
+            .any(|line| line == "output address bc1qp2pk value 3"),
+        "the addressed p2pk output was dropped: {addressed}"
+    );
+    assert_p2pk_type_lines(&addressed);
+    assert_one_fee_row_and_one_fee_rate(&addressed);
+    assert_screen_keeps_timestamp(&addressed, "p2pkaddr");
+
+    let p2pk_prevout = vin(
+        r#""prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":5},"#,
+    );
+    let input_p2pk = paint("p2pkin", &p2pk_prevout, ordinary_vout);
+    assert_eq!(
+        label_count(&input_p2pk),
+        0,
+        "an input whose prevout type is p2pk painted {LABEL}: {input_p2pk}"
+    );
+    assert!(
+        input_p2pk
+            .lines()
+            .any(|line| line == "input script type p2pk"),
+        "input script type p2pk was dropped: {input_p2pk}"
+    );
+    assert!(
+        input_p2pk
+            .lines()
+            .any(|line| line == "Previous output type P2PK"),
+        "Previous output type P2PK was dropped: {input_p2pk}"
+    );
+    assert!(
+        !input_p2pk.lines().any(|line| line == "Type P2PK"),
+        "Type P2PK was painted on the input path: {input_p2pk}"
+    );
+    assert!(
+        input_p2pk
+            .lines()
+            .any(|line| line == "output address bc1qordinary value 9"),
+        "the ordinary output was dropped beside a p2pk input: {input_p2pk}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&input_p2pk);
+    assert_screen_keeps_timestamp(&input_p2pk, "p2pkin");
+
+    let op_return = r#"{"scriptpubkey":"6a","scriptpubkey_asm":"OP_RETURN","scriptpubkey_type":"op_return","value":0}"#;
+    let op_return_out = paint("p2pkopret", &ordinary_vin, op_return);
+    assert_eq!(
+        label_count(&op_return_out),
+        0,
+        "an OP_RETURN output painted {LABEL}: {op_return_out}"
+    );
+    assert!(
+        op_return_out.lines().any(|line| line == "Type OP_RETURN"),
+        "Type OP_RETURN was dropped: {op_return_out}"
+    );
+    assert!(
+        op_return_out
+            .lines()
+            .any(|line| line == "output script type op_return"),
+        "output script type op_return was dropped: {op_return_out}"
+    );
+    assert_eq!(
+        op_return_out
+            .lines()
+            .filter(|line| *line == "OP_RETURN")
+            .count(),
+        1,
+        "the op_return address cell did not paint OP_RETURN once: {op_return_out}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&op_return_out);
+    assert_screen_keeps_timestamp(&op_return_out, "p2pkopret");
+
+    let fee_vout =
+        r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":0}"#;
+    let fee_out = paint("p2pkfee", &ordinary_vin, fee_vout);
+    assert_eq!(
+        label_count(&fee_out),
+        0,
+        "a fee output painted {LABEL}: {fee_out}"
+    );
+    assert_eq!(
+        fee_out
+            .lines()
+            .filter(|line| *line == "Transaction fee")
+            .count(),
+        1,
+        "Transaction fee was dropped or repeated on the fee output: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "output script type fee"),
+        "output script type fee was dropped: {fee_out}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&fee_out);
+    assert_screen_keeps_timestamp(&fee_out, "p2pkfee");
+
+    let p2pkh = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pkh","value":6}"#;
+    let other = paint("p2pkother", &ordinary_vin, p2pkh);
+    assert_eq!(
+        label_count(&other),
+        0,
+        "a p2pkh output painted {LABEL}: {other}"
+    );
+    assert!(
+        other.lines().any(|line| line == "Type P2PKH"),
+        "Type P2PKH was dropped: {other}"
+    );
+    assert!(
+        !other.lines().any(|line| line == "P2PKH"),
+        "a bare P2PKH line was invented: {other}"
+    );
+    assert!(
+        other.lines().any(|line| line == "output script type p2pkh"),
+        "output script type p2pkh was dropped: {other}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&other);
+    assert_screen_keeps_timestamp(&other, "p2pkother");
+}
+
+/// Output address cell from `GET /tx/:txid` when `scriptpubkey_type` is `op_return`.
+///
+/// The scriptpubkeyType pipe returns the exact line `OP_RETURN` for the
+/// lowercase type `op_return`. The output address cell prints that word when
+/// the output has no address and is not a peg-out. An omitted address, an
+/// empty address, JSON null address, and JSON null `pegout` are that case.
+/// An address or a peg-out object does not gain the line. An input whose
+/// prevout type is `op_return` stays `Previous output type OP_RETURN` and
+/// does not gain this line. `output script type op_return` and `Type
+/// OP_RETURN` stay. `P2PK` stays only on a p2pk output. `Transaction fee`
+/// stays only on a fee output. The details Fee row and the Fee rate row stay
+/// one each. `Issuance` stays on an issuance input with no prevout. The path
+/// has no query and no fragment. Script asm, script hex, and the raw script
+/// stay off. The block time stays the raw integer.
+#[test]
+fn transaction_screen_paints_op_return_label() {
+    const LABEL: &str = "OP_RETURN";
+    const ASM: &str = "OP_RETURN 68656c6c6f";
+    const SCRIPT: &str = "6a0468656c6c6f";
+
+    fn vin(prevout_field: &str) -> String {
+        format!(
+            r#"{{"txid":"prev","vout":0,{prevout_field}"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin_json}],"vout":[{vout_json}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, vin_json, vout_json))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn label_count(text: &str) -> usize {
+        text.lines().filter(|line| *line == LABEL).count()
+    }
+
+    fn assert_one_fee_row_and_one_fee_rate(text: &str) {
+        assert_eq!(
+            text.lines().filter(|line| *line == "Fee 50 sats").count(),
+            1,
+            "the details Fee row was dropped or repeated: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| *line == "Fee rate 0.50 sat/vB")
+                .count(),
+            1,
+            "the Fee rate row was dropped or repeated: {text}"
+        );
+        assert!(
+            text.contains("fee_rate 0.5"),
+            "the raw fee_rate header was dropped: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+                .count(),
+            1,
+            "a second Fee row was painted: {text}"
+        );
+    }
+
+    fn assert_screen_keeps_timestamp(text: &str, txid: &str) {
+        const ASM: &str = "OP_RETURN 68656c6c6f";
+        const SCRIPT: &str = "6a0468656c6c6f";
+        let lines: Vec<&str> = text.lines().collect();
+        let marker = "block_time 1600000000 ";
+        assert!(
+            lines.windows(2).any(|pair| {
+                pair[0] == "Timestamp"
+                    && pair[1].contains(&format!("tx txid {txid} "))
+                    && pair[1].contains(marker)
+                    && !pair[1].contains("Timestamp")
+                    && !pair[1].contains(',')
+            }),
+            "Timestamp was not immediately before the raw block_time line: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Inputs & Outputs"),
+            "Inputs & Outputs was dropped: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Confirmed"),
+            "Confirmed was dropped: {text}"
+        );
+        assert!(!text.contains("1,600,000,000"), "{text}");
+        assert!(
+            !text.contains("2020") && !text.contains("ago"),
+            "the block time was formatted: {text}"
+        );
+        assert!(!text.contains("abcdwitnesshex"), "{text}");
+        assert!(
+            !text.lines().any(|line| line.contains("Confidential")),
+            "a value was unblinded or invented as Confidential: {text}"
+        );
+        assert!(!text.contains(ASM), "script asm was painted: {text}");
+        assert!(!text.contains(SCRIPT), "script hex was painted: {text}");
+        assert_script_hex_stays_off(text);
+        assert_paint_is_not_html(text);
+    }
+
+    fn assert_op_return_type_lines(text: &str) {
+        assert_eq!(
+            text.lines()
+                .filter(|line| *line == "output script type op_return")
+                .count(),
+            1,
+            "output script type op_return was dropped or repeated: {text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| *line == "Type OP_RETURN")
+                .count(),
+            1,
+            "Type OP_RETURN was dropped or repeated: {text}"
+        );
+    }
+
+    fn op_return_vout(extra: &str) -> String {
+        const ASM: &str = "OP_RETURN 68656c6c6f";
+        const SCRIPT: &str = "6a0468656c6c6f";
+        format!(
+            r#"{{"scriptpubkey":"{SCRIPT}","scriptpubkey_asm":"{ASM}","scriptpubkey_type":"op_return"{extra}}}"#
+        )
+    }
+
+    let ordinary_vin = vin(
+        r#""prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qin","value":8},"#,
+    );
+    let issued_vin = r#"{"txid":"issueprev","vout":0,"prevout":null,"issuance":{"asset_id":"issuanceasset","is_reissuance":false,"asset_entropy":"entropyvalue"},"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}"#;
+    let op_return_vout_bare = op_return_vout(r#","value":0"#);
+    let ordinary_vout = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qordinary","value":9}"#;
+    let op_return_out = paint(
+        "opretlabel",
+        &format!("{issued_vin},{ordinary_vin}"),
+        &format!("{op_return_vout_bare},{ordinary_vout}"),
+    );
+    assert_eq!(
+        label_count(&op_return_out),
+        1,
+        "{LABEL} was not one exact line on the op_return output with no address: {op_return_out}"
+    );
+    let rows: Vec<&str> = op_return_out.lines().collect();
+    let op_address = rows
+        .iter()
+        .position(|line| *line == "output address  value 0");
+    let script_type = rows
+        .iter()
+        .position(|line| *line == "output script type op_return");
+    let type_op_return = rows.iter().position(|line| *line == "Type OP_RETURN");
+    let label_at = rows.iter().position(|line| *line == LABEL);
+    let ordinary_at = rows
+        .iter()
+        .position(|line| *line == "output address bc1qordinary value 9");
+    assert!(
+        op_address.is_some()
+            && script_type.is_some()
+            && type_op_return.is_some()
+            && label_at.is_some()
+            && ordinary_at.is_some(),
+        "the op_return output lines or the ordinary output were dropped: {op_return_out}"
+    );
+    assert!(
+        op_address.unwrap() < script_type.unwrap()
+            && script_type.unwrap() < type_op_return.unwrap()
+            && type_op_return.unwrap() < label_at.unwrap()
+            && label_at.unwrap() < ordinary_at.unwrap(),
+        "{LABEL} was not on the op_return output after Type OP_RETURN and before the ordinary output: {op_return_out}"
+    );
+    assert!(
+        op_return_out
+            .lines()
+            .any(|line| line == "output script type v0_p2wpkh"),
+        "the ordinary output script type was dropped: {op_return_out}"
+    );
+    assert!(
+        op_return_out.lines().any(|line| line == "Type V0_P2WPKH"),
+        "the ordinary output type was dropped: {op_return_out}"
+    );
+    assert_eq!(
+        op_return_out
+            .lines()
+            .filter(|line| *line == "Issuance")
+            .count(),
+        1,
+        "Issuance was dropped or repeated: {op_return_out}"
+    );
+    assert!(
+        op_return_out
+            .lines()
+            .any(|line| line == "issuance asset issuanceasset"),
+        "the issuance asset line was dropped: {op_return_out}"
+    );
+    assert_eq!(
+        op_return_out.lines().filter(|line| *line == "P2PK").count(),
+        0,
+        "an op_return output painted P2PK: {op_return_out}"
+    );
+    assert_eq!(
+        op_return_out
+            .lines()
+            .filter(|line| *line == "Transaction fee")
+            .count(),
+        0,
+        "an op_return output painted Transaction fee: {op_return_out}"
+    );
+    assert_op_return_type_lines(&op_return_out);
+    assert_one_fee_row_and_one_fee_rate(&op_return_out);
+    assert_screen_keeps_timestamp(&op_return_out, "opretlabel");
+
+    let empty = paint(
+        "opretempty",
+        &ordinary_vin,
+        &op_return_vout(r#","scriptpubkey_address":"","value":2"#),
+    );
+    assert_eq!(
+        label_count(&empty),
+        1,
+        "an empty address did not paint {LABEL} once: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "output address  value 2"),
+        "the empty address output row was dropped: {empty}"
+    );
+    assert_op_return_type_lines(&empty);
+    assert_one_fee_row_and_one_fee_rate(&empty);
+    assert_screen_keeps_timestamp(&empty, "opretempty");
+
+    let null_addr = paint(
+        "opretnulladdr",
+        &ordinary_vin,
+        &op_return_vout(r#","scriptpubkey_address":null,"value":4"#),
+    );
+    assert_eq!(
+        label_count(&null_addr),
+        1,
+        "JSON null address did not paint {LABEL} once: {null_addr}"
+    );
+    assert!(
+        null_addr
+            .lines()
+            .any(|line| line == "output address  value 4"),
+        "the null address output row was dropped: {null_addr}"
+    );
+    assert_op_return_type_lines(&null_addr);
+    assert_one_fee_row_and_one_fee_rate(&null_addr);
+
+    let null_pegout = paint(
+        "opretnullpeg",
+        &ordinary_vin,
+        &op_return_vout(r#","value":0,"pegout":null"#),
+    );
+    assert_eq!(
+        label_count(&null_pegout),
+        1,
+        "JSON null pegout did not paint {LABEL} once: {null_pegout}"
+    );
+    assert!(
+        !null_pegout.lines().any(|line| line == "Liquid Peg Out"),
+        "JSON null pegout painted Liquid Peg Out: {null_pegout}"
+    );
+    assert_op_return_type_lines(&null_pegout);
+    assert_one_fee_row_and_one_fee_rate(&null_pegout);
+
+    let addressed = paint(
+        "opretaddr",
+        &ordinary_vin,
+        &op_return_vout(r#","scriptpubkey_address":"bc1qopret","value":3"#),
+    );
+    assert_eq!(
+        label_count(&addressed),
+        0,
+        "an op_return output with an address painted {LABEL}: {addressed}"
+    );
+    assert!(
+        addressed
+            .lines()
+            .any(|line| line == "output address bc1qopret value 3"),
+        "the addressed op_return output was dropped: {addressed}"
+    );
+    assert_op_return_type_lines(&addressed);
+    assert_one_fee_row_and_one_fee_rate(&addressed);
+    assert_screen_keeps_timestamp(&addressed, "opretaddr");
+
+    let pegged = paint(
+        "opretpeg",
+        &ordinary_vin,
+        &op_return_vout(
+            r#","value":0,"pegout":{"genesis_hash":"aa","scriptpubkey":"bb","scriptpubkey_asm":"OP_TRUE"}"#,
+        ),
+    );
+    assert_eq!(
+        label_count(&pegged),
+        0,
+        "a peg-out painted {LABEL}: {pegged}"
+    );
+    assert!(
+        pegged.lines().any(|line| line == "Liquid Peg Out"),
+        "Liquid Peg Out was dropped: {pegged}"
+    );
+    assert_op_return_type_lines(&pegged);
+    assert_one_fee_row_and_one_fee_rate(&pegged);
+    assert_screen_keeps_timestamp(&pegged, "opretpeg");
+
+    let op_return_prevout = vin(&format!(
+        r#""prevout":{{"scriptpubkey":"{SCRIPT}","scriptpubkey_asm":"{ASM}","scriptpubkey_type":"op_return","value":5}},"#
+    ));
+    let input_op_return = paint("opretin", &op_return_prevout, ordinary_vout);
+    assert_eq!(
+        label_count(&input_op_return),
+        0,
+        "an input whose prevout type is op_return painted {LABEL}: {input_op_return}"
+    );
+    assert!(
+        input_op_return
+            .lines()
+            .any(|line| line == "input script type op_return"),
+        "input script type op_return was dropped: {input_op_return}"
+    );
+    assert!(
+        input_op_return
+            .lines()
+            .any(|line| line == "Previous output type OP_RETURN"),
+        "Previous output type OP_RETURN was dropped: {input_op_return}"
+    );
+    assert!(
+        !input_op_return.lines().any(|line| line == "Type OP_RETURN"),
+        "Type OP_RETURN was painted on the input path: {input_op_return}"
+    );
+    assert!(
+        input_op_return
+            .lines()
+            .any(|line| line == "output address bc1qordinary value 9"),
+        "the ordinary output was dropped beside an op_return input: {input_op_return}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&input_op_return);
+    assert_screen_keeps_timestamp(&input_op_return, "opretin");
+
+    let fee_vout =
+        r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":0}"#;
+    let fee_out = paint("opretfee", &ordinary_vin, fee_vout);
+    assert_eq!(
+        label_count(&fee_out),
+        0,
+        "a fee output painted {LABEL}: {fee_out}"
+    );
+    assert_eq!(
+        fee_out
+            .lines()
+            .filter(|line| *line == "Transaction fee")
+            .count(),
+        1,
+        "Transaction fee was dropped or repeated on the fee output: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "output script type fee"),
+        "output script type fee was dropped: {fee_out}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&fee_out);
+    assert_screen_keeps_timestamp(&fee_out, "opretfee");
+
+    let p2pk_vout = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":1}"#;
+    let p2pk_out = paint("opretp2pk", &ordinary_vin, p2pk_vout);
+    assert_eq!(
+        label_count(&p2pk_out),
+        0,
+        "a p2pk output painted {LABEL}: {p2pk_out}"
+    );
+    assert_eq!(
+        p2pk_out.lines().filter(|line| *line == "P2PK").count(),
+        1,
+        "P2PK was dropped or repeated on the p2pk output: {p2pk_out}"
+    );
+    assert!(
+        p2pk_out.lines().any(|line| line == "Type P2PK"),
+        "Type P2PK was dropped: {p2pk_out}"
+    );
+    assert!(
+        p2pk_out
+            .lines()
+            .any(|line| line == "output script type p2pk"),
+        "output script type p2pk was dropped: {p2pk_out}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&p2pk_out);
+    assert_screen_keeps_timestamp(&p2pk_out, "opretp2pk");
+
+    let p2pkh = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pkh","value":6}"#;
+    let other = paint("opretother", &ordinary_vin, p2pkh);
+    assert_eq!(
+        label_count(&other),
+        0,
+        "a p2pkh output painted {LABEL}: {other}"
+    );
+    assert!(
+        other.lines().any(|line| line == "Type P2PKH"),
+        "Type P2PKH was dropped: {other}"
+    );
+    assert!(
+        !other.lines().any(|line| line == "P2PKH"),
+        "a bare P2PKH line was invented: {other}"
+    );
+    assert!(
+        other.lines().any(|line| line == "output script type p2pkh"),
+        "output script type p2pkh was dropped: {other}"
+    );
+    assert_one_fee_row_and_one_fee_rate(&other);
+    assert_screen_keeps_timestamp(&other, "opretother");
+}
+
+/// Transaction screen from `GET /tx/:txid`, field `status.block_time`.
+///
+/// One exact line `Timestamp` sits immediately before the existing raw
+/// `block_time` line. The integer on that line stays unformatted. Explicit 0
+/// still paints the label and `block_time 0`. A missing key, JSON null, or a
+/// missing status omits the label and does not invent 0. The blocks list and
+/// the block page do not gain this line. The path has no query and no fragment.
+#[test]
+fn transaction_screen_paints_timestamp_label() {
+    const LABEL: &str = "Timestamp";
+
+    fn tx_body(txid: &str, status: &str) -> String {
+        let status_field = if status.is_empty() {
+            String::new()
+        } else {
+            format!(r#","status":{status}"#)
+        };
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{{"txid":"prev","vout":0,"prevout":null,"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_RETURN","scriptpubkey_type":"op_return","value":9}}],"size":10,"weight":400,"sigops":0,"fee":50{status_field}}}"#
+        )
+    }
+
+    fn paint_tx(txid: &str, status: &str) -> (String, Vec<String>) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, status))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        (painted(&host), paths)
+    }
+
+    fn assert_label_before_raw(painted: &str, txid: &str, time: u64) {
+        let lines: Vec<&str> = painted.lines().collect();
+        let marker = format!("block_time {time} ");
+        let before = lines.windows(2).any(|pair| {
+            pair[0] == LABEL
+                && pair[1].contains(&format!("tx txid {txid} "))
+                && pair[1].contains(&marker)
+                && !pair[1].contains("Timestamp")
+                && !pair[1].contains(',')
+        });
+        assert!(
+            before,
+            "{LABEL} was not immediately before the raw {marker} line: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == LABEL).count(),
+            1,
+            "{LABEL} was not one exact line: {painted}"
+        );
+        assert!(
+            !painted.contains("1,600,000,000"),
+            "the block time gained a thousands separator: {painted}"
+        );
+        assert!(
+            !painted.contains("2020") && !painted.contains("ago"),
+            "the block time was formatted: {painted}"
+        );
+        assert!(
+            painted.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+            "Fee rate was dropped: {painted}"
+        );
+        assert!(
+            painted.contains("fee_rate 0.5"),
+            "the raw fee_rate header was dropped: {painted}"
+        );
+        assert!(
+            painted.lines().any(|line| line == "Confirmed"),
+            "Confirmed was dropped or the letter case changed: {painted}"
+        );
+        assert!(
+            painted.contains("confirmed true"),
+            "the raw confirmed header changed letter case: {painted}"
+        );
+        assert!(
+            painted.lines().any(|line| line == "Inputs & Outputs"),
+            "Inputs & Outputs was dropped: {painted}"
+        );
+        assert!(!painted.contains("abcdwitnesshex"), "{painted}");
+        assert_script_hex_stays_off(painted);
+        assert_paint_is_not_html(painted);
+    }
+
+    fn assert_label_omitted(painted: &str, txid: &str) {
+        assert!(
+            painted.contains(&format!("tx txid {txid} ")),
+            "the transaction was hidden: {painted}"
+        );
+        assert!(
+            !painted.lines().any(|line| line == LABEL),
+            "absent block_time painted {LABEL}: {painted}"
+        );
+        assert!(
+            !painted.contains("block_time 0"),
+            "absent block_time invented 0: {painted}"
+        );
+        assert!(
+            painted.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+            "Fee rate was dropped: {painted}"
+        );
+        assert!(!painted.contains("abcdwitnesshex"), "{painted}");
+        assert_script_hex_stays_off(painted);
+        assert_paint_is_not_html(painted);
+    }
+
+    let present = paint_tx(
+        "timepresent",
+        r#"{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}"#,
+    );
+    assert_label_before_raw(&present.0, "timepresent", 1_600_000_000);
+
+    let zero = paint_tx(
+        "timezero",
+        r#"{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":0}"#,
+    );
+    assert_label_before_raw(&zero.0, "timezero", 0);
+
+    let missing = paint_tx(
+        "timemiss",
+        r#"{"confirmed":true,"block_height":4,"block_hash":"tiphash1"}"#,
+    );
+    assert_label_omitted(&missing.0, "timemiss");
+
+    let null = paint_tx(
+        "timenull",
+        r#"{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":null}"#,
+    );
+    assert_label_omitted(&null.0, "timenull");
+
+    let no_status = paint_tx("timenostatus", "");
+    assert_label_omitted(&no_status.0, "timenostatus");
+
+    let list_id = "timeblocklist";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), format!("[{}]", block_json(list_id)))]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(
+        !list.lines().any(|line| line == LABEL),
+        "the blocks list painted {LABEL}: {list}"
+    );
+    assert!(
+        list.lines().any(|line| line == "TXs"),
+        "TXs was dropped from the blocks list: {list}"
+    );
+    assert!(
+        list.contains("timestamp 1700000000"),
+        "the blocks list dropped its raw timestamp: {list}"
+    );
+    assert!(
+        list.contains("difficulty 1") && !list.contains("difficulty 1.0"),
+        "blocks list difficulty left plain_number: {list}"
+    );
+
+    let page_id = "timeblockpage";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{page_id}"), block_json(page_id)),
+            (format!("/block/{page_id}/txs"), "[]".to_string()),
+            (format!("/block/{page_id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = page_id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {page_id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/block/{page_id}")),
+        "load did not GET /block/{page_id}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let closed = painted(&host);
+    assert!(
+        !closed.lines().any(|line| line == LABEL),
+        "the block page painted {LABEL}: {closed}"
+    );
+    assert!(
+        closed.lines().any(|line| line == "TXs"),
+        "TXs was dropped from the block page: {closed}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let opened = painted(&host);
+    assert!(
+        !opened.lines().any(|line| line == LABEL),
+        "block details painted {LABEL}: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "Merkle root mm"),
+        "Merkle root was dropped: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "Difficulty 1"),
+        "Difficulty was dropped: {opened}"
+    );
+    assert!(
+        !opened
+            .lines()
+            .any(|line| line == "Difficulty 1.0" || line == "difficulty 1.0"),
+        "plain_number painted 1.0: {opened}"
+    );
 }
 
 fn paint_tx_screen_weight(txid: &str, weight_field: &str, sigops_field: &str) -> String {
@@ -4267,6 +7085,309 @@ fn block_screen_paints_nonce_hex() {
     assert_nonce_omitted(&null);
 }
 
+/// Open one block whose `GET /block/:hash/header` body is the given hex.
+/// The id is not all digits, so load uses `GET /block/:id` and not the height route.
+fn paint_block_header_hex(id: &str, header: &str) -> (String, Vec<String>) {
+    assert!(
+        !id.is_empty() && !id.bytes().all(|byte| byte.is_ascii_digit()),
+        "id must not be all digits: {id}"
+    );
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    assert!(!header.contains('?') && !header.contains('#'), "{header}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_json(id)),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+            (format!("/block/{id}/header"), header.to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    (painted(&host), paths)
+}
+
+/// Eighty-byte block header from `GET /block/:hash/header`.
+///
+/// Angular `i18n="block.header"` paints the plaintext label `Block Header Hex`.
+/// The value is 160 hex characters on that same line. It is not transaction
+/// hex and it is not escaped. The path has no query string.
+#[test]
+fn block_screen_paints_header_hex() {
+    const LABEL: &str = "Block Header Hex";
+    // Serialized header: version, previous block, merkle root, time, bits, nonce.
+    let header = [
+        "01000000",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a",
+        "29ab5f49",
+        "ffff001d",
+        "1dac2b7c",
+    ]
+    .concat();
+    assert_eq!(header.len(), 160, "header hex is not 80 bytes");
+    assert!(
+        header.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "header is not hex: {header}"
+    );
+    let id = "hdrhexblock1";
+    let (painted, paths) = paint_block_header_hex(id, &header);
+    let expected = format!("{LABEL} {header}");
+    assert!(
+        painted.lines().any(|line| line == expected),
+        "{expected} is absent from the block body: {painted}"
+    );
+    assert_eq!(
+        painted.lines().filter(|line| *line == expected).count(),
+        1,
+        "{LABEL} was not one plaintext line: {painted}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/block/{id}/header")),
+        "load did not GET /block/{id}/header: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+}
+
+fn block_merkle_json(id: &str, merkle_root: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"{merkle_root}","previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":2,"difficulty":1}}"#
+    )
+}
+
+/// Block Merkle root from `GET /block/:hash`.
+///
+/// Angular `i18n="block.merkle-root"` paints the plaintext label `Merkle root`
+/// and the full `merkle_root` string on that same line. The value is not
+/// shortened. The raw `merkle_root` line stays. Details stay closed until the
+/// details row opens. A missing key fails serde before details text, and that
+/// paint has no `Merkle root`. This line is not Difficulty.
+#[test]
+fn block_screen_paints_merkle_root() {
+    const LABEL: &str = "Merkle root";
+    let root = "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b";
+    assert_eq!(root.len(), 64);
+    assert!(root.bytes().all(|byte| byte.is_ascii_hexdigit()), "{root}");
+    let id = "merkleblock1";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_merkle_json(id, root)),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let closed = painted(&host);
+    let expected = format!("{LABEL} {root}");
+    assert!(
+        !closed.lines().any(|line| line == expected),
+        "closed details painted {expected}: {closed}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let opened = painted(&host);
+    assert!(
+        opened.lines().any(|line| line == expected),
+        "{expected} is absent from the block details: {opened}"
+    );
+    assert_eq!(
+        opened.lines().filter(|line| *line == expected).count(),
+        1,
+        "{LABEL} was not one plaintext line: {opened}"
+    );
+    assert!(
+        !expected.contains("..."),
+        "Merkle root was shortened: {expected}"
+    );
+    let raw = format!("merkle_root {root}");
+    assert!(
+        opened.lines().any(|line| line == raw),
+        "raw {raw} was dropped: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "difficulty 1"),
+        "difficulty 1 was not a details line: {opened}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/block/{id}")),
+        "load did not GET /block/{id}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+
+    let short_id = "merklemm";
+    let short = paint_block_bits(short_id, block_merkle_json(short_id, "mm"));
+    assert!(
+        short.lines().any(|line| line == "Merkle root mm"),
+        "short merkle root did not paint Merkle root mm: {short}"
+    );
+    assert!(
+        short.lines().any(|line| line == "merkle_root mm"),
+        "short merkle root dropped merkle_root mm: {short}"
+    );
+    assert!(
+        !short.lines().any(|line| line.contains("Merkle root m...")),
+        "short merkle root was shortened: {short}"
+    );
+
+    let missing = "merklemiss";
+    let missing_body = format!(
+        r#"{{"id":"{missing}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":2,"difficulty":1}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{missing}"), missing_body),
+            (format!("/block/{missing}/txs"), "[]".to_string()),
+            (format!("/block/{missing}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = missing.to_string();
+    let err = host
+        .activate(Screen::Block)
+        .expect_err("missing merkle_root must fail the block parse");
+    let message = err.to_string();
+    assert!(
+        message.contains("missing field `merkle_root`"),
+        "missing merkle_root was not a parse error: {message}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let missing_painted = painted(&host);
+    assert!(
+        !missing_painted.contains("Merkle root"),
+        "missing merkle_root painted Merkle root: {missing_painted}"
+    );
+}
+
+fn block_difficulty_json(id: &str, difficulty: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":2,"difficulty":{difficulty}}}"#
+    )
+}
+
+/// Block difficulty from `GET /block/:hash`.
+///
+/// Angular `i18n="block.difficulty"` paints the plaintext label `Difficulty`
+/// and the existing `plain_number` text on that same line. Whole values stay
+/// integers (`1`, not `1.0`). The raw `difficulty` line stays. Details stay
+/// closed until the details row opens. A missing key omits both lines.
+#[test]
+fn block_screen_paints_difficulty_label() {
+    const LABEL: &str = "Difficulty";
+    let id = "diffblock1";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_difficulty_json(id, "1.0")),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let closed = painted(&host);
+    let expected = format!("{LABEL} 1");
+    assert!(
+        !closed.lines().any(|line| line == expected),
+        "closed details painted {expected}: {closed}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let opened = painted(&host);
+    assert!(
+        opened.lines().any(|line| line == expected),
+        "{expected} is absent from the block details: {opened}"
+    );
+    assert_eq!(
+        opened.lines().filter(|line| *line == expected).count(),
+        1,
+        "{LABEL} was not one plaintext line: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "difficulty 1"),
+        "difficulty 1 was not a details line: {opened}"
+    );
+    assert!(
+        !opened
+            .lines()
+            .any(|line| line == "Difficulty 1.0" || line == "difficulty 1.0"),
+        "plain_number painted 1.0: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "Merkle root merkle-root"),
+        "Merkle root was dropped: {opened}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/block/{id}")),
+        "load did not GET /block/{id}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+
+    let fraction_id = "difffraction";
+    let fraction = paint_block_bits(fraction_id, block_difficulty_json(fraction_id, "1.5"));
+    assert!(
+        fraction.lines().any(|line| line == "Difficulty 1.5"),
+        "difficulty 1.5 did not paint Difficulty 1.5: {fraction}"
+    );
+    assert!(
+        fraction.lines().any(|line| line == "difficulty 1.5"),
+        "difficulty 1.5 dropped the raw line: {fraction}"
+    );
+
+    let missing = "diffmiss";
+    let missing_body = format!(
+        r#"{{"id":"{missing}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":2}}"#
+    );
+    let missing_painted = paint_block_bits(missing, missing_body);
+    assert!(
+        missing_painted
+            .lines()
+            .all(|line| !line.starts_with("Difficulty") && !line.starts_with("difficulty")),
+        "missing difficulty painted a difficulty line: {missing_painted}"
+    );
+}
+
 /// Single block page paints one plaintext line, `Why is this block empty?`,
 /// only when height is above 100000 and `tx_count` is at most 1.
 ///
@@ -4316,9 +7437,7 @@ fn block_screen_paints_empty_block() {
             "load did not GET /block/{id}: {paths:?}"
         );
         assert!(
-            paths
-                .iter()
-                .all(|path| !path.contains("/block-height/")),
+            paths.iter().all(|path| !path.contains("/block-height/")),
             "load used /block-height/: {paths:?}"
         );
         assert!(
@@ -4611,9 +7730,7 @@ fn block_screen_paints_genesis() {
             "load did not GET /block/{id}: {paths:?}"
         );
         assert!(
-            paths
-                .iter()
-                .all(|path| !path.contains("/block-height/")),
+            paths.iter().all(|path| !path.contains("/block-height/")),
             "load used /block-height/: {paths:?}"
         );
         assert!(
@@ -4629,12 +7746,14 @@ fn block_screen_paints_genesis() {
         }
     }
 
-    let zero = paint_block("blk0tx0", block_json("blk0tx0", Some(0), Some(0)))
-        .unwrap_or_else(|(err, painted)| panic!("height 0 tx_count 0 did not open: {err}\n{painted}"));
+    let zero = paint_block("blk0tx0", block_json("blk0tx0", Some(0), Some(0))).unwrap_or_else(
+        |(err, painted)| panic!("height 0 tx_count 0 did not open: {err}\n{painted}"),
+    );
     assert_genesis_once("height 0 tx_count 0", &zero);
 
-    let one = paint_block("blk0tx1", block_json("blk0tx1", Some(0), Some(1)))
-        .unwrap_or_else(|(err, painted)| panic!("height 0 tx_count 1 did not open: {err}\n{painted}"));
+    let one = paint_block("blk0tx1", block_json("blk0tx1", Some(0), Some(1))).unwrap_or_else(
+        |(err, painted)| panic!("height 0 tx_count 1 did not open: {err}\n{painted}"),
+    );
     assert_genesis_once("height 0 tx_count 1", &one);
 
     let height_one = paint_block("blkheight1", block_json("blkheight1", Some(1), Some(1)))
@@ -5184,4 +8303,1893 @@ fn blocks_list_paints_height_header() {
     for painted in [&one, &zero, &missing, &null_height, &mixed] {
         assert_no_extra(painted);
     }
+}
+
+/// Blocks list paints one exact line `TXs` immediately before the count line.
+///
+/// The count line stays the existing `tx_count` text. Count 0 stays `0`.
+/// Count 1234 stays `1234` with no thousands separator. A missing `tx_count`
+/// key omits that row and does not paint `TXs`. `GET /blocks` has no query.
+#[test]
+fn blocks_list_paints_txs_label() {
+    const LABEL: &str = "TXs";
+
+    fn block_json(id: &str, tx_count: Option<&str>) -> String {
+        let mut fields = vec![
+            format!(r#""id":"{id}""#),
+            r#""height":2"#.to_string(),
+            r#""version":1"#.to_string(),
+            r#""timestamp":9"#.to_string(),
+        ];
+        if let Some(tx_count) = tx_count {
+            fields.push(format!(r#""tx_count":{tx_count}"#));
+        }
+        fields.push(r#""size":20"#.to_string());
+        fields.push(r#""weight":80"#.to_string());
+        fields.push(r#""merkle_root":"mm""#.to_string());
+        fields.push(r#""mediantime":8"#.to_string());
+        fields.push(r#""difficulty":1.0"#.to_string());
+        format!("{{{}}}", fields.join(","))
+    }
+
+    fn paint_blocks(body: String) -> Result<String, ClientError> {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([("/blocks".to_string(), body)]),
+        );
+        let opened = host.activate(Screen::Blocks);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == "/blocks"),
+            "list did not GET /blocks: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        opened?;
+        Ok(painted(&host))
+    }
+
+    fn assert_label_before_count(painted: &str, id: &str, count: &str) {
+        let lines: Vec<&str> = painted.lines().collect();
+        assert!(
+            lines.iter().any(|line| *line == LABEL),
+            "no line is exactly {LABEL}: {painted}"
+        );
+        let marker = format!("tx_count {count}");
+        let before = lines.windows(2).any(|pair| {
+            pair[0] == LABEL
+                && pair[1].contains(&format!("block hash {id}"))
+                && pair[1].contains(&marker)
+                && !pair[1].contains("1,234")
+        });
+        assert!(
+            before,
+            "{LABEL} was not immediately before the count line {marker}: {painted}"
+        );
+        let row = format!("row block height 2 hash {id} tx_count {count} time 9");
+        assert!(
+            lines.iter().any(|line| *line == row),
+            "the existing count row was dropped: {painted}"
+        );
+        assert!(
+            painted.contains("merkle_root mm"),
+            "merkle root was dropped: {painted}"
+        );
+        assert!(
+            painted.contains("difficulty 1") && !painted.contains("difficulty 1.0"),
+            "difficulty left plain_number: {painted}"
+        );
+        assert!(
+            !painted.contains("1,234"),
+            "the count gained a thousands separator: {painted}"
+        );
+    }
+
+    let shown = paint_blocks(format!("[{}]", block_json("txshow", Some("17"))))
+        .unwrap_or_else(|err| panic!("tx_count 17 did not open: {err}"));
+    assert!(
+        shown.lines().any(|line| line == LABEL),
+        "no line is exactly {LABEL}: {shown}"
+    );
+    assert_label_before_count(&shown, "txshow", "17");
+    assert_eq!(
+        shown.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "{LABEL} was not once: {shown}"
+    );
+
+    let zero = paint_blocks(format!("[{}]", block_json("txzero", Some("0"))))
+        .unwrap_or_else(|err| panic!("tx_count 0 did not open: {err}"));
+    assert_label_before_count(&zero, "txzero", "0");
+    assert!(zero.contains("tx_count 0"), "count 0 was omitted: {zero}");
+
+    let wide = paint_blocks(format!("[{}]", block_json("txwide", Some("1234"))))
+        .unwrap_or_else(|err| panic!("tx_count 1234 did not open: {err}"));
+    assert_label_before_count(&wide, "txwide", "1234");
+    assert!(
+        wide.contains("tx_count 1234"),
+        "count 1234 was not the raw integer: {wide}"
+    );
+
+    let missing = paint_blocks(format!("[{}]", block_json("txmiss", None)))
+        .unwrap_or_else(|err| panic!("missing tx_count did not open: {err}"));
+    assert!(
+        !missing.lines().any(|line| line == LABEL),
+        "missing tx_count painted {LABEL}: {missing}"
+    );
+    assert!(
+        !missing.contains("txmiss"),
+        "missing tx_count kept the row: {missing}"
+    );
+    assert!(
+        !missing.contains("tx_count"),
+        "missing tx_count still painted a count: {missing}"
+    );
+
+    let null_count = paint_blocks(format!("[{}]", block_json("txnull", Some("null"))))
+        .unwrap_or_else(|err| panic!("null tx_count did not open: {err}"));
+    assert!(
+        !null_count.lines().any(|line| line == LABEL),
+        "null tx_count painted {LABEL}: {null_count}"
+    );
+    assert!(
+        !null_count.contains("txnull"),
+        "null tx_count kept the row: {null_count}"
+    );
+
+    let page_id = "txpage";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{page_id}"), block_json(page_id, Some("17"))),
+            (format!("/block/{page_id}/txs"), "[]".to_string()),
+            (format!("/block/{page_id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = page_id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {page_id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/block/{page_id}")),
+        "load did not GET /block/{page_id}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let closed = painted(&host);
+    let closed_lines: Vec<&str> = closed.lines().collect();
+    assert!(
+        closed_lines.windows(2).any(|pair| {
+            pair[0] == LABEL
+                && pair[1].contains("block hash txpage")
+                && pair[1].contains("tx_count 17")
+        }),
+        "the block page did not paint {LABEL} before tx_count 17: {closed}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let opened = painted(&host);
+    assert!(
+        opened
+            .lines()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| { pair[0] == LABEL && pair[1] == "tx_count 17" }),
+        "open details did not paint {LABEL} before the tx_count line: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "Merkle root mm"),
+        "Merkle root was dropped: {opened}"
+    );
+    assert!(
+        opened.lines().any(|line| line == "Difficulty 1"),
+        "Difficulty was dropped: {opened}"
+    );
+
+    let missing_id = "txpagemiss";
+    let (mut host, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/block/{missing_id}"), block_json(missing_id, None))]),
+    );
+    host.block.query = missing_id.to_string();
+    let err = host
+        .activate(Screen::Block)
+        .expect_err("missing tx_count must fail the block parse");
+    assert!(
+        err.to_string().contains("missing field `tx_count`"),
+        "missing tx_count was not a parse error: {err}"
+    );
+    let missing_page = painted(&host);
+    assert!(
+        !missing_page.lines().any(|line| line == LABEL),
+        "missing tx_count painted {LABEL} on the block page: {missing_page}"
+    );
+}
+
+const ALLOWED_HEADER: &str = "Allowed?";
+
+fn assert_paint_is_not_html(text: &str) {
+    for tag in ["<th", "<td", "<h2"] {
+        assert!(!text.contains(tag), "{tag} leaked into the paint: {text}");
+    }
+}
+
+fn assert_path_has_no_query_or_hash(path: &str) {
+    assert!(!path.contains('?'), "{path}");
+    assert!(!path.contains('#'), "{path}");
+    assert!(!path.contains(ALLOWED_HEADER), "{path}");
+}
+
+fn assert_allowed_header_once(rendered: &str, painted: &str) {
+    assert_eq!(
+        rendered
+            .lines()
+            .filter(|line| *line == ALLOWED_HEADER)
+            .count(),
+        1,
+        "the result did not paint {ALLOWED_HEADER} once: {rendered}"
+    );
+    assert_eq!(
+        rendered.matches(ALLOWED_HEADER).count(),
+        1,
+        "the header text was not once: {rendered}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == ALLOWED_HEADER)
+            .count(),
+        1,
+        "the painted shell did not paint {ALLOWED_HEADER} once: {painted}"
+    );
+    assert_paint_is_not_html(rendered);
+    assert_paint_is_not_html(painted);
+}
+
+fn assert_allowed_header_absent(rendered: &str, painted: &str) {
+    assert_eq!(rendered, "", "expected empty paint: {rendered}");
+    assert!(
+        !rendered.contains(ALLOWED_HEADER),
+        "{ALLOWED_HEADER} leaked into an empty result: {rendered}"
+    );
+    assert!(
+        !painted.contains(ALLOWED_HEADER),
+        "{ALLOWED_HEADER} leaked into the painted shell: {painted}"
+    );
+    assert_paint_is_not_html(rendered);
+    assert_paint_is_not_html(painted);
+}
+
+/// `POST /txs/test` result list. Returns the screen body, the painted shell,
+/// and the posted path.
+fn paint_test_transactions(body: &str) -> (String, String, String) {
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/txs/test".to_string(), body.to_string())]),
+    );
+    host.activate(Screen::TestTransactions)
+        .unwrap_or_else(|err| panic!("test transactions did not open: {err}"));
+    host.test_txs.input = "abcd".to_string();
+    host.submit()
+        .unwrap_or_else(|err| panic!("test transactions did not submit: {err}"));
+    let posts = rec.posts();
+    assert_eq!(posts.len(), 1, "{posts:?}");
+    assert_eq!(posts[0].0, "/txs/test", "{posts:?}");
+    assert_path_has_no_query_or_hash(&posts[0].0);
+    assert_path_has_no_query_or_hash(&posts[0].1);
+    let request = host.test_txs.request.as_ref().expect("posted request");
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.path, "/txs/test");
+    assert_path_has_no_query_or_hash(&request.path);
+    assert_path_has_no_query_or_hash(&request.url);
+    let path = request.path.clone();
+    assert!(rec.gets().is_empty(), "{:?}", rec.gets());
+    (host.rendered(), painted(&host), path)
+}
+
+/// Plaintext `Allowed?` on the test-transactions result, once, when a txid is present.
+///
+/// An empty array, an empty string, invalid JSON, and a parse with no txid
+/// paint nothing and do not contain the header. `allowed: false` with no
+/// reject-reason still shows the header when a txid is present. The ordinary
+/// transaction screen keeps `Inputs & Outputs` and does not show the header.
+/// The paint is not an HTML table cell or heading.
+#[test]
+fn test_transactions_paint_allowed_header() {
+    let tx = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let spend = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    let (rendered, shell, path) =
+        paint_test_transactions(&format!(r#"[{{"txid":"{tx}","allowed":true}}]"#));
+    assert_eq!(path, "/txs/test");
+    assert_allowed_header_once(&rendered, &shell);
+    assert!(
+        rendered.contains(tx),
+        "the result list hid the txid: {rendered}"
+    );
+
+    let with_witness = format!(r#"[{{"txid":"{tx}","wtxid":"wwww","allowed":true,"vsize":80}}]"#);
+    let (rendered, shell, _) = paint_test_transactions(&with_witness);
+    assert_allowed_header_once(&rendered, &shell);
+    assert!(
+        rendered.contains(&format!("test txid {tx} allowed true")),
+        "the parsed result dropped the txid row: {rendered}"
+    );
+
+    let fallback =
+        format!(r#"[{{"txid":"{tx}","allowed":true}},{{"txid":"{spend}","allowed":false}}]"#);
+    let (rendered, shell, _) = paint_test_transactions(&fallback);
+    assert_allowed_header_once(&rendered, &shell);
+    assert!(rendered.contains(tx), "{rendered}");
+    assert!(rendered.contains(spend), "{rendered}");
+
+    let rejected = format!(r#"[{{"txid":"{spend}","allowed":false}}]"#);
+    let (rendered, shell, _) = paint_test_transactions(&rejected);
+    assert_allowed_header_once(&rendered, &shell);
+    assert!(
+        rendered.contains(spend),
+        "allowed false with no reject-reason hid the txid: {rendered}"
+    );
+
+    for body in ["[]", "", "{not-json", "[{}]", r#"[{"txid":""}]"#] {
+        let (rendered, shell, path) = paint_test_transactions(body);
+        assert_eq!(path, "/txs/test");
+        assert_allowed_header_absent(&rendered, &shell);
+    }
+
+    let vin = r#"{"txid":"prev","vout":0,"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}"#;
+    let vout = r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"","value":9}"#;
+    let txid = "allowrow1";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), tx_with_parties(txid, vin, vout))]),
+    );
+    let _opened = host.open_transaction(txid);
+    let ordinary = painted(&host);
+    assert!(
+        ordinary.contains(INPUTS_OUTPUTS_HEADING),
+        "the transaction screen dropped {INPUTS_OUTPUTS_HEADING}: {ordinary}"
+    );
+    assert!(
+        ordinary.contains(&format!("tx txid {txid}"))
+            || ordinary.contains(&format!("row tx txid {txid}")),
+        "the ordinary transaction row was hidden: {ordinary}"
+    );
+    assert!(
+        !ordinary.contains(ALLOWED_HEADER),
+        "the ordinary transaction screen painted {ALLOWED_HEADER}: {ordinary}"
+    );
+    assert!(
+        !ordinary.lines().any(|line| line.contains(ALLOWED_HEADER)),
+        "the ordinary transaction row painted {ALLOWED_HEADER}: {ordinary}"
+    );
+    assert_paint_is_not_html(&ordinary);
+    for path in rec.gets() {
+        assert_path_has_no_query_or_hash(&path);
+    }
+}
+
+const ISSUED_ASSET: &str = "ac3e0ff248c5051ffd61e00155b7122e5ebc04fd397a0ecbdd4f4e4a56232926";
+const PEGGED_ASSET: &str = "6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d";
+const ISSUANCE_TX: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+const PREV_TX: &str = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef";
+const REISSUE_TOKEN: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+enum AssetNameField<'a> {
+    Omit,
+    Null,
+    Text(&'a str),
+}
+
+fn asset_json_string_field(key: &str, field: AssetNameField<'_>) -> String {
+    match field {
+        AssetNameField::Omit => String::new(),
+        AssetNameField::Null => format!(r#""{key}":null,"#),
+        AssetNameField::Text(value) => format!(r#""{key}":"{value}","#),
+    }
+}
+
+fn issued_name_document(name: AssetNameField<'_>, ticker: AssetNameField<'_>) -> String {
+    let name_field = asset_json_string_field("name", name);
+    let ticker_field = asset_json_string_field("ticker", ticker);
+    format!(
+        r#"{{"asset_id":"{ISSUED_ASSET}",{name_field}{ticker_field}"precision":2,"entity":{{"domain":"registry.example"}},"contract":null,"issuance_txin":{{"txid":"{ISSUANCE_TX}","vin":0}},"issuance_prevout":{{"txid":"{PREV_TX}","vout":1}},"reissuance_token":"{REISSUE_TOKEN}","status":{{"confirmed":true}},"chain_stats":{{"tx_count":3,"issuance_count":1,"issued_amount":5000,"burned_amount":200,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":9,"issuance_count":4,"issued_amount":999999,"burned_amount":888888,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}"#
+    )
+}
+
+fn pegged_name_document() -> String {
+    format!(
+        r#"{{"asset_id":"{PEGGED_ASSET}","chain_stats":{{"tx_count":4,"peg_in_count":2,"peg_in_amount":1000,"peg_out_count":1,"peg_out_amount":200,"burn_count":1,"burned_amount":50}},"mempool_stats":{{"tx_count":8,"peg_in_count":3,"peg_in_amount":777777,"peg_out_count":2,"peg_out_amount":666666,"burn_count":1,"burned_amount":555555}}}}"#
+    )
+}
+
+fn open_named_asset(id: &str, document: &str) -> ScreenHost<Rec> {
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), "[]".to_string()),
+            (format!("/asset/{id}"), document.to_string()),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("dashboard");
+    host.set_query(id);
+    host.reload().expect("asset");
+    assert_no_closed(&rec.gets());
+    host
+}
+
+fn assert_name_before_precision(paint: &str, name_line: &str) {
+    let name_at = paint.lines().position(|line| line == name_line);
+    let precision_at = paint.lines().position(|line| line == "Precision 2");
+    assert!(
+        name_at.is_some(),
+        "Name line absent: expected {name_line:?}\n{paint}"
+    );
+    assert!(
+        precision_at.is_some(),
+        "Precision 2 absent after {name_line:?}\n{paint}"
+    );
+    assert!(
+        name_at.unwrap() < precision_at.unwrap(),
+        "{name_line:?} at {name_at:?} is not before Precision 2 at {precision_at:?}\n{paint}"
+    );
+}
+
+fn assert_name_omitted(paint: &str) {
+    assert!(
+        !paint.lines().any(|line| line.starts_with("Name ")),
+        "a blank name still painted a Name line\n{paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Precision 2"),
+        "Precision 2 was dropped with the Name line\n{paint}"
+    );
+}
+
+/// Plaintext Name on the issued asset screen, before Precision.
+///
+/// The stored name and ticker are not HTML-escaped. A ticker that is missing,
+/// empty, or only whitespace leaves the name alone. A missing, null, empty, or
+/// whitespace name omits the row. A pegged asset has no Name row.
+#[test]
+fn asset_screen_paints_name() {
+    let named = open_named_asset(
+        ISSUED_ASSET,
+        &issued_name_document(
+            AssetNameField::Text("Test Asset"),
+            AssetNameField::Text("TEST"),
+        ),
+    );
+    let paint = painted(&named);
+    assert_name_before_precision(&paint, "Name Test Asset (TEST)");
+    assert!(
+        paint.lines().any(|line| line == "asset name Test Asset"),
+        "the asset name header was removed\n{paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "ticker TEST"),
+        "the ticker header was removed\n{paint}"
+    );
+    assert!(!paint.contains("clipboard"), "{paint}");
+    assert!(paint.contains("5000"), "{paint}");
+    assert!(
+        paint.lines().any(|line| line == "Issued amount 5000"),
+        "the issued amount was scaled or dropped\n{paint}"
+    );
+
+    let raw = open_named_asset(
+        ISSUED_ASSET,
+        &issued_name_document(AssetNameField::Text("a&b<c"), AssetNameField::Text("d>e")),
+    );
+    let paint = painted(&raw);
+    assert_name_before_precision(&paint, "Name a&b<c (d>e)");
+    assert!(!paint.contains("&amp;"), "{paint}");
+    assert!(!paint.contains("&lt;"), "{paint}");
+    assert!(!paint.contains("&gt;"), "{paint}");
+
+    for ticker in [
+        AssetNameField::Omit,
+        AssetNameField::Text(""),
+        AssetNameField::Text("   "),
+    ] {
+        let host = open_named_asset(
+            ISSUED_ASSET,
+            &issued_name_document(AssetNameField::Text("OnlyName"), ticker),
+        );
+        let paint = painted(&host);
+        assert_name_before_precision(&paint, "Name OnlyName");
+        assert!(
+            !paint.contains("OnlyName ("),
+            "a blank ticker still painted parentheses\n{paint}"
+        );
+    }
+
+    for name in [
+        AssetNameField::Omit,
+        AssetNameField::Null,
+        AssetNameField::Text(""),
+        AssetNameField::Text("   "),
+    ] {
+        let host = open_named_asset(
+            ISSUED_ASSET,
+            &issued_name_document(name, AssetNameField::Text("TEST")),
+        );
+        assert_name_omitted(&painted(&host));
+    }
+
+    let pegged = open_named_asset(PEGGED_ASSET, &pegged_name_document());
+    let paint = painted(&pegged);
+    assert!(
+        !paint.lines().any(|line| line.starts_with("Name ")),
+        "a pegged asset painted a Name line\n{paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Pegged in 1000"),
+        "Pegged in was dropped\n{paint}"
+    );
+}
+
+/// Asset page title. Angular `i18n="asset|Liquid Asset page title"` paints the
+/// plaintext line `Asset` once when `GET /asset/:id` is shown.
+///
+/// The line is the five letters Asset. It is not the registry column `Asset ID`,
+/// not the `asset id` hex row, and not the asset-page line
+/// `Name Test Asset (TEST)`. A pegged asset has the title and no Name row.
+/// The request path has no query string.
+#[test]
+fn asset_screen_paints_asset_title() {
+    const LABEL: &str = "Asset";
+    const NAME_LINE: &str = "Name Test Asset (TEST)";
+    let issued_row = format!("asset id {ISSUED_ASSET}");
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), "[]".to_string()),
+            (
+                format!("/asset/{ISSUED_ASSET}"),
+                issued_name_document(
+                    AssetNameField::Text("Test Asset"),
+                    AssetNameField::Text("TEST"),
+                ),
+            ),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("dashboard");
+    host.set_query(ISSUED_ASSET);
+    host.reload().expect("issued asset");
+    let paths = rec.gets();
+    let asset_path = format!("/asset/{ISSUED_ASSET}");
+    assert!(
+        paths.iter().any(|path| path == &asset_path),
+        "the asset document was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    let title_at = paint.lines().position(|line| line == LABEL);
+    let name_at = paint.lines().position(|line| line == NAME_LINE);
+    let id_at = paint.lines().position(|line| line == issued_row);
+    assert!(
+        title_at.is_some(),
+        "the asset title was not painted\n{paint}"
+    );
+    assert!(name_at.is_some(), "the Name line was dropped\n{paint}");
+    assert!(id_at.is_some(), "the asset id hex row was dropped\n{paint}");
+    assert!(
+        title_at.unwrap() < name_at.unwrap(),
+        "Asset at {title_at:?} is not before {NAME_LINE} at {name_at:?}\n{paint}"
+    );
+    assert!(
+        title_at.unwrap() < id_at.unwrap(),
+        "Asset at {title_at:?} is not before {issued_row} at {id_at:?}\n{paint}"
+    );
+    assert_ne!(issued_row, LABEL);
+    assert_ne!(NAME_LINE, LABEL);
+    assert!(
+        paint
+            .lines()
+            .filter(|line| *line == LABEL)
+            .all(|line| line != "Asset ID" && line != NAME_LINE && line != issued_row),
+        "Asset ID, the Name line, or the hex row was counted as the title: {paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the asset title was missing or repeated: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Precision 2"),
+        "Precision 2 was dropped\n{paint}"
+    );
+    assert_paint_is_not_html(&paint);
+
+    let pegged_row = format!("asset id {PEGGED_ASSET}");
+    let pegged = open_named_asset(PEGGED_ASSET, &pegged_name_document());
+    let paint = painted(&pegged);
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "a pegged asset did not paint the title once: {paint}"
+    );
+    assert!(
+        !paint.lines().any(|line| line.starts_with("Name ")),
+        "a pegged asset painted a Name line\n{paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == pegged_row),
+        "the pegged asset id was dropped\n{paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Pegged in 1000"),
+        "Pegged in was dropped\n{paint}"
+    );
+    let title_at = paint.lines().position(|line| line == LABEL).unwrap();
+    let id_at = paint.lines().position(|line| line == pegged_row).unwrap();
+    assert!(
+        title_at < id_at,
+        "Asset at {title_at} is not before {pegged_row} at {id_at}\n{paint}"
+    );
+}
+
+/// Plaintext broadcast form heading. One line, not the button and not HTML.
+#[test]
+fn broadcast_screen_paints_broadcast_transaction() {
+    const LABEL: &str = "Broadcast Transaction";
+
+    let (mut host, rec) = host_with(Network::Mainnet, BTreeMap::new());
+    host.activate(Screen::Broadcast).expect("broadcast");
+    let idle = painted(&host);
+    assert_eq!(
+        idle.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the broadcast heading was missing or repeated: {idle}"
+    );
+    assert!(
+        !idle.contains('<'),
+        "the broadcast screen painted HTML: {idle}"
+    );
+    for path in rec.gets() {
+        assert_path_has_no_query_or_hash(&path);
+    }
+    for (path, _body) in rec.posts() {
+        assert_path_has_no_query_or_hash(&path);
+    }
+
+    let sentence = "Transaction not found";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/tx".to_string(), sentence.to_string())]),
+    );
+    host.activate(Screen::Broadcast).expect("broadcast");
+    host.broadcast.raw_tx = "abcd".to_string();
+    host.submit().expect("post tx");
+    assert_eq!(rec.posts()[0].0, "/tx");
+    assert_path_has_no_query_or_hash(&rec.posts()[0].0);
+    for path in rec.gets() {
+        assert_path_has_no_query_or_hash(&path);
+    }
+    let failed = painted(&host);
+    assert!(
+        failed.contains(sentence),
+        "the indexer sentence was dropped: {failed}"
+    );
+    assert!(
+        !failed.contains("broadcast txid"),
+        "failed POST /tx was painted as a txid: {failed}"
+    );
+    assert!(
+        !failed.contains("/tx/"),
+        "failed POST /tx was painted as a link: {failed}"
+    );
+    assert!(
+        !failed.contains('<'),
+        "the broadcast screen painted HTML: {failed}"
+    );
+    assert_eq!(
+        failed.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the broadcast heading was missing or repeated after failure: {failed}"
+    );
+}
+
+/// Assets list column header. Angular `i18n="Asset ticker header"` paints the
+/// plaintext word `Ticker` once when `GET /assets/registry` is shown.
+///
+/// The line is the six letters Ticker. It is not the parenthetical on an
+/// issued asset Name line (`Name Test Asset (TEST)`), and it is not escaped.
+/// The request path has no query string.
+#[test]
+fn assets_registry_paints_ticker_column_header() {
+    const LABEL: &str = "Ticker";
+    const PARENTHETICAL: &str = "Name Test Asset (TEST)";
+    let asset = "12".repeat(32);
+    let registry = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), registry),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("assets registry");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry"),
+        "the assets registry was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    assert!(
+        paint.contains("Test Asset"),
+        "the assets registry did not show the issued asset: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "TEST"),
+        "the ticker value was not painted, so the registry row is missing: {paint}"
+    );
+    assert!(
+        paint
+            .lines()
+            .filter(|line| *line == LABEL)
+            .all(|line| line != PARENTHETICAL && !line.contains("(TEST)")),
+        "the Name line parenthetical was counted as the column header: {paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the assets registry column header {LABEL} was missing or repeated: {paint}"
+    );
+    assert_eq!(
+        paint.matches(LABEL).count(),
+        1,
+        "the column header text {LABEL} was not once: {paint}"
+    );
+    assert_paint_is_not_html(&paint);
+    assert!(!paint.contains("&amp;"), "{paint}");
+    assert!(!paint.contains("&#"), "{paint}");
+}
+
+/// Assets list column header. Angular `i18n="Asset Issuer Domain header"` paints
+/// the plaintext line `Issuer domain` once when `GET /assets/registry` is shown.
+///
+/// The line is those two words. It is not the parenthetical on an issued asset
+/// Name line (`Name Test Asset (TEST)`), and it is not the Ticker header or the
+/// ticker value. The request path has no query string.
+#[test]
+fn assets_registry_paints_issuer_domain_column_header() {
+    const LABEL: &str = "Issuer domain";
+    const PARENTHETICAL: &str = "Name Test Asset (TEST)";
+    let asset = "12".repeat(32);
+    let registry = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), registry),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("assets registry");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry"),
+        "the assets registry was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    assert!(
+        paint.contains("Test Asset"),
+        "the assets registry did not show the issued asset: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "TEST"),
+        "the ticker value was not painted, so the registry row is missing: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Ticker"),
+        "the Ticker column header was dropped: {paint}"
+    );
+    assert!(
+        paint
+            .lines()
+            .filter(|line| *line == LABEL)
+            .all(|line| line != PARENTHETICAL && !line.contains("(TEST)")),
+        "the Name line parenthetical was counted as the column header: {paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the assets registry column header {LABEL} was missing or repeated: {paint}"
+    );
+    assert_eq!(
+        paint.matches(LABEL).count(),
+        1,
+        "the column header text {LABEL} was not once: {paint}"
+    );
+    assert_paint_is_not_html(&paint);
+    assert!(!paint.contains("&amp;"), "{paint}");
+    assert!(!paint.contains("&#"), "{paint}");
+}
+
+/// Assets list column header. Angular `i18n="Asset ID header"` paints the
+/// plaintext line `Asset ID` once when `GET /assets/registry` is shown.
+///
+/// The line is those two words. It is not the `asset id` hex row, not the
+/// parenthetical on an issued asset Name line (`Name Test Asset (TEST)`),
+/// and it is not the Ticker or Issuer domain header. The issued name and
+/// the ticker value stay. The request path has no query string.
+#[test]
+fn assets_registry_paints_asset_id_column_header() {
+    const LABEL: &str = "Asset ID";
+    const PARENTHETICAL: &str = "Name Test Asset (TEST)";
+    let asset = "12".repeat(32);
+    let hex_row = format!("asset id {asset}");
+    let registry = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), registry),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("assets registry");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry"),
+        "the assets registry was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    assert!(
+        paint.lines().any(|line| line == "Test Asset"),
+        "the issued name was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "TEST"),
+        "the ticker value was not painted, so the registry row is missing: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Ticker"),
+        "the Ticker column header was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Issuer domain"),
+        "the Issuer domain column header was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == hex_row),
+        "the asset id hex row was dropped: {paint}"
+    );
+    assert_ne!(
+        hex_row, LABEL,
+        "the asset id hex row was treated as the column header"
+    );
+    assert!(
+        paint
+            .lines()
+            .filter(|line| *line == LABEL)
+            .all(|line| line != hex_row && line != PARENTHETICAL && !line.contains("(TEST)")),
+        "the asset id hex row or the Name line parenthetical was counted as the column header: {paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the assets registry column header {LABEL} was missing or repeated: {paint}"
+    );
+    assert_eq!(
+        paint.matches(LABEL).count(),
+        1,
+        "the column header text {LABEL} was not once: {paint}"
+    );
+    assert_paint_is_not_html(&paint);
+    assert!(!paint.contains("&amp;"), "{paint}");
+    assert!(!paint.contains("&#"), "{paint}");
+}
+
+/// Assets list column header. Angular `i18n="Asset name header"` paints the
+/// plaintext line `Name` once when `GET /assets/registry` is shown.
+///
+/// The line is the four letters Name. It is not the asset-page line
+/// `Name Test Asset (TEST)`, and it is not a loading skeleton. A substring
+/// check is not this test, because that asset-page line already contains the
+/// word Name. Ticker, Issuer domain, and Asset ID stay after Name. The
+/// `asset id` hex row stays. The request path has no query string.
+#[test]
+fn assets_registry_paints_name_column_header() {
+    const LABEL: &str = "Name";
+    const PARENTHETICAL: &str = "Name Test Asset (TEST)";
+    let asset = "12".repeat(32);
+    let hex_row = format!("asset id {asset}");
+    let registry = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), registry),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("assets registry");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry"),
+        "the assets registry was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    assert!(
+        paint.lines().any(|line| line == "Test Asset"),
+        "the issued name was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "TEST"),
+        "the ticker value was not painted, so the registry row is missing: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Ticker"),
+        "the Ticker column header was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Issuer domain"),
+        "the Issuer domain column header was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "Asset ID"),
+        "the Asset ID column header was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == hex_row),
+        "the asset id hex row was dropped: {paint}"
+    );
+    assert_ne!(
+        hex_row, LABEL,
+        "the asset id hex row was treated as the column header"
+    );
+    assert_ne!(
+        PARENTHETICAL, LABEL,
+        "the asset-page parenthetical was treated as the column header"
+    );
+    assert!(
+        paint
+            .lines()
+            .filter(|line| *line == LABEL)
+            .all(|line| line != PARENTHETICAL && !line.contains("(TEST)")),
+        "the Name line parenthetical was counted as the column header: {paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the assets registry column header {LABEL} was missing or repeated: {paint}"
+    );
+    let name_at = paint.lines().position(|line| line == "Name");
+    let ticker_at = paint.lines().position(|line| line == "Ticker");
+    let issuer_at = paint.lines().position(|line| line == "Issuer domain");
+    let asset_id_at = paint.lines().position(|line| line == "Asset ID");
+    assert!(
+        name_at < ticker_at && ticker_at < issuer_at && issuer_at < asset_id_at,
+        "header order was not Name, Ticker, Issuer domain, Asset ID: name {name_at:?} ticker {ticker_at:?} issuer {issuer_at:?} asset id {asset_id_at:?}\n{paint}"
+    );
+    assert_paint_is_not_html(&paint);
+    assert!(!paint.contains("&amp;"), "{paint}");
+    assert!(!paint.contains("&#"), "{paint}");
+}
+
+/// Recent transactions column header from `GET /mempool/recent`.
+///
+/// One exact line `vSize` when that route parses to at least one row. The
+/// cell stays the raw integer. An empty list, a blank body, and invalid JSON
+/// omit the line. Two rows print it once. The blocks list does not gain
+/// `vSize`, `Size`, or `Weight`.
+#[test]
+fn recent_transactions_paint_vsize_header() {
+    const LABEL: &str = "vSize";
+
+    fn summary() -> String {
+        r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string()
+    }
+
+    fn paint_recent(body: &str) -> (Result<(), ClientError>, String) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/mempool".to_string(), summary()),
+                ("/mempool/recent".to_string(), body.to_string()),
+            ]),
+        );
+        let opened = host.activate(Screen::Mempool);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == "/mempool/recent"),
+            "did not GET /mempool/recent: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (opened, painted(&host))
+    }
+
+    fn assert_header_once_before(painted: &str, txid: &str) {
+        assert_eq!(
+            painted.lines().filter(|line| *line == LABEL).count(),
+            1,
+            "{LABEL} was not one exact line: {painted}"
+        );
+        assert_eq!(
+            painted.matches(LABEL).count(),
+            1,
+            "{LABEL} was not once: {painted}"
+        );
+        let lines: Vec<&str> = painted.lines().collect();
+        let header_at = lines.iter().position(|line| *line == LABEL);
+        let row_at = lines
+            .iter()
+            .position(|line| line.contains(&format!("recent txid {txid}")));
+        assert!(
+            header_at.is_some() && row_at.is_some() && header_at < row_at,
+            "{LABEL} was not before recent txid {txid}: {painted}"
+        );
+    }
+
+    fn assert_raw_cell(painted: &str, txid: &str, vsize: u32) {
+        let marker = format!("vsize {vsize}");
+        let row = painted
+            .lines()
+            .find(|line| {
+                line.starts_with("recent txid ") && line.contains(txid) && line.contains(&marker)
+            })
+            .unwrap_or_else(|| panic!("missing raw cell {marker} for {txid}: {painted}"));
+        assert!(
+            !row.contains("vB") && !row.contains("kvB") && !row.contains(&format!("{vsize}.00")),
+            "the cell did not stay the raw integer: {row}"
+        );
+        assert!(
+            !row.contains(&format!("{vsize} vB")) && !row.contains(&format!("1,{vsize}")),
+            "the cell gained a unit or a thousands separator: {row}"
+        );
+    }
+
+    fn assert_header_absent(painted: &str, why: &str) {
+        assert!(
+            !painted.lines().any(|line| line == LABEL),
+            "{why} painted {LABEL}: {painted}"
+        );
+        assert!(
+            !painted.contains(LABEL),
+            "{why} contains {LABEL}: {painted}"
+        );
+    }
+
+    let one = r#"[{"txid":"recent-vsize-header","fee":10,"vsize":141,"value":1}]"#;
+    let (opened, text) = paint_recent(one);
+    opened.unwrap_or_else(|err| panic!("vsize 141 did not open: {err}"));
+    assert_header_once_before(&text, "recent-vsize-header");
+    assert_raw_cell(&text, "recent-vsize-header", 141);
+    assert!(!text.contains("vB"), "{text}");
+
+    let zero = r#"[{"txid":"recent-zero-vsize","fee":10,"vsize":0,"value":1}]"#;
+    let (opened, text) = paint_recent(zero);
+    opened.unwrap_or_else(|err| panic!("vsize 0 did not open: {err}"));
+    assert_header_once_before(&text, "recent-zero-vsize");
+    assert_raw_cell(&text, "recent-zero-vsize", 0);
+    assert!(
+        text.lines()
+            .any(|line| line == "recent txid recent-zero-vsize fee 10 vsize 0 value 1"),
+        "vsize 0 did not stay the raw integer: {text}"
+    );
+
+    let two = r#"[{"txid":"recent-one","fee":10,"vsize":141,"value":1},{"txid":"recent-two","fee":20,"vsize":1000,"value":2}]"#;
+    let (opened, text) = paint_recent(two);
+    opened.unwrap_or_else(|err| panic!("two rows did not open: {err}"));
+    assert_header_once_before(&text, "recent-one");
+    assert_raw_cell(&text, "recent-one", 141);
+    assert_raw_cell(&text, "recent-two", 1000);
+    assert!(
+        !text.contains("1,000") && !text.contains("vB") && !text.contains("kvB"),
+        "two rows did not keep the raw integers: {text}"
+    );
+
+    let (opened, text) = paint_recent("[]");
+    opened.unwrap_or_else(|err| panic!("empty list did not open: {err}"));
+    assert_header_absent(&text, "empty list");
+    assert!(
+        text.contains("recent:"),
+        "empty list dropped the recent marker: {text}"
+    );
+
+    let (opened, text) = paint_recent("");
+    assert!(opened.is_err(), "blank body was treated as rows: {text}");
+    assert_header_absent(&text, "blank body");
+
+    let (opened, text) = paint_recent("not-json");
+    assert!(opened.is_err(), "invalid JSON was treated as rows: {text}");
+    assert_header_absent(&text, "invalid JSON");
+
+    let (opened, text) = paint_recent("[{}]");
+    assert!(
+        opened.is_err(),
+        "a row missing vsize was treated as rows: {text}"
+    );
+    assert_header_absent(&text, "invalid row");
+
+    let block_id = "blkvs1";
+    let blocks_body = format!(
+        r#"[{{"id":"{block_id}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","mediantime":1,"difficulty":1.0}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks_body)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let blocks = painted(&host);
+    assert!(
+        !blocks.contains("vSize"),
+        "blocks list painted vSize: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Size"),
+        "blocks list painted Size: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Weight"),
+        "blocks list painted Weight: {blocks}"
+    );
+    assert!(blocks.contains("TXs"), "TXs was dropped: {blocks}");
+    assert!(
+        blocks.contains(block_id) && blocks.contains("merkle_root mm"),
+        "the block row was dropped: {blocks}"
+    );
+    assert!(
+        blocks.contains("difficulty 1") && !blocks.contains("difficulty 1.0"),
+        "difficulty left plain_number: {blocks}"
+    );
+}
+
+/// Recent transactions amount column header from `GET /mempool/recent`.
+///
+/// One exact line `Amount` when that route parses to at least one row. The
+/// value cell stays the raw integer, including zero. An empty list, a blank
+/// body, and invalid JSON omit the line. Two rows print it once. The blocks
+/// list does not gain `Amount`, `Size`, or `Weight`.
+#[test]
+fn recent_transactions_paint_amount_header() {
+    const LABEL: &str = "Amount";
+
+    fn summary() -> String {
+        r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string()
+    }
+
+    fn paint_recent(body: &str) -> (Result<(), ClientError>, String) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/mempool".to_string(), summary()),
+                ("/mempool/recent".to_string(), body.to_string()),
+            ]),
+        );
+        let opened = host.activate(Screen::Mempool);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == "/mempool/recent"),
+            "did not GET /mempool/recent: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (opened, painted(&host))
+    }
+
+    fn assert_header_once_before(painted: &str, txid: &str) {
+        assert_eq!(
+            painted.lines().filter(|line| *line == LABEL).count(),
+            1,
+            "{LABEL} was not one exact line: {painted}"
+        );
+        assert_eq!(
+            painted.matches(LABEL).count(),
+            1,
+            "{LABEL} was not once: {painted}"
+        );
+        let lines: Vec<&str> = painted.lines().collect();
+        let header_at = lines.iter().position(|line| *line == LABEL);
+        let vsize_at = lines.iter().position(|line| *line == "vSize");
+        let row_at = lines
+            .iter()
+            .position(|line| line.contains(&format!("recent txid {txid}")));
+        assert!(
+            header_at.is_some()
+                && vsize_at.is_some()
+                && row_at.is_some()
+                && header_at < vsize_at
+                && vsize_at < row_at,
+            "{LABEL} was not before vSize and recent txid {txid}: {painted}"
+        );
+    }
+
+    fn value_token(row: &str, value: u64) -> bool {
+        let expected = value.to_string();
+        row.split_whitespace()
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair == ["value", expected.as_str()])
+    }
+
+    fn assert_raw_value(painted: &str, txid: &str, value: u64) {
+        let row = painted
+            .lines()
+            .find(|line| line.starts_with("recent txid ") && line.contains(txid))
+            .unwrap_or_else(|| panic!("missing recent row for {txid}: {painted}"));
+        assert!(
+            value_token(row, value),
+            "missing raw value {value} for {txid}: {row}"
+        );
+        assert!(
+            !row.contains(',')
+                && !row.contains('$')
+                && !row.contains('€')
+                && !row.contains("BTC")
+                && !row.contains("vB")
+                && !row.contains(&format!("{value}.00")),
+            "the value cell did not stay the raw integer: {row}"
+        );
+        assert!(
+            !painted.contains("Fiat price last updated"),
+            "the amount header was treated as the fiat column: {painted}"
+        );
+    }
+
+    fn assert_header_absent(painted: &str, why: &str) {
+        assert!(
+            !painted.lines().any(|line| line == LABEL),
+            "{why} painted {LABEL}: {painted}"
+        );
+        assert!(
+            !painted.contains(LABEL),
+            "{why} contains {LABEL}: {painted}"
+        );
+    }
+
+    let one = r#"[{"txid":"recent-amount-header","fee":10,"vsize":141,"value":1000}]"#;
+    let (opened, text) = paint_recent(one);
+    opened.unwrap_or_else(|err| panic!("value 1000 did not open: {err}"));
+    assert_header_once_before(&text, "recent-amount-header");
+    assert_raw_value(&text, "recent-amount-header", 1000);
+    assert!(
+        !text.contains("1,000") && !text.contains('$') && !text.contains("BTC"),
+        "value 1000 did not stay the raw integer: {text}"
+    );
+
+    let zero = r#"[{"txid":"recent-zero-amount","fee":10,"vsize":0,"value":0}]"#;
+    let (opened, text) = paint_recent(zero);
+    opened.unwrap_or_else(|err| panic!("value 0 did not open: {err}"));
+    assert_header_once_before(&text, "recent-zero-amount");
+    assert_raw_value(&text, "recent-zero-amount", 0);
+    assert!(
+        text.lines()
+            .any(|line| { line == "recent txid recent-zero-amount fee 10 vsize 0 value 0" }),
+        "value 0 did not stay the raw integer: {text}"
+    );
+
+    let two = r#"[{"txid":"recent-amt-one","fee":10,"vsize":141,"value":1},{"txid":"recent-amt-two","fee":20,"vsize":1000,"value":2}]"#;
+    let (opened, text) = paint_recent(two);
+    opened.unwrap_or_else(|err| panic!("two rows did not open: {err}"));
+    assert_header_once_before(&text, "recent-amt-one");
+    assert_raw_value(&text, "recent-amt-one", 1);
+    assert_raw_value(&text, "recent-amt-two", 2);
+    assert!(
+        !text.contains("1,000") && !text.contains('$') && !text.contains("BTC"),
+        "two rows did not keep the raw integers: {text}"
+    );
+
+    let (opened, text) = paint_recent("[]");
+    opened.unwrap_or_else(|err| panic!("empty list did not open: {err}"));
+    assert_header_absent(&text, "empty list");
+    assert!(
+        text.contains("recent:"),
+        "empty list dropped the recent marker: {text}"
+    );
+
+    let (opened, text) = paint_recent("");
+    assert!(opened.is_err(), "blank body was treated as rows: {text}");
+    assert_header_absent(&text, "blank body");
+
+    let (opened, text) = paint_recent("not-json");
+    assert!(opened.is_err(), "invalid JSON was treated as rows: {text}");
+    assert_header_absent(&text, "invalid JSON");
+
+    let (opened, text) = paint_recent("[{}]");
+    assert!(
+        opened.is_err(),
+        "a row missing value was treated as rows: {text}"
+    );
+    assert_header_absent(&text, "invalid row");
+
+    let block_id = "blkamt";
+    let blocks_body = format!(
+        r#"[{{"id":"{block_id}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","mediantime":1,"difficulty":1.0}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks_body)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let blocks = painted(&host);
+    assert!(
+        !blocks.contains("Amount"),
+        "blocks list painted Amount: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Size"),
+        "blocks list painted Size: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Weight"),
+        "blocks list painted Weight: {blocks}"
+    );
+    assert!(blocks.contains("TXs"), "TXs was dropped: {blocks}");
+    assert!(
+        blocks.contains(block_id) && blocks.contains("merkle_root mm"),
+        "the block row was dropped: {blocks}"
+    );
+    assert!(
+        blocks.contains("difficulty 1") && !blocks.contains("difficulty 1.0"),
+        "difficulty left plain_number: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Fiat price last updated"),
+        "blocks list painted the fiat column: {blocks}"
+    );
+}
+
+/// Recent transactions txid column header from `GET /mempool/recent`.
+///
+/// The Angular header cell is `TXID`. One exact line `TXID` when that route
+/// parses to at least one row, before `Amount` and `vSize`. The txid cell stays
+/// `recent txid`. An empty list, a blank body, and invalid JSON omit the line.
+/// Two rows print it once. The blocks list does not gain `TXID`, `Amount`,
+/// `vSize`, `Size`, or `Weight`.
+#[test]
+fn recent_transactions_paint_txid_header() {
+    const LABEL: &str = "TXID";
+
+    fn summary() -> String {
+        r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string()
+    }
+
+    fn paint_recent(body: &str) -> (Result<(), ClientError>, String) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/mempool".to_string(), summary()),
+                ("/mempool/recent".to_string(), body.to_string()),
+            ]),
+        );
+        let opened = host.activate(Screen::Mempool);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == "/mempool/recent"),
+            "did not GET /mempool/recent: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (opened, painted(&host))
+    }
+
+    fn assert_header_once_before(painted: &str, txid: &str) {
+        assert_eq!(
+            painted.lines().filter(|line| *line == LABEL).count(),
+            1,
+            "{LABEL} was not one exact line: {painted}"
+        );
+        assert_eq!(
+            painted.matches(LABEL).count(),
+            1,
+            "{LABEL} was not once: {painted}"
+        );
+        let lines: Vec<&str> = painted.lines().collect();
+        let header_at = lines.iter().position(|line| *line == LABEL);
+        let amount_at = lines.iter().position(|line| *line == "Amount");
+        let vsize_at = lines.iter().position(|line| *line == "vSize");
+        let row_at = lines
+            .iter()
+            .position(|line| line.contains(&format!("recent txid {txid}")));
+        assert!(
+            header_at.is_some()
+                && amount_at.is_some()
+                && vsize_at.is_some()
+                && row_at.is_some()
+                && header_at < amount_at
+                && amount_at < vsize_at
+                && vsize_at < row_at,
+            "{LABEL} was not before Amount, vSize, and recent txid {txid}: {painted}"
+        );
+    }
+
+    fn assert_raw_txid(painted: &str, txid: &str, fee: u64, vsize: u32, value: u64) {
+        let row = painted
+            .lines()
+            .find(|line| line.starts_with("recent txid ") && line.contains(txid))
+            .unwrap_or_else(|| panic!("missing recent txid cell for {txid}: {painted}"));
+        assert!(
+            row.split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["txid", txid]),
+            "the txid cell was not the raw id: {row}"
+        );
+        assert!(
+            row.contains(&format!("fee {fee}")) && row.contains(&format!("vsize {vsize}")),
+            "the existing cell lost fee or vsize: {row}"
+        );
+        let value_text = value.to_string();
+        assert!(
+            row.split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["value", value_text.as_str()]),
+            "the existing cell lost the raw value: {row}"
+        );
+        assert!(
+            !painted.contains('$')
+                && !painted.contains('€')
+                && !painted.contains("BTC")
+                && !painted.contains("Fiat price last updated"),
+            "the txid header was treated as a fiat amount: {painted}"
+        );
+    }
+
+    fn assert_header_absent(painted: &str, why: &str) {
+        assert!(
+            !painted.lines().any(|line| line == LABEL),
+            "{why} painted {LABEL}: {painted}"
+        );
+        assert!(
+            !painted.contains(LABEL),
+            "{why} contains {LABEL}: {painted}"
+        );
+    }
+
+    let one = r#"[{"txid":"recent-txid-header","fee":10,"vsize":141,"value":1000}]"#;
+    let (opened, text) = paint_recent(one);
+    opened.unwrap_or_else(|err| panic!("txid header row did not open: {err}"));
+    assert_header_once_before(&text, "recent-txid-header");
+    assert_raw_txid(&text, "recent-txid-header", 10, 141, 1000);
+
+    let two = r#"[{"txid":"recent-txid-one","fee":10,"vsize":141,"value":1},{"txid":"recent-txid-two","fee":20,"vsize":1000,"value":2}]"#;
+    let (opened, text) = paint_recent(two);
+    opened.unwrap_or_else(|err| panic!("two rows did not open: {err}"));
+    assert_header_once_before(&text, "recent-txid-one");
+    assert_raw_txid(&text, "recent-txid-one", 10, 141, 1);
+    assert_raw_txid(&text, "recent-txid-two", 20, 1000, 2);
+
+    let (opened, text) = paint_recent("[]");
+    opened.unwrap_or_else(|err| panic!("empty list did not open: {err}"));
+    assert_header_absent(&text, "empty list");
+    assert!(
+        text.contains("recent:"),
+        "empty list dropped the recent marker: {text}"
+    );
+
+    let (opened, text) = paint_recent("");
+    assert!(opened.is_err(), "blank body was treated as rows: {text}");
+    assert_header_absent(&text, "blank body");
+
+    let (opened, text) = paint_recent("not-json");
+    assert!(opened.is_err(), "invalid JSON was treated as rows: {text}");
+    assert_header_absent(&text, "invalid JSON");
+
+    let (opened, text) = paint_recent("[{}]");
+    assert!(
+        opened.is_err(),
+        "a row missing txid was treated as rows: {text}"
+    );
+    assert_header_absent(&text, "invalid row");
+
+    let block_id = "blktxid";
+    let blocks_body = format!(
+        r#"[{{"id":"{block_id}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","mediantime":1,"difficulty":1.0}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks_body)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let blocks = painted(&host);
+    assert!(
+        !blocks.contains("TXID"),
+        "blocks list painted TXID: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Amount"),
+        "blocks list painted Amount: {blocks}"
+    );
+    assert!(
+        !blocks.contains("vSize"),
+        "blocks list painted vSize: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Size"),
+        "blocks list painted Size: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Weight"),
+        "blocks list painted Weight: {blocks}"
+    );
+    assert!(blocks.contains("TXs"), "TXs was dropped: {blocks}");
+    assert!(
+        blocks.contains(block_id) && blocks.contains("merkle_root mm"),
+        "the block row was dropped: {blocks}"
+    );
+    assert!(
+        blocks.contains("difficulty 1") && !blocks.contains("difficulty 1.0"),
+        "difficulty left plain_number: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Fiat price last updated"),
+        "blocks list painted the fiat column: {blocks}"
+    );
+}
+
+/// Recent transactions fee column header from `GET /mempool/recent`.
+///
+/// The Angular header cell is `Fee`. One exact line `Fee` when that route
+/// parses to at least one row, after `TXID`, `Amount`, and `vSize`. The fee
+/// cell stays the raw integer. An empty list, a blank body, and invalid JSON
+/// omit the line. Two rows print it once. The blocks list does not gain
+/// `Fee`, `TXID`, `Amount`, `vSize`, `Size`, or `Weight`. This is not a
+/// loading skeleton.
+#[test]
+fn recent_transactions_paint_fee_header() {
+    const LABEL: &str = "Fee";
+
+    fn summary() -> String {
+        r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string()
+    }
+
+    fn paint_recent(body: &str) -> (Result<(), ClientError>, String) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                ("/mempool".to_string(), summary()),
+                ("/mempool/recent".to_string(), body.to_string()),
+            ]),
+        );
+        let opened = host.activate(Screen::Mempool);
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == "/mempool/recent"),
+            "did not GET /mempool/recent: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (opened, painted(&host))
+    }
+
+    fn assert_header_once_before(painted: &str, txid: &str) {
+        assert_eq!(
+            painted.lines().filter(|line| *line == LABEL).count(),
+            1,
+            "{LABEL} was not one exact line: {painted}"
+        );
+        assert_eq!(
+            painted.matches(LABEL).count(),
+            1,
+            "{LABEL} was not once: {painted}"
+        );
+        let lines: Vec<&str> = painted.lines().collect();
+        let txid_at = lines.iter().position(|line| *line == "TXID");
+        let amount_at = lines.iter().position(|line| *line == "Amount");
+        let vsize_at = lines.iter().position(|line| *line == "vSize");
+        let header_at = lines.iter().position(|line| *line == LABEL);
+        let row_at = lines
+            .iter()
+            .position(|line| line.contains(&format!("recent txid {txid}")));
+        assert!(
+            txid_at.is_some()
+                && amount_at.is_some()
+                && vsize_at.is_some()
+                && header_at.is_some()
+                && row_at.is_some()
+                && txid_at < amount_at
+                && amount_at < vsize_at
+                && vsize_at < header_at
+                && header_at < row_at,
+            "{LABEL} was not after vSize and before recent txid {txid}: {painted}"
+        );
+        for kept in ["TXID", "Amount", "vSize"] {
+            assert_eq!(
+                painted.lines().filter(|line| *line == kept).count(),
+                1,
+                "{kept} was dropped or repeated: {painted}"
+            );
+        }
+        assert!(
+            !painted.contains("skeleton"),
+            "the fee header painted a loading skeleton: {painted}"
+        );
+    }
+
+    fn assert_raw_fee(painted: &str, txid: &str, fee: u64, vsize: u32, value: u64) {
+        let row = painted
+            .lines()
+            .find(|line| line.starts_with("recent txid ") && line.contains(txid))
+            .unwrap_or_else(|| panic!("missing recent fee cell for {txid}: {painted}"));
+        let fee_text = fee.to_string();
+        assert!(
+            row.split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["fee", fee_text.as_str()]),
+            "the fee cell was not the raw integer {fee}: {row}"
+        );
+        assert!(
+            row.contains(&format!("vsize {vsize}")),
+            "the existing cell lost vsize: {row}"
+        );
+        let value_text = value.to_string();
+        assert!(
+            row.split_whitespace()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["value", value_text.as_str()]),
+            "the existing cell lost the raw value: {row}"
+        );
+        assert!(
+            !row.contains(',')
+                && !row.contains('$')
+                && !row.contains('€')
+                && !row.contains("BTC")
+                && !row.contains("sat/vB")
+                && !row.contains("sats")
+                && !row.contains(&format!("{fee}.00")),
+            "the fee cell did not stay the raw integer: {row}"
+        );
+    }
+
+    fn assert_header_absent(painted: &str, why: &str) {
+        assert!(
+            !painted.lines().any(|line| line == LABEL),
+            "{why} painted {LABEL}: {painted}"
+        );
+        assert!(
+            !painted.contains(LABEL),
+            "{why} contains {LABEL}: {painted}"
+        );
+        assert!(
+            !painted.contains("skeleton"),
+            "{why} painted a loading skeleton: {painted}"
+        );
+    }
+
+    let one = r#"[{"txid":"recent-fee-header","fee":10,"vsize":141,"value":1000}]"#;
+    let (opened, text) = paint_recent(one);
+    opened.unwrap_or_else(|err| panic!("fee 10 did not open: {err}"));
+    assert_header_once_before(&text, "recent-fee-header");
+    assert_raw_fee(&text, "recent-fee-header", 10, 141, 1000);
+
+    let zero = r#"[{"txid":"recent-zero-fee","fee":0,"vsize":0,"value":1}]"#;
+    let (opened, text) = paint_recent(zero);
+    opened.unwrap_or_else(|err| panic!("fee 0 did not open: {err}"));
+    assert_header_once_before(&text, "recent-zero-fee");
+    assert_raw_fee(&text, "recent-zero-fee", 0, 0, 1);
+    assert!(
+        text.lines()
+            .any(|line| line == "recent txid recent-zero-fee fee 0 vsize 0 value 1"),
+        "fee 0 did not stay the raw integer: {text}"
+    );
+
+    let two = r#"[{"txid":"recent-fee-one","fee":10,"vsize":141,"value":1},{"txid":"recent-fee-two","fee":1500,"vsize":1000,"value":2}]"#;
+    let (opened, text) = paint_recent(two);
+    opened.unwrap_or_else(|err| panic!("two rows did not open: {err}"));
+    assert_header_once_before(&text, "recent-fee-one");
+    assert_raw_fee(&text, "recent-fee-one", 10, 141, 1);
+    assert_raw_fee(&text, "recent-fee-two", 1500, 1000, 2);
+    assert!(
+        !text.contains("1,500") && !text.contains("sat/vB") && !text.contains('$'),
+        "two rows did not keep the raw fee integers: {text}"
+    );
+
+    let (opened, text) = paint_recent("[]");
+    opened.unwrap_or_else(|err| panic!("empty list did not open: {err}"));
+    assert_header_absent(&text, "empty list");
+    assert!(
+        text.contains("recent:"),
+        "empty list dropped the recent marker: {text}"
+    );
+
+    let (opened, text) = paint_recent("");
+    assert!(opened.is_err(), "blank body was treated as rows: {text}");
+    assert_header_absent(&text, "blank body");
+
+    let (opened, text) = paint_recent("not-json");
+    assert!(opened.is_err(), "invalid JSON was treated as rows: {text}");
+    assert_header_absent(&text, "invalid JSON");
+
+    let (opened, text) = paint_recent("[{}]");
+    assert!(
+        opened.is_err(),
+        "a row missing fee was treated as rows: {text}"
+    );
+    assert_header_absent(&text, "invalid row");
+
+    let block_id = "blkfee";
+    let blocks_body = format!(
+        r#"[{{"id":"{block_id}","height":1,"version":1,"timestamp":1,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","mediantime":1,"difficulty":1.0}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks_body)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let blocks = painted(&host);
+    assert!(!blocks.contains("Fee"), "blocks list painted Fee: {blocks}");
+    assert!(
+        !blocks.contains("TXID"),
+        "blocks list painted TXID: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Amount"),
+        "blocks list painted Amount: {blocks}"
+    );
+    assert!(
+        !blocks.contains("vSize"),
+        "blocks list painted vSize: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Size"),
+        "blocks list painted Size: {blocks}"
+    );
+    assert!(
+        !blocks.contains("Weight"),
+        "blocks list painted Weight: {blocks}"
+    );
+    assert!(
+        !blocks.contains("skeleton"),
+        "blocks list painted a loading skeleton: {blocks}"
+    );
+    assert!(blocks.contains("TXs"), "TXs was dropped: {blocks}");
+    assert!(
+        blocks.contains(block_id) && blocks.contains("merkle_root mm"),
+        "the block row was dropped: {blocks}"
+    );
+    assert!(
+        blocks.contains("difficulty 1") && !blocks.contains("difficulty 1.0"),
+        "difficulty left plain_number: {blocks}"
+    );
 }

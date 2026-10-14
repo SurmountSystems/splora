@@ -439,6 +439,8 @@ impl BlockScreen {
         if block.height > 100_000 && block.tx_count <= 1 {
             lines.push("Why is this block empty?".to_string());
         }
+        // The count line stays `tx_count`. TXs is the line before it.
+        lines.push("TXs".to_string());
         lines.push(render_block_line(&block));
         lines.push(splora_frontend_shared::transaction_count_heading(
             block.tx_count,
@@ -477,6 +479,8 @@ impl BlockScreen {
         if let Some(header) = read_optional(client, &block_header_path(&hash))? {
             if let Ok(hex) = parse_block_header(&header) {
                 lines.push(format!("block header {hex}"));
+                // Angular `i18n="block.header"`. The body is the header hex, not escaped.
+                lines.push(format!("Block Header Hex {hex}"));
             }
         }
         if let Some(raw) = read_optional(client, &block_raw_path(&hash))? {
@@ -588,13 +592,11 @@ impl BlocksScreen {
             return Err(ClientError::BadPath);
         }
         // A non-array still uses the whole-array parser's error. One bad element does not.
-        let elements = match serde_json::from_str::<serde_json::Value>(&body).map_err(http_parse)?
-        {
+        let elements = match serde_json::from_str::<serde_json::Value>(&body).map_err(http_parse)? {
             serde_json::Value::Array(elements) => elements,
             _ => {
-                return match serde_json::from_str::<Vec<splora_frontend_shared::wire::Block>>(
-                    &body,
-                ) {
+                return match serde_json::from_str::<Vec<splora_frontend_shared::wire::Block>>(&body)
+                {
                     Err(err) => Err(http_parse(err)),
                     Ok(_) => Err(http_parse("blocks list was not an array")),
                 };
@@ -602,7 +604,8 @@ impl BlocksScreen {
         };
         let mut kept = Vec::new();
         for element in elements {
-            if let Ok(block) = serde_json::from_value::<splora_frontend_shared::wire::Block>(element)
+            if let Ok(block) =
+                serde_json::from_value::<splora_frontend_shared::wire::Block>(element)
             {
                 kept.push(block);
             }
@@ -618,7 +621,9 @@ impl BlocksScreen {
                 let line = render_block_line(block);
                 let from = format!(" height {} tx_count ", block.height);
                 let to = format!(" Height height {} tx_count ", block.height);
-                line.replacen(&from, &to, 1)
+                let sentence = line.replacen(&from, &to, 1);
+                // The count line stays. TXs is the line before it.
+                format!("TXs\n{sentence}")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -665,11 +670,20 @@ impl TxScreen {
             &serde_weight_for_shared_type(&document),
         ))?;
         let vin_json = vin_objects(&document);
-        let mut lines = vec![render_tx_row(
-            &tx,
-            &vin_json,
-            json_u64_at(&document, "weight"),
-        )];
+        // Angular subtitle, once, before the parties. Empty vin and vout still show it.
+        let row = render_tx_row(&tx, &vin_json, json_u64_at(&document, "weight"));
+        let mut lines = vec!["Inputs & Outputs".to_string()];
+        // The raw block_time line stays. Timestamp is the line before it.
+        // Some(0) still paints. A missing key or JSON null is None and stays off.
+        if tx
+            .status
+            .as_ref()
+            .and_then(|status| status.block_time)
+            .is_some()
+        {
+            lines.push("Timestamp".to_string());
+        }
+        lines.push(row);
         let mut rows = vec![paint_tx_row(&TxRow::from(&tx))];
         if let Some(hash) = tx
             .status
@@ -755,6 +769,9 @@ impl TxScreen {
             lines.push(words);
         }
         lines.push(fee_words(tx.fee));
+        if let Some(words) = fee_rate_words(tx.fee, &document) {
+            lines.push(words);
+        }
         lines.push(version_words(tx.version));
         lines.push(locktime_words(tx.lock_time));
         lines.push(size_words(tx.size));
@@ -860,7 +877,14 @@ impl AddressScreen {
         let txs_body = read_required(client, &txs_path)?;
         let utxo_body = read_required(client, &utxo_path)?;
         let mempool_body = read_optional(client, &mempool_route)?;
-        let mut lines = vec![render_address_stats(&stats_body)?];
+        let mut stats_line = render_address_stats(&stats_body)?;
+        if !self.use_scripthash {
+            if let Some(words) = unspent_txo_words(&stats_body) {
+                stats_line.push(' ');
+                stats_line.push_str(&words);
+            }
+        }
+        let mut lines = vec![stats_line];
         let mut rows = vec![address_funded_row(&stats_body)?];
         rows.push(format!("row script {script}"));
         if let Some(last) = paint_address_tx_page(&txs_body, &mut lines, &mut rows)? {
@@ -1211,26 +1235,31 @@ impl BroadcastScreen {
     }
 
     pub fn rendered(&self) -> String {
-        if let Some(request) = &self.request {
+        let body = if let Some(request) = &self.request {
             if request.method == "POST"
                 && request.path == broadcast_path()
                 && !self.result.is_empty()
             {
-                return render_broadcast_result(&self.result).unwrap_or_else(|_| self.summary());
-            }
-            if request.method == "POST" && request.path == package_path() && !self.result.is_empty()
+                render_broadcast_result(&self.result).unwrap_or_else(|_| self.summary())
+            } else if request.method == "POST"
+                && request.path == package_path()
+                && !self.result.is_empty()
             {
-                return render_package(&self.result).unwrap_or_else(|_| {
+                render_package(&self.result).unwrap_or_else(|_| {
                     let trimmed = self.result.trim();
                     if trimmed.is_empty() {
                         "broadcast package".to_string()
                     } else {
                         trimmed.to_string()
                     }
-                });
+                })
+            } else {
+                self.summary()
             }
-        }
-        self.summary()
+        } else {
+            self.summary()
+        };
+        format!("Broadcast Transaction\n{body}")
     }
 }
 
@@ -2175,6 +2204,15 @@ fn confirmed_utxo_words(body: &str) -> Option<String> {
     Some(format!("Confirmed UTXOs {count}"))
 }
 
+/// Chain funded count minus chain spent count. A failed address-stats parse
+/// is not this line. Mempool counts are not in it. Both zeros are `Unspent TXOs 0`.
+fn unspent_txo_words(body: &str) -> Option<String> {
+    let stats = serde_json::from_str::<splora_frontend_shared::wire::AddressStats>(body).ok()?;
+    let count = i128::from(stats.chain_stats.funded_txo_count)
+        - i128::from(stats.chain_stats.spent_txo_count);
+    Some(format!("Unspent TXOs {count}"))
+}
+
 /// Chain funded sum. A missing sum is not this line. This is not the balance.
 fn total_received_words(funded: Option<u64>) -> Option<String> {
     funded.map(|sum| format!("Total received {sum}"))
@@ -2350,20 +2388,22 @@ fn render_recent(body: &str) -> Result<String, ClientError> {
     if rows.is_empty() {
         return Ok("recent:".to_string());
     }
-    Ok(rows
-        .iter()
-        .map(|tx| {
-            format!(
-                "recent txid {} fee {} vsize {} value {}{}",
-                tx.txid,
-                tx.fee,
-                tx.vsize,
-                splora_frontend_shared::wire::recent_value_text(tx.value, ""),
-                fee_rate_suffix(sat_per_vbyte_from_vsize(tx.fee, tx.vsize))
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let mut lines = Vec::with_capacity(rows.len() + 4);
+    lines.push("TXID".to_string());
+    lines.push("Amount".to_string());
+    lines.push("vSize".to_string());
+    lines.push("Fee".to_string());
+    lines.extend(rows.iter().map(|tx| {
+        format!(
+            "recent txid {} fee {} vsize {} value {}{}",
+            tx.txid,
+            tx.fee,
+            tx.vsize,
+            splora_frontend_shared::wire::recent_value_text(tx.value, ""),
+            fee_rate_suffix(sat_per_vbyte_from_vsize(tx.fee, tx.vsize))
+        )
+    }));
+    Ok(lines.join("\n"))
 }
 
 fn render_fee_estimates(body: &str) -> Result<String, ClientError> {
@@ -2463,6 +2503,7 @@ fn render_tx_parties(
                 blinded_value_text(prevout)
             ));
             push_script_type(&mut lines, "input", &prevout.script_pubkey_type);
+            push_previous_output_type(&mut lines, &prevout.script_pubkey_type);
         }
         if input.prevout.is_none()
             && input.issuance.is_none()
@@ -2470,6 +2511,10 @@ fn render_tx_parties(
             && input.is_pegin != Some(true)
         {
             lines.push("UNKNOWN".to_string());
+        }
+        // Address word when this input has an issuance object and no prevout.
+        if input.prevout.is_none() && input.issuance.is_some() {
+            lines.push("Issuance".to_string());
         }
         let raw = vin_json.get(index);
         push_input_coinbase(&mut lines, raw);
@@ -2482,6 +2527,14 @@ fn render_tx_parties(
         {
             lines.push(format!("P2SH redeem script {asm}"));
         }
+        // Exact label when the prevout type is v1_p2tr. The inner script stays off this line.
+        if input
+            .prevout
+            .as_ref()
+            .is_some_and(|prevout| prevout.script_pubkey_type == "v1_p2tr")
+        {
+            lines.push("P2TR tapscript".to_string());
+        }
         if let Some(issuance) = &input.issuance {
             lines.extend(issuance_lines(issuance));
         }
@@ -2493,6 +2546,10 @@ fn render_tx_parties(
             blinded_value_text(output)
         ));
         push_script_type(&mut lines, "output", &output.script_pubkey_type);
+        push_output_type(&mut lines, &output.script_pubkey_type);
+        push_transaction_fee_label(&mut lines, output);
+        push_p2pk_label(&mut lines, output);
+        push_op_return_label(&mut lines, output);
     }
     lines
 }
@@ -2504,6 +2561,87 @@ fn push_script_type(lines: &mut Vec<String>, side: &str, script_type: &str) {
         return;
     }
     lines.push(format!("{side} script type {script_type}"));
+}
+
+/// Uppercase `vout.scriptpubkey_type` on its own line. An empty string is omitted.
+/// The characters stay plaintext. This is not the previous-output line.
+fn push_output_type(lines: &mut Vec<String>, script_type: &str) {
+    if script_type.is_empty() {
+        return;
+    }
+    lines.push(format!("Type {}", script_type.to_uppercase()));
+}
+
+/// Address-cell text from the scriptpubkeyType pipe.
+/// The pipe returns this line only for the lowercase type `fee`.
+/// The output cell calls the pipe when there is no address, the output is not
+/// a peg-out, and the type is not `op_return`. An input does not call it.
+fn push_transaction_fee_label(
+    lines: &mut Vec<String>,
+    output: &splora_frontend_shared::wire::TxOutput,
+) {
+    if output.script_pubkey_type != "fee" {
+        return;
+    }
+    let has_address = output
+        .script_pubkey_address
+        .as_deref()
+        .is_some_and(|address| !address.is_empty());
+    if has_address || output.pegout.is_some() {
+        return;
+    }
+    lines.push("Transaction fee".to_string());
+}
+
+/// Address-cell text from the scriptpubkeyType pipe.
+/// The pipe returns this line only for the lowercase type `p2pk`.
+/// The output cell prints it when there is no address. That branch is earlier
+/// than peg-out, so a peg-out object does not hide the line. An input does not
+/// call it. `Type P2PK` stays the separate uppercase line.
+fn push_p2pk_label(lines: &mut Vec<String>, output: &splora_frontend_shared::wire::TxOutput) {
+    if output.script_pubkey_type != "p2pk" {
+        return;
+    }
+    let has_address = output
+        .script_pubkey_address
+        .as_deref()
+        .is_some_and(|address| !address.is_empty());
+    if has_address {
+        return;
+    }
+    lines.push("P2PK".to_string());
+}
+
+/// Address-cell text from the scriptpubkeyType pipe.
+/// The pipe returns this line only for the lowercase type `op_return`.
+/// The output cell prints it when there is no address and the output is not a
+/// peg-out. That branch is later than peg-out, so a peg-out object hides the
+/// line. An input does not call it. `Type OP_RETURN` stays the separate
+/// uppercase line. Script asm and script hex stay off this line.
+fn push_op_return_label(lines: &mut Vec<String>, output: &splora_frontend_shared::wire::TxOutput) {
+    if output.script_pubkey_type != "op_return" {
+        return;
+    }
+    let has_address = output
+        .script_pubkey_address
+        .as_deref()
+        .is_some_and(|address| !address.is_empty());
+    if has_address || output.pegout.is_some() {
+        return;
+    }
+    lines.push("OP_RETURN".to_string());
+}
+
+/// Uppercase `prevout.scriptpubkey_type` on its own line. An empty string is omitted.
+/// The characters stay plaintext. This is not the output type line.
+fn push_previous_output_type(lines: &mut Vec<String>, script_type: &str) {
+    if script_type.is_empty() {
+        return;
+    }
+    lines.push(format!(
+        "Previous output type {}",
+        script_type.to_uppercase()
+    ));
 }
 
 /// Shared `is_coinbase` is a bool, so a missing key is not false.
@@ -2553,7 +2691,8 @@ fn vin_objects(value: &serde_json::Value) -> Vec<serde_json::Value> {
 
 /// Shared `Transaction.weight` is `u32`, so a missing key or JSON null cannot load.
 /// The copy lets the rest of the transaction parse. Virtual size, the Weight row,
-/// and the header weight read the original document and do not use this placeholder.
+/// the fee rate row, and the header weight read the original document and do not
+/// use this placeholder.
 fn serde_weight_for_shared_type(value: &serde_json::Value) -> serde_json::Value {
     let missing = matches!(value.get("weight"), None | Some(serde_json::Value::Null));
     if !missing {
@@ -2709,6 +2848,62 @@ fn output_total_words(tx: &splora_frontend_shared::wire::Transaction) -> Option<
 /// Thousands separators, no fraction digits. The raw header `fee N` stays ungrouped.
 fn fee_words(fee: u64) -> String {
     format!("Fee {} sats", grouped_count(fee))
+}
+
+/// Details fee rate. Angular divides `fee / (weight / 4)` in floating point,
+/// then the default `feeRounding` pipe, then `sat/vB`. A missing weight, JSON
+/// null, or zero weight omits the line. The raw header `fee_rate N` stays and
+/// still uses integer virtual size.
+fn fee_rate_words(fee: u64, document: &serde_json::Value) -> Option<String> {
+    let weight = json_u64_at(document, "weight")?;
+    if weight == 0 {
+        return None;
+    }
+    let rate = (fee as f64) / ((weight as f64) / 4.0);
+    if !rate.is_finite() || rate < 0.0 {
+        return None;
+    }
+    Some(format!("Fee rate {} sat/vB", fee_rounding_text(rate)))
+}
+
+/// Default Angular `feeRounding` (`dp` 3). Under 10 keeps two fraction digits.
+/// From 10 until 100 keeps one. 100 and above is an integer with en-US grouping.
+/// Halfway cases go away from zero. The threshold uses the raw rate.
+fn fee_rounding_text(rate: f64) -> String {
+    if rate >= 100.0 {
+        grouped_rounded_digits(rate)
+    } else if rate < 10.0 {
+        let hundredths = rounded_scale(rate, 100.0);
+        format!("{}.{:02}", hundredths / 100, hundredths % 100)
+    } else {
+        let tenths = rounded_scale(rate, 10.0);
+        format!("{}.{}", tenths / 10, tenths % 10)
+    }
+}
+
+fn rounded_scale(rate: f64, scale: f64) -> u64 {
+    let scaled = (rate * scale).round();
+    if scaled.is_finite() && scaled >= 0.0 {
+        scaled as u64
+    } else {
+        0
+    }
+}
+
+fn grouped_rounded_digits(rate: f64) -> String {
+    let rounded = rate.round();
+    if !rounded.is_finite() || rounded < 0.0 {
+        return "0".to_string();
+    }
+    let digits = format!("{rounded:.0}");
+    let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index.is_multiple_of(3) {
+            reversed.push(',');
+        }
+        reversed.push(ch);
+    }
+    reversed.chars().rev().collect()
 }
 
 /// Details version. Angular `number` pipe. The row is always shown. Explicit 0 paints.
@@ -3162,8 +3357,9 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
     // Details version, bits, and nonce are the decimal beside 8 lowercase hex digits.
     // The summary line stays decimal.
     let version_hex = format!("0x{value:08x}", value = block.version);
+    // Angular `i18n="block.merkle-root"` is the full string. The raw line stays.
     let mut text = format!(
-        "block details\nid {}\nHash {}\nheight {}\nversion {} {version_hex}\ntimestamp {}\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\npreviousblockhash {}\nmediantime {}",
+        "block details\nid {}\nHash {}\nheight {}\nversion {} {version_hex}\ntimestamp {}\nTXs\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\nMerkle root {}\npreviousblockhash {}\nmediantime {}",
         block.id,
         shorten_string(&block.id, 13),
         block.height,
@@ -3172,6 +3368,7 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
         block.tx_count,
         block.size,
         block.weight,
+        block.merkle_root,
         block.merkle_root,
         block.previous_block_hash.as_deref().unwrap_or(""),
         block.median_time,
@@ -3183,8 +3380,12 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
         text.push_str(&format!("\nbits {bits} 0x{value:08x}", value = bits));
     }
     if let Some(difficulty) = block.difficulty {
+        // Angular `i18n="block.difficulty"` is plain_number. The raw line stays.
+        let number = plain_number(difficulty);
         text.push_str("\ndifficulty ");
-        text.push_str(&plain_number(difficulty));
+        text.push_str(&number);
+        text.push_str("\nDifficulty ");
+        text.push_str(&number);
     }
     text
 }
@@ -3236,11 +3437,12 @@ fn stats_amount(blinded: bool, amount: u64) -> String {
     }
 }
 
-/// Precision, issuer, issuance transaction, and chain amounts from `GET /asset/:id`.
+/// Name, precision, issuer, issuance transaction, and chain amounts from `GET /asset/:id`.
 ///
 /// Chain stats only. A blinded issuance stays Confidential and is not an amount.
 /// A zero issued or pegged figure stays off the row the asset page hides.
-/// The integers stay the document values.
+/// The integers stay the document values. The name is the stored string.
+/// Trim only decides whether the row is present. The text is not escaped.
 fn asset_stats_lines(body: &str) -> (String, String) {
     match one_registry_asset(body) {
         Some(RegistryAsset::Issued(issued)) => issued_asset_stats(&issued),
@@ -3253,6 +3455,23 @@ fn issued_asset_stats(issued: &splora_frontend_shared::IssuedRegistryAsset) -> (
     let blinded =
         issued.chain_stats.has_blinded_issuances || issued.mempool_stats.has_blinded_issuances;
     let mut lines = Vec::new();
+    if let Some(name) = issued
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        let mut value = name.to_string();
+        if let Some(ticker) = issued
+            .ticker
+            .as_deref()
+            .filter(|ticker| !ticker.trim().is_empty())
+        {
+            value.push_str(" (");
+            value.push_str(ticker);
+            value.push(')');
+        }
+        lines.push(format!("Name {value}"));
+    }
     if let Some(precision) = issued.precision {
         lines.push(format!("Precision {precision}"));
     }
@@ -3561,6 +3780,15 @@ fn registry_issued_lines(body: &str) -> String {
             }
         }
     }
+    if lines.is_empty() {
+        return String::new();
+    }
+    // Assets list column headers, once each. Name is the column title, not
+    // the asset-page `Name {value}` line, and not the `asset id` hex row.
+    lines.insert(0, "Name".to_string());
+    lines.insert(1, "Ticker".to_string());
+    lines.insert(2, "Issuer domain".to_string());
+    lines.insert(3, "Asset ID".to_string());
     lines.join("\n")
 }
 
@@ -3650,40 +3878,62 @@ fn render_package(body: &str) -> Result<String, ClientError> {
     Ok(lines.join("\n"))
 }
 
-fn render_test_accept(body: &str) -> Result<String, ClientError> {
-    let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::TestTxResult>>(body)
-        .map_err(http_parse)?;
-    if rows.is_empty() {
-        return Ok("test:".to_string());
+/// Txids that `test_txid_markup` would turn into anchors. Empty means no header.
+fn test_accept_txids(body: &str) -> Vec<String> {
+    if let Ok(rows) = splora_frontend_shared::parse_test_txs(body) {
+        return rows.into_iter().map(|row| row.txid).collect();
     }
-    Ok(rows
-        .iter()
-        .map(|row| {
-            let allowed = match row.allowed {
-                Some(true) => "true",
-                Some(false) => "false",
-                None => "",
-            };
-            let mut line = format!("test txid {} allowed {allowed}", row.txid);
-            if let Some(reason) = row
-                .reject_reason
-                .as_deref()
-                .filter(|reason| !reason.is_empty())
-            {
-                line.push_str(" reject-reason ");
-                line.push_str(reason);
-            }
-            if let Some(fees) = &row.fees {
-                line.push_str(&format!(
-                    " fee {} effective_feerate {}",
-                    plain_number(fees.base),
-                    plain_number(fees.effective_feerate)
-                ));
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(body) else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| row.get("txid").and_then(|txid| txid.as_str()))
+        .filter(|txid| !txid.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn test_accept_detail_line(row: &splora_frontend_shared::wire::TestTxResult) -> String {
+    let allowed = match row.allowed {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "",
+    };
+    let mut line = format!("test txid {} allowed {allowed}", row.txid);
+    if let Some(reason) = row
+        .reject_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        line.push_str(" reject-reason ");
+        line.push_str(reason);
+    }
+    if let Some(fees) = &row.fees {
+        line.push_str(&format!(
+            " fee {} effective_feerate {}",
+            plain_number(fees.base),
+            plain_number(fees.effective_feerate)
+        ));
+    }
+    line
+}
+
+/// One `Allowed?` label, then the result rows. No label when there is no txid.
+fn render_test_accept(body: &str) -> Result<String, ClientError> {
+    let txids = test_accept_txids(body);
+    if txids.is_empty() {
+        return Ok(String::new());
+    }
+    let mut lines = vec!["Allowed?".to_string()];
+    if let Ok(rows) = serde_json::from_str::<Vec<splora_frontend_shared::wire::TestTxResult>>(body)
+    {
+        if !rows.is_empty() {
+            lines.extend(rows.iter().map(test_accept_detail_line));
+        }
+    } else {
+        lines.extend(txids.into_iter().filter(|txid| !txid.is_empty()));
+    }
+    Ok(lines.join("\n"))
 }
 
 /// USD per BTC fixture. Shown only through [`format_fiat`].
@@ -4253,7 +4503,9 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
                 stats,
                 issuance_txid,
             } => {
-                let mut lines = format!("asset id {asset_id}\n");
+                // Asset page title, once, before the id. Not the registry
+                // column `Asset ID` and not the `Name {value}` row.
+                let mut lines = format!("Asset\nasset id {asset_id}\n");
                 if !name.is_empty() {
                     lines.push_str(&format!("asset name {name}\n"));
                 }

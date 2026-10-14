@@ -261,7 +261,14 @@ pub fn registry_list_markup(body: &str, liquid: bool) -> String {
     let Ok(rows) = parse_assets_registry(body.trim()) else {
         return String::new();
     };
-    rows.iter().map(paint_registry_asset).collect()
+    let painted: String = rows.iter().map(paint_registry_asset).collect();
+    if painted.is_empty() {
+        return String::new();
+    }
+    // Column headers once for the assets list, not once per row.
+    // Loaded thead: Name, then Ticker, then Issuer domain, then Asset ID.
+    // Not the loading thead. Not the Name-line parenthetical.
+    format!("<th>Name</th><th>Ticker</th><th>Issuer domain</th><th>Asset ID</th>{painted}")
 }
 
 pub fn registry_entry_markup(body: &str, liquid: bool) -> String {

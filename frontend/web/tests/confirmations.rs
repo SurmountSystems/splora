@@ -201,7 +201,10 @@ fn missing_tip_with_block_height_paints_confirmed_once() {
         "expected the word Confirmed once in {empty_tip}"
     );
     assert!(!empty_tip.contains("Unconfirmed"), "{empty_tip}");
-    assert!(!empty_tip.contains("class=\"confirmations\""), "{empty_tip}");
+    assert!(
+        !empty_tip.contains("class=\"confirmations\""),
+        "{empty_tip}"
+    );
     assert!(!empty_tip.contains("Confirmations 0"), "{empty_tip}");
     assert_scripts_stay_off(&empty_tip);
 
@@ -259,7 +262,10 @@ fn missing_tip_with_block_height_paints_confirmed_once() {
 
     let empty_without = confirmation_markup(&tx(Some(r#"{"confirmed":false}"#)), "");
     assert!(!empty_without.contains("Unconfirmed"), "{empty_without}");
-    assert!(!empty_without.contains("Confirmations 0"), "{empty_without}");
+    assert!(
+        !empty_without.contains("Confirmations 0"),
+        "{empty_without}"
+    );
     assert_eq!(
         whole_word_count(&empty_without, "Confirmed"),
         0,
@@ -269,7 +275,10 @@ fn missing_tip_with_block_height_paints_confirmed_once() {
 
     let omitted_empty = confirmation_markup(&tx(None), "");
     assert!(!omitted_empty.contains("Unconfirmed"), "{omitted_empty}");
-    assert!(!omitted_empty.contains("Confirmations 0"), "{omitted_empty}");
+    assert!(
+        !omitted_empty.contains("Confirmations 0"),
+        "{omitted_empty}"
+    );
     assert_eq!(
         whole_word_count(&omitted_empty, "Confirmed"),
         0,

@@ -24,10 +24,7 @@ fn output() -> String {
 
 fn tx(inputs: usize, outputs: usize) -> String {
     let vin = (0..inputs).map(|_| input()).collect::<Vec<_>>().join(",");
-    let vout = (0..outputs)
-        .map(|_| output())
-        .collect::<Vec<_>>()
-        .join(",");
+    let vout = (0..outputs).map(|_| output()).collect::<Vec<_>>().join(",");
     format!(
         r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{vin}],"vout":[{vout}],"size":10,"weight":40,"sigops":0,"fee":1}}"#
     )
