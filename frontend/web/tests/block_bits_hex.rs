@@ -4,7 +4,7 @@
 //! digits. Explicit 0 is `0x00000000`. A missing bits key or JSON null is
 //! `None` and does not paint the Bits label or the hex cell.
 
-use splora_web::block_details_markup;
+use splora_web::{block_details_markup, block_load_plan};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -94,4 +94,52 @@ fn json_null_bits_does_not_paint_hex_or_the_label() {
     // `Block.bits` is `Option<u32>`. Serde maps JSON null to None, same as a missing key.
     let open = block_details_markup(&null_bits_json(), true);
     assert_no_bits(&open);
+}
+
+/// Whole line `bits 1 0x00000001` from no-query `GET /block/:hash` when details are open.
+///
+/// The Bits cell and the eight-digit hex cell stay. Closed details omit the line.
+/// This is not the version line and not Difficulty.
+#[test]
+fn open_block_details_paint_bits_1_hex() {
+    const LINE: &str = "bits 1 0x00000001";
+    let id = "bitshex1";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let open = block_details_markup(&block_json("1"), true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        open.contains("<tr><td>Bits</td><td>1</td><td class=\"bits-hex\">0x00000001</td></tr>"),
+        "{open}"
+    );
+
+    let closed = block_details_markup(&block_json("1"), false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.contains("<tr><td>Bits</td><td>1</td><td class=\"bits-hex\">0x00000001</td></tr>"),
+        "{closed}"
+    );
 }

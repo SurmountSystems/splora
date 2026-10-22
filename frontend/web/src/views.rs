@@ -12,20 +12,23 @@ use crate::local_pages::{
     usd_fixture_text,
 };
 use crate::models::{
-    parse_fee_estimates, parse_mempool_summary_json, parse_transaction_json,
-    parse_transactions_json,
+    parse_block_json, parse_blocks_json, parse_fee_estimates, parse_mempool_summary_json,
+    parse_transaction_json, parse_transactions_json, parse_utxos_json,
 };
 use crate::paths::{docs_api_type_page, mempool_paths, static_page_requests, tx_path};
 use crate::rows::{
-    address_highlight_markup, address_rows_markup, asset_markup, batch_outspends_markup,
-    block_details_markup, block_header_aside_markup, block_header_hex_markup, block_raw_beside,
-    block_rows_markup, block_status_markup, block_transactions_markup, block_txid_index_markup,
-    block_txid_links_markup, blocks_rows_markup, broadcast_txid_markup, chain_tip_markup,
-    confirmation_markup, dashboard_rows_markup, details_open_after_click, height_body_markup,
-    indexed_bytes_markup, mempool_txids_markup, merkle_proof_markup, multi_address_links_markup,
-    one_outspend_markup, outspends_markup, package_txid_markup, poison_alert_markup,
-    recent_rows_markup, rows_with_notices, scripthash_markup, summary_rows_markup,
-    summary_rows_with_status, test_txid_markup, tip_links_markup, transaction_hex_markup,
+    address_highlight_markup, address_load_error_markup, address_rows_markup,
+    address_tx_of_heading, address_type_badge_markup, asset_markup, batch_outspends_markup,
+    block_details_markup, block_header_aside_markup, block_header_hex_markup,
+    block_load_error_markup, block_raw_beside, block_rows_markup, block_status_markup,
+    block_transactions_markup, block_txid_index_markup, block_txid_links_markup,
+    blocks_rows_markup, broadcast_txid_markup, chain_tip_markup, confirmation_markup,
+    dashboard_rows_markup, details_open_after_click, effective_fee_rate_markup,
+    features_label_markup, height_body_markup, indexed_bytes_markup, mempool_txids_markup,
+    merkle_proof_markup, multi_address_links_markup, one_outspend_markup, outspends_markup,
+    package_txid_markup, poison_alert_markup, recent_rows_markup, rows_with_notices,
+    scripthash_markup, segwit_badge_markup, summary_rows_markup, summary_rows_with_status,
+    taproot_badge_markup, test_txid_markup, tip_links_markup, transaction_hex_markup,
     transaction_row_markup, tx_raw_beside, tx_status_markup,
 };
 use crate::screens::{
@@ -452,7 +455,15 @@ pub fn submission_links(path: &str, body: &str) -> String {
         }
         html
     } else if path == test_txs_path() {
-        test_txid_markup(body)
+        let markup = test_txid_markup(body);
+        let rate = effective_fee_rate_markup(body);
+        if rate.is_empty() {
+            markup
+        } else if let Some(rest) = markup.strip_prefix("<th class=\"allowed\">Allowed?</th>") {
+            format!("<th class=\"allowed\">Allowed?</th>{rate}{rest}")
+        } else {
+            format!("{markup}{rate}")
+        }
     } else {
         String::new()
     }
@@ -467,6 +478,20 @@ fn skip_closed_or_empty(body: &str, lines: &mut Vec<String>) -> bool {
         return true;
     }
     false
+}
+
+/// Footer label from `footer.component.html`.
+///
+/// The words are Mempool size. The value is raw `vsize` from `GET /mempool`.
+/// It is not kB or MB, and it is not a projected block count.
+pub fn mempool_size_markup(body: &str) -> String {
+    let Ok(stats) = parse_mempool_summary_json(body) else {
+        return String::new();
+    };
+    format!(
+        "<span class=\"mempoolSize\">Mempool size:</span><div class=\"sub-text\">{}</div>",
+        stats.vsize
+    )
 }
 
 fn mempool_summary_text(body: &str) -> String {
@@ -519,6 +544,59 @@ fn dashboard_tip_fees_text(tip_hash: &str, tip_height: &str, fees: &str) -> Stri
     lines.join("\n")
 }
 
+/// Fees card title from `dashboard.component.html` line 6.
+/// Liquid keeps the fee estimates and does not paint this heading.
+fn transaction_fees_heading(liquid: bool) -> String {
+    if liquid {
+        String::new()
+    } else {
+        "<h2>Transaction Fees</h2>".to_string()
+    }
+}
+
+/// Dashboard column from `dashboard.component.html` beside `block.timestamp`.
+///
+/// Angular `th i18n="dashboard.latest-blocks.mined"` is the word Mined.
+/// The value cell stays the raw timestamp. A body that does not parse, or
+/// an empty list, leaves the rows unchanged. This is not a clock.
+fn dashboard_mined_markup(rows: &str, blocks_json: &str) -> String {
+    let Ok(blocks) = parse_blocks_json(blocks_json) else {
+        return rows.to_string();
+    };
+    if blocks.is_empty() {
+        return rows.to_string();
+    }
+    let needle = "<td class=\"time\">";
+    let Some(at) = rows.find(needle) else {
+        return rows.to_string();
+    };
+    let label = "<td class=\"table-cell-mined\">Mined</td>";
+    let mut out = String::with_capacity(rows.len() + label.len());
+    out.push_str(&rows[..at]);
+    out.push_str(label);
+    out.push_str(&rows[at..]);
+    out
+}
+
+/// Dashboard heading from `dashboard.component.html` above the latest blocks.
+///
+/// Angular `h5 i18n="dashboard.recent-blocks"` is the words Recent Blocks.
+/// The rows stay the block list from `GET /blocks`. A body that does not
+/// parse, or an empty list, leaves the rows unchanged. This is not a clock.
+fn dashboard_recent_blocks_markup(rows: &str, blocks_json: &str) -> String {
+    let Ok(blocks) = parse_blocks_json(blocks_json) else {
+        return rows.to_string();
+    };
+    if blocks.is_empty() {
+        return rows.to_string();
+    }
+    let heading = "<h5>Recent Blocks</h5>";
+    let mut out = String::with_capacity(heading.len() + rows.len());
+    out.push_str(heading);
+    out.push_str(rows);
+    out
+}
+
 #[component]
 fn Dashboard() -> impl IntoView {
     let network = use_context::<RwSignal<Network>>().expect("network");
@@ -553,7 +631,13 @@ fn Dashboard() -> impl IntoView {
             let recent = recent_body.get();
             rows_with_notices(
                 &dashboard_fields_text(&blocks, &recent),
-                &dashboard_rows_markup(&blocks, &recent),
+                &dashboard_recent_blocks_markup(
+                    &dashboard_mined_markup(
+                        &dashboard_rows_markup(&blocks, &recent),
+                        &blocks,
+                    ),
+                    &blocks,
+                ),
             )
         }></div>
         <div inner_html=move || {
@@ -565,8 +649,10 @@ fn Dashboard() -> impl IntoView {
                 tip_links_markup(&hash, &height)
             }
         }></div>
+        <div inner_html=move || transaction_fees_heading(network.get() == Network::Liquid)></div>
         <pre>{move || dashboard_tip_fees_text(&tip_hash_body.get(), &tip_height_body.get(), &fees_body.get())}</pre>
         <pre>{move || mempool_summary_text(&mempool_body.get())}</pre>
+        <div inner_html=move || mempool_size_markup(&mempool_body.get())></div>
     }
 }
 
@@ -607,7 +693,8 @@ fn BlocksPage() -> impl IntoView {
         }
     });
     view! {
-        <h2>"Blocks"</h2>
+        <h1>"Blocks"</h1>
+        <th class="txs">"Transactions"</th>
         <div inner_html=move || {
             blocks_older_href(&body.get())
                 .map(|href| format!("<a href=\"{href}\">Older blocks</a>"))
@@ -621,6 +708,77 @@ fn BlocksPage() -> impl IntoView {
             )
         }></div>
     }
+}
+
+/// One block-page `h1` from the loaded `GET /block/:hash` body.
+///
+/// Raw JSON `stale: true` is Stale Block, including height 0. A missing
+/// `stale` key is not stale: height 0 is then Genesis, and any other parsed
+/// height is Block. A body that does not parse has no height, so the title
+/// word stays Block. Digits are the raw height. There is no thousands separator.
+pub fn block_page_heading_markup(block_json: &str) -> String {
+    let parsed = parse_block_json(block_json).ok();
+    // Same read as the native block screen: the raw body, not `wire::Block`.
+    let stale = serde_json::from_str::<serde_json::Value>(block_json)
+        .ok()
+        .and_then(|value| value.get("stale").and_then(|flag| flag.as_bool()))
+        == Some(true);
+    let title = if stale {
+        "Stale Block"
+    } else {
+        match parsed.as_ref().map(|block| block.height) {
+            Some(0) => "Genesis",
+            _ => "Block",
+        }
+    };
+    let Some(block) = parsed else {
+        return format!("<h1>{title}</h1>");
+    };
+    let id = &block.id;
+    let height = block.height;
+    format!("<h1>{title} <a class=\"block-link\" href=\"/block/{id}\">{height}</a></h1>")
+}
+
+/// Block-details Size label beside the other detail rows.
+///
+/// Angular `td i18n="block.size"` is the word Size. The value cell is the
+/// raw size integer. A body that does not parse leaves the details table
+/// unchanged.
+pub fn block_page_size_markup(details: &str, block_json: &str) -> String {
+    let Ok(block) = parse_block_json(block_json) else {
+        return details.to_string();
+    };
+    let row = format!("<tr><td>Size</td><td>{}</td></tr>", block.size);
+    let Some(at) = details.rfind("</tbody>") else {
+        return details.to_string();
+    };
+    let mut out = String::with_capacity(details.len() + row.len());
+    out.push_str(&details[..at]);
+    out.push_str(&row);
+    out.push_str(&details[at..]);
+    out
+}
+
+/// Block-details Weight label beside the other detail rows.
+///
+/// Angular `td i18n="block.weight"` is the word Weight. The value cell is
+/// the raw weight integer. A body that does not parse leaves the details
+/// table unchanged. Size is inserted first so the two labels stay in the
+/// Angular order Size, then Weight.
+pub fn block_page_weight_markup(details: &str, block_json: &str) -> String {
+    let details = block_page_size_markup(details, block_json);
+    let Ok(block) = parse_block_json(block_json) else {
+        return details;
+    };
+    let row = format!("<tr><td>Weight</td><td>{}</td></tr>", block.weight);
+    let Some(at) = details.rfind("</tbody>") else {
+        return details;
+    };
+    let mut out = String::with_capacity(details.len() + row.len());
+    out.push_str(&details[..at]);
+    out.push_str(&row);
+    out.push_str(&details[at..]);
+    out
 }
 
 #[component]
@@ -709,10 +867,13 @@ fn BlockPage() -> impl IntoView {
         }
     });
     view! {
-        <h1>"Block"</h1>
+        <div inner_html=move || block_page_heading_markup(&block_body.get())></div>
         <div inner_html=move || {
             block_header_hex_markup(
-                &block_details_markup(&block_body.get(), details_open.get()),
+                &block_page_weight_markup(
+                    &block_details_markup(&block_body.get(), details_open.get()),
+                    &block_body.get(),
+                ),
                 &header_body.get(),
             )
         }></div>
@@ -752,10 +913,21 @@ fn BlockPage() -> impl IntoView {
         <div inner_html=move || {
             let block = block_body.get();
             let txs = txs_body.get();
-            let rows = rows_with_notices(
+            let height = height_body.get();
+            let mut rows = rows_with_notices(
                 &block_fields_text(&block, &txs),
                 &block_rows_markup(&block, &txs),
             );
+            let from_block = block_load_error_markup(&block);
+            let err = if from_block.is_empty() {
+                block_load_error_markup(&height)
+            } else {
+                from_block
+            };
+            if !err.is_empty() {
+                let rest = rows.replacen(&err, "", 1);
+                rows = format!("{err}{rest}");
+            }
             block_raw_beside(&rows, &raw_bytes.get())
         }></div>
         <div inner_html=move || {
@@ -841,7 +1013,7 @@ fn TransactionPage() -> impl IntoView {
         }
     });
     view! {
-        <h2>"Transaction"</h2>
+        <h1>"Transaction"</h1>
         <div inner_html=move || {
             let name = match network.get() {
                 Network::Mainnet => "mainnet",
@@ -854,10 +1026,32 @@ fn TransactionPage() -> impl IntoView {
         }></div>
         <div inner_html=move || {
             let tx = body.get();
-            let rows = rows_with_notices(
+            let name = match network.get() {
+                Network::Mainnet => "mainnet",
+                Network::Testnet3 => "testnet",
+                Network::Testnet4 => "testnet4",
+                Network::Mutinynet => "signet",
+                Network::Liquid => "liquid",
+            };
+            let mut rows = rows_with_notices(
                 &transaction_fields_text(&tx),
                 &transaction_row_markup(&tx),
             );
+            let mainnet_features = features_label_markup(&tx, "mainnet");
+            if !mainnet_features.is_empty() {
+                rows = rows.replacen(&mainnet_features, "", 1);
+            }
+            rows.push_str(&features_label_markup(&tx, name));
+            let mainnet_badge = segwit_badge_markup(&tx, "mainnet");
+            if !mainnet_badge.is_empty() {
+                rows = rows.replacen(&mainnet_badge, "", 1);
+            }
+            rows.push_str(&segwit_badge_markup(&tx, name));
+            let mainnet_taproot = taproot_badge_markup(&tx, "mainnet");
+            if !mainnet_taproot.is_empty() {
+                rows = rows.replacen(&mainnet_taproot, "", 1);
+            }
+            rows.push_str(&taproot_badge_markup(&tx, name));
             tx_raw_beside(&rows, &raw_bytes.get())
         }></div>
         <div inner_html=move || confirmation_markup(&body.get(), &tip_height_body.get())></div>
@@ -888,6 +1082,54 @@ fn status_pairs(rows: &[(String, String)]) -> Vec<(String, String)> {
             Some((txid.to_string(), body.clone()))
         })
         .collect()
+}
+
+/// Address heading from `address.component.html` above the unspent rows.
+///
+/// Angular `h2 i18n="address.unspent-outputs"` is the words Unspent Outputs.
+/// It is shown when the utxo list has more than two rows. Fewer rows, or a
+/// body that does not parse, leaves the address markup unchanged.
+fn address_unspent_outputs_markup(rows: &str, utxo_json: &str) -> String {
+    let Ok(utxos) = parse_utxos_json(utxo_json) else {
+        return rows.to_string();
+    };
+    if utxos.len() <= 2 {
+        return rows.to_string();
+    }
+    let needle = "<table class=\"utxo-rows\">";
+    let Some(at) = rows.find(needle) else {
+        return rows.to_string();
+    };
+    let heading = "<h2>Unspent Outputs</h2>";
+    let mut out = String::with_capacity(rows.len() + heading.len());
+    out.push_str(&rows[..at]);
+    out.push_str(heading);
+    out.push_str(&rows[at..]);
+    out
+}
+
+/// Address heading from `address.component.html` above the transaction rows.
+///
+/// Angular `h2 i18n="address.balance-history"` is the words Balance History.
+/// It is shown when the transaction list has more than two rows. Fewer rows,
+/// or a body that does not parse, leaves the address markup unchanged.
+fn address_balance_history_markup(rows: &str, txs_json: &str) -> String {
+    let Ok(txs) = parse_transactions_json(txs_json) else {
+        return rows.to_string();
+    };
+    if txs.len() <= 2 {
+        return rows.to_string();
+    }
+    let needle = "<table class=\"tx-rows\">";
+    let Some(at) = rows.find(needle) else {
+        return rows.to_string();
+    };
+    let heading = "<h2>Balance History</h2>";
+    let mut out = String::with_capacity(rows.len() + heading.len());
+    out.push_str(&rows[..at]);
+    out.push_str(heading);
+    out.push_str(&rows[at..]);
+    out
 }
 
 #[component]
@@ -930,20 +1172,33 @@ fn AddressPage() -> impl IntoView {
         }
     });
     view! {
-        <h2>"Address"</h2>
+        <h1>"Address"</h1>
         <div inner_html=move || {
             let stats = stats_body.get();
             let txs = txs_body.get();
             let utxos = utxo_body.get();
+            let addr = params.with(|p| p.get("addr").unwrap_or_default());
             let script_stats = scripthash_markup(&stats);
-            let rows = if script_stats.is_empty() {
+            let mut rows = if script_stats.is_empty() {
                 address_rows_markup(&stats, &txs, &utxos)
             } else {
                 let mut out = script_stats;
+                out.push_str(&address_tx_of_heading(&stats, &txs));
                 out.push_str(&address_rows_markup("", &txs, &utxos));
                 out
             };
-            rows_with_notices(&address_fields_text(&stats, &txs, &utxos), &rows)
+            let badge = address_type_badge_markup(&addr, &stats);
+            if !badge.is_empty() && !rows.contains(badge.as_str()) {
+                rows.push_str(&badge);
+            }
+            let mut painted = rows_with_notices(&address_fields_text(&stats, &txs, &utxos), &rows);
+            let err = address_load_error_markup(&stats);
+            if !err.is_empty() {
+                let rest = painted.replacen(&err, "", 1);
+                painted = format!("{err}{rest}");
+            }
+            let with_outputs = address_unspent_outputs_markup(&painted, &utxos);
+            address_balance_history_markup(&with_outputs, &txs)
         }></div>
         <div inner_html=move || {
             let addr = params.with(|p| p.get("addr").unwrap_or_default());
@@ -1291,6 +1546,7 @@ fn MempoolPage() -> impl IntoView {
                 .collect_view()}
         </ul>
         <pre>{move || mempool_summary_text(&body.get())}</pre>
+        <div inner_html=move || mempool_size_markup(&body.get())></div>
         <div inner_html=move || recent_rows_markup(&recent.get())></div>
         <button on:click=move |_| {
             let Ok(ids) = splora_frontend_shared::parse_mempool_txids(&txids_body.get_untracked())
@@ -1629,7 +1885,7 @@ fn AssetsPage() -> impl IntoView {
         }
     });
     view! {
-        <h2>"Assets"</h2>
+        <h1>"Assets"</h1>
         <div class="container-xl" inner_html=move || {
             asset_cards_markup(&list_body.get(), network.get() == Network::Liquid)
                 .unwrap_or_default()

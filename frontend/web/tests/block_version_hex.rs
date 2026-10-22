@@ -4,7 +4,7 @@
 //! digits. Explicit 0 is `0x00000000`. A missing version key fails the
 //! block parse and does not paint the hex cell.
 
-use splora_web::block_details_markup;
+use splora_web::{block_details_markup, block_load_plan};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -60,5 +60,57 @@ fn missing_version_key_does_not_paint_hex() {
     assert!(
         !open.contains("version-hex"),
         "missing version painted a hex cell: {open}"
+    );
+}
+
+/// Whole line `version 1 0x00000001` from no-query `GET /block/:hash` when details are open.
+///
+/// The Version cell and the eight-digit hex cell stay. Closed details omit the line.
+/// This is not Difficulty and not Merkle root.
+#[test]
+fn open_block_details_paint_version_1_hex() {
+    const LINE: &str = "version 1 0x00000001";
+    let id = "verhex1";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let open = block_details_markup(&block_json("1"), true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        open.contains(
+            "<tr><td>Version</td><td>1</td><td class=\"version-hex\">0x00000001</td></tr>"
+        ),
+        "{open}"
+    );
+
+    let closed = block_details_markup(&block_json("1"), false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.contains(
+            "<tr><td>Version</td><td>1</td><td class=\"version-hex\">0x00000001</td></tr>"
+        ),
+        "{closed}"
     );
 }

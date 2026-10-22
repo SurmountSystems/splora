@@ -11,12 +11,12 @@ use splora_frontend_shared::wire::{
     AddressStats, Block, FeeEstimates, MempoolSummary, RecentTransaction, Transaction,
 };
 use splora_frontend_shared::{
-    IndexerCall, address_prefix_path, address_txs_path, block_path, block_txs_path, broadcast_path,
-    fee_estimates_path, indexer_request, indexer_routes, mempool_path, mempool_recent_path,
-    tx_path,
+    FIXTURE_JPY_PER_BTC, FiatCode, IndexerCall, address_prefix_path, address_txs_path, block_path,
+    block_txs_path, broadcast_path, btc_fiat_jpy, fee_estimates_path, format_fiat, indexer_request,
+    indexer_routes, mempool_path, mempool_recent_path, tx_path,
 };
 
-const PORTED_ROWS: usize = 89;
+const PORTED_ROWS: usize = 128;
 const BECH32M_OPENED: &str = "bc1pqyqsexampleaddress";
 const BECH32_OPENED: &str = "bc1q0003exampleaddress";
 const BASE58_OPENED: &str = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
@@ -76,6 +76,10 @@ enum Depends {
     LiquidAssetDocument,
     AssetTxList,
     TxSecondOutput,
+    /// Calculator and fiat rows. The indexer route table has no price pattern.
+    NoPriceRoute,
+    /// Docs rows. The route table still has GET /blocks and GET /tx/:txid.
+    ApiScreen,
 }
 
 const LIQUID: &str = "ref/mempool/frontend/cypress/e2e/liquid/liquid.spec.ts";
@@ -84,6 +88,9 @@ const MAINNET: &str = "ref/mempool/frontend/cypress/e2e/mainnet/mainnet.spec.ts"
 const RECENT: &str = "ref/mempool/frontend/cypress/e2e/mainnet/recent-transactions.spec.ts";
 const SIGNET: &str = "ref/mempool/frontend/cypress/e2e/signet/signet.spec.ts";
 const TESTNET4: &str = "ref/mempool/frontend/cypress/e2e/testnet4/testnet4.spec.ts";
+const CALCULATOR: &str = "ref/mempool/frontend/cypress/e2e/mainnet/calculator.spec.ts";
+const FIAT_FORMATTING: &str =
+    "ref/mempool/frontend/cypress/e2e/mainnet/fiat-currency-formatting.spec.ts";
 
 const PORTED: &[PortedRow] = &[
     PortedRow {
@@ -551,18 +558,6 @@ const PORTED: &[PortedRow] = &[
         depends: Depends::BlockTxPage,
     },
     PortedRow {
-        spec: MAINNET,
-        test: "blocks / shows blocks pagination with 5 pages (desktop)",
-        paths: &["/block/:hash/txs"],
-        depends: Depends::BlockTxPage,
-    },
-    PortedRow {
-        spec: MAINNET,
-        test: "blocks / shows blocks pagination with 3 pages (mobile)",
-        paths: &["/block/:hash/txs"],
-        depends: Depends::BlockTxPage,
-    },
-    PortedRow {
         spec: RECENT,
         test: "updates the transaction list over time",
         paths: &["/mempool/recent"],
@@ -688,6 +683,252 @@ const PORTED: &[PortedRow] = &[
         paths: &["/block/:hash/txs"],
         depends: Depends::BlockTxPage,
     },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "page load and initial state / loads the calculator page with heading and form",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "page load and initial state / displays the mocked conversion rate in .symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "page load and initial state / shows copy buttons for each input",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "page load and initial state / shows input labels for currency, BTC, and sats",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "default values / displays 1 BTC with correct sats and fiat",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "bitcoin input updates fiat and sats / updates fiat and sats when entering 0.33 BTC",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "bitcoin input updates fiat and sats / updates fiat and sats when entering 1 sat (0.00000001 BTC)",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "fiat input updates BTC and sats / updates BTC and sats when entering fiat value",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "satoshis input updates BTC and fiat / updates BTC and fiat when entering 10000 sats",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "input sanitization / normalizes comma to dot in fiat input",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "input sanitization / limits BTC to 8 decimals",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "input sanitization / strips decimals from satoshis input",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "max supply (21M BTC) / shows warning when entering 21M BTC",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "max supply (21M BTC) / caps values at max supply",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "clipboard buttons / copy buttons exist and are visible",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "loading state / shows calculator form after price feed loads",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "JPY currency / displays JPY conversion rate in .symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "JPY currency / displays 1 BTC with correct sats and fiat in JPY",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "JPY currency / updates fiat and sats when entering 0.5 BTC in JPY",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "JPY currency / updates BTC and sats when entering fiat value in JPY",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: CALCULATOR,
+        test: "JPY currency / updates BTC and fiat when entering 10000 sats in JPY",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / USD formatting / displays USD values with correct currency symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / USD formatting / displays USD values with proper decimal format",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / JPY formatting / displays JPY values with yen symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / JPY formatting / displays JPY values without decimal places",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / JPY formatting / formats all JPY values correctly without decimals",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / currency switching / correctly formats when switching from USD to JPY",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Dashboard / currency switching / correctly formats when switching from JPY back to USD",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Transaction Page / displays USD fiat values with dollar symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Transaction Page / displays JPY fiat values without decimals",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Block Page / displays USD fiat values in block reward with dollar symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Block Page / displays JPY fiat values without decimals",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Address Page / displays USD fiat values with dollar symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Address Page / displays JPY fiat values without decimals",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Calculator Page / displays USD price with dollar symbol",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Calculator Page / displays JPY price without decimals after switching currency",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Mempool Block Tooltip / displays USD fiat values in mempool block",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: FIAT_FORMATTING,
+        test: "Mempool Block Tooltip / displays JPY fiat values in mempool block",
+        paths: &[],
+        depends: Depends::NoPriceRoute,
+    },
+    PortedRow {
+        spec: MAINNET,
+        test: "loads the api screen",
+        paths: &["/blocks", "/tx/:hash"],
+        depends: Depends::ApiScreen,
+    },
+    PortedRow {
+        spec: SIGNET,
+        test: "loads the api screen",
+        paths: &["/blocks", "/tx/:hash"],
+        depends: Depends::ApiScreen,
+    },
+    PortedRow {
+        spec: TESTNET4,
+        test: "loads the api screen",
+        paths: &["/blocks", "/tx/:hash"],
+        depends: Depends::ApiScreen,
+    },
 ];
 
 #[test]
@@ -701,12 +942,18 @@ fn every_ported_row_asserts_its_electrs_path_and_serde_fields() {
             row.spec,
             row.test
         );
-        assert!(!row.paths.is_empty(), "{}", row.test);
-        for path in row.paths {
-            assert_electrs_path(path, row.test);
+        if matches!(row.depends, Depends::NoPriceRoute) {
+            assert!(row.paths.is_empty(), "{}", row.test);
+        } else {
+            assert!(!row.paths.is_empty(), "{}", row.test);
+            for path in row.paths {
+                assert_electrs_path(path, row.test);
+            }
         }
         check_fields(row);
     }
+    let len = PORTED.len();
+    println!("ported set length {len} matches inventory ported count {PORTED_ROWS}");
 }
 
 fn assert_electrs_path(path: &str, test: &str) {
@@ -856,7 +1103,38 @@ fn check_fields(row: &PortedRow) {
         Depends::LiquidAssetDocument => assert_liquid_asset_document(row.paths),
         Depends::AssetTxList => assert_asset_tx_list(row.paths),
         Depends::TxSecondOutput => assert_second_output(row.paths),
+        Depends::NoPriceRoute => assert_no_price_route(),
+        Depends::ApiScreen => assert_api_screen(),
     }
+}
+
+fn assert_no_price_route() {
+    assert!(
+        indexer_routes()
+            .iter()
+            .all(|route| !route.pattern.contains("price")),
+        "indexer route table must not contain a price pattern"
+    );
+    assert_eq!(btc_fiat_jpy("1"), "\u{00A5}11,057,757");
+    let fiat_screen = format_fiat(FiatCode::Jpy, &FIXTURE_JPY_PER_BTC.to_string());
+    assert_eq!(fiat_screen, "\u{00A5}11057757");
+    assert!(!fiat_screen.contains(','));
+}
+
+fn assert_api_screen() {
+    let routes = indexer_routes();
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.method == "GET" && route.pattern == "/blocks"),
+        "missing GET /blocks"
+    );
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.method == "GET" && route.pattern == "/tx/:txid"),
+        "missing GET /tx/:txid"
+    );
 }
 
 fn fixture(name: &str) -> String {

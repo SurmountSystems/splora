@@ -421,6 +421,16 @@ fn chain_tip_opens_the_block_or_the_height() {
     assert!(src.contains("tip_links_markup"));
 }
 
+/// GPUI paints the exact line `tip height: 1 hash: liqtip` from
+/// `GET /blocks/tip/height` and `GET /blocks/tip/hash`. Neither route has a
+/// query string. The block link and the height link stay.
+#[test]
+fn dashboard_paints_tip_height_and_hash_line() {
+    const LINE: &str = "tip height: 1 hash: liqtip";
+    let markup = tip_links_markup("liqtip", "1");
+    assert_eq!(markup.matches(LINE).count(), 1, "{markup}");
+}
+
 #[test]
 fn known_tip_hash_opens_the_height_on_that_block() {
     let markup = chain_tip_markup(&format!(" {TIP}\n"), " 800000 ");
@@ -461,15 +471,15 @@ fn height_route_older_transactions_use_the_block_hash() {
 fn empty_address_lists_and_recent_mempool_are_sentences() {
     assert_eq!(
         address_rows_markup("", "[]", ""),
-        "<p class=\"empty\">There are no transactions.</p>"
+        "<p class=\"empty\">There are no transactions.</p><p class=\"address-tx-empty\">The address transaction list is empty.</p>"
     );
     assert_eq!(
         address_rows_markup("", "", "[]"),
-        "<p class=\"empty\">There are no unspent outputs.</p>"
+        "<p class=\"empty\">There are no unspent outputs.</p><p class=\"address-utxo-empty\">The utxo list is empty.</p>"
     );
     assert_eq!(
         address_rows_markup("", "[]", "[]"),
-        "<p class=\"empty\">There are no transactions.</p><p class=\"empty\">There are no unspent outputs.</p>"
+        "<p class=\"empty\">There are no transactions.</p><p class=\"address-tx-empty\">The address transaction list is empty.</p><p class=\"empty\">There are no unspent outputs.</p><p class=\"address-utxo-empty\">The utxo list is empty.</p>"
     );
     assert_eq!(
         recent_rows_markup("[]"),

@@ -82,10 +82,8 @@ fn missing_nonce_bits_and_difficulty_are_none() {
 
 #[test]
 fn explicit_zero_stays_some_zero() {
-    let block: Block = serde_json::from_str(&block_json(
-        r#","nonce":0,"bits":0,"difficulty":0.0"#,
-    ))
-    .expect("explicit zero");
+    let block: Block = serde_json::from_str(&block_json(r#","nonce":0,"bits":0,"difficulty":0.0"#))
+        .expect("explicit zero");
     block.nonce.expect_some(0);
     block.bits.expect_some(0);
     block.difficulty.expect_some(0.0);
@@ -132,10 +130,8 @@ fn serialize_none_omits_nonce_bits_and_difficulty() {
 
 #[test]
 fn serialize_some_zero_keeps_the_key_and_the_digit_zero() {
-    let block: Block = serde_json::from_str(&block_json(
-        r#","nonce":0,"bits":0,"difficulty":0.0"#,
-    ))
-    .expect("explicit zero");
+    let block: Block = serde_json::from_str(&block_json(r#","nonce":0,"bits":0,"difficulty":0.0"#))
+        .expect("explicit zero");
     block.nonce.expect_some(0);
     block.bits.expect_some(0);
     block.difficulty.expect_some(0.0);

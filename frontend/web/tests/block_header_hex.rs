@@ -7,7 +7,7 @@
 //! invent a header of zeros and does not paint an empty hex cell.
 //! The label stays, because that Angular row is not hidden.
 
-use splora_web::{block_details_markup, block_header_hex_markup};
+use splora_web::{block_details_markup, block_header_aside_markup, block_header_hex_markup};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -108,4 +108,10 @@ fn short_hex_is_not_the_block_header() {
     assert!(!open.contains("block-header-hex"), "{open}");
     assert!(!open.contains(">aa55<"), "{open}");
     assert_one(&open, "<td>Block Header Hex</td>");
+}
+
+#[test]
+fn block_header_aside_shows_block_header_aabb() {
+    let markup = block_header_aside_markup("aabb");
+    assert!(markup.contains("block header aabb"), "{markup}");
 }

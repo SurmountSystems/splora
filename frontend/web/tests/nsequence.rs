@@ -97,3 +97,59 @@ fn missing_sequence_key_omits_nsequence() {
     assert_absent(&markup, "nSequence");
     assert_fixtures_stay_off(&markup);
 }
+
+/// Whole line `sequence 0` from no-query `GET /tx/:txid`.
+///
+/// A present sequence paints the decimal as its own line, including zero.
+/// The decimal span and the `nSequence` hex span stay. The hex line is not
+/// this line. A missing sequence key still fails input parse.
+#[test]
+fn sequence_zero_paints_sequence_0_as_its_own_line() {
+    const LINE: &str = "sequence 0";
+    let markup = transaction_row_markup(&tx(Some(0)));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert_one(&markup, "<span class=\"sequence\">sequence 0</span>");
+    assert_one(&markup, &sequence_spans(0, "0x00"));
+    assert!(
+        !markup.lines().any(|line| line == "nSequence 0x00"),
+        "nSequence 0x00 was painted as its own line: {markup}"
+    );
+    assert_fixtures_stay_off(&markup);
+
+    let padded = transaction_row_markup(&tx(Some(256)));
+    assert!(
+        padded.lines().any(|line| line == "sequence 256"),
+        "sequence 256 is absent: {padded}"
+    );
+    assert_eq!(
+        padded
+            .lines()
+            .filter(|line| *line == "sequence 256")
+            .count(),
+        1,
+        "sequence 256 was not one line: {padded}"
+    );
+    assert_one(&padded, &sequence_spans(256, "0x0100"));
+
+    let max = transaction_row_markup(&tx(Some(u32::MAX)));
+    assert!(
+        max.lines().any(|line| line == "sequence 4294967295"),
+        "sequence 4294967295 is absent: {max}"
+    );
+    assert_eq!(
+        max.lines()
+            .filter(|line| *line == "sequence 4294967295")
+            .count(),
+        1,
+        "sequence 4294967295 was not one line: {max}"
+    );
+    assert_one(&max, "<span class=\"sequence\">sequence 4294967295</span>");
+}

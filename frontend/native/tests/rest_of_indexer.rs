@@ -775,6 +775,1495 @@ fn multi_address_posts_full_tx_history_for_addresses_and_scripthashes() {
     );
 }
 
+/// Mainnet bech32 pay-to-witness-pubkey-hash paints the badge `P2WPKH`
+/// beside the row label `Type`. The address JSON has no type field. The
+/// badge is the address string, not an uppercased output `Type V0_P2WPKH`.
+/// A different address shape does not paint `P2WPKH`.
+#[test]
+fn address_screen_paints_p2wpkh_badge() {
+    let address = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let stats = format!(
+        r#"{{"address":"{address}","chain_stats":{{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":10,"spent_txo_sum":0}},"mempool_stats":{{"tx_count":0,"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}}}"#
+    );
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let painted = paint_address(address, &stats);
+    assert!(
+        painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {painted}"
+    );
+    assert_eq!(
+        painted.matches("Type P2WPKH").count(),
+        1,
+        "P2WPKH badge was not painted once: {painted}"
+    );
+    assert!(
+        !painted.contains("V0_P2WPKH"),
+        "address badge was uppercased into the output type: {painted}"
+    );
+    for absent in ["P2PKH", "P2SH", "P2TR", "P2WSH"] {
+        assert!(
+            !painted.contains(absent),
+            "{absent} was painted on the p2wpkh address: {painted}"
+        );
+    }
+
+    let other = "bc1qnotp2wpkhshape";
+    let other_stats = address_stats(other);
+    assert!(
+        !other_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {other_stats}"
+    );
+    let other_painted = paint_address(other, &other_stats);
+    assert!(
+        !other_painted.contains("P2WPKH"),
+        "a different address shape painted P2WPKH: {other_painted}"
+    );
+    assert!(
+        !other_painted.lines().any(|line| line.starts_with("Type ")),
+        "a different address shape painted a type badge: {other_painted}"
+    );
+}
+
+/// Mainnet bech32 pay-to-witness-script-hash paints the badge `P2WSH`
+/// beside the row label `Type`. The address starts with `bc1q` and then
+/// has 58 bech32 characters. The address JSON has no type field. The
+/// badge is the address string, not an uppercased output `Type V0_P2WSH`.
+/// A shorter `bc1q` pay-to-witness-pubkey-hash address stays `Type P2WPKH`
+/// and does not paint `P2WSH`.
+#[test]
+fn address_screen_paints_p2wsh_badge() {
+    let address = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let rest = address
+        .strip_prefix("bc1q")
+        .expect("longer mainnet address starts with bc1q");
+    assert_eq!(rest.len(), 58, "{address}");
+    assert!(
+        rest.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'a' | b'c'..=b'h' | b'j'..=b'n' | b'p'..=b'z' | b'0' | b'2'..=b'9'
+            )
+        }),
+        "longer bc1q suffix is not bech32: {address}"
+    );
+    let stats = address_stats(address);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let painted = paint_address(address, &stats);
+    assert!(
+        painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {painted}"
+    );
+    assert_eq!(
+        painted.matches("Type P2WSH").count(),
+        1,
+        "P2WSH badge was not painted once: {painted}"
+    );
+    assert!(
+        !painted.contains("V0_P2WSH"),
+        "address badge was uppercased into the output type: {painted}"
+    );
+    assert!(
+        !painted.contains("P2WPKH"),
+        "the longer bc1q address painted P2WPKH: {painted}"
+    );
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_rest = short
+        .strip_prefix("bc1q")
+        .expect("shorter mainnet address starts with bc1q");
+    assert_eq!(short_rest.len(), 38, "{short}");
+    let short_stats = address_stats(short);
+    assert!(
+        !short_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {short_stats}"
+    );
+    let short_painted = paint_address(short, &short_stats);
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.contains("P2WSH"),
+        "the shorter bc1q address painted P2WSH: {short_painted}"
+    );
+    assert!(
+        !short_painted.contains("V0_P2WSH"),
+        "the shorter bc1q address painted V0_P2WSH: {short_painted}"
+    );
+}
+
+/// Mainnet bech32m pay-to-taproot paints the badge `P2TR` beside the row
+/// label `Type`. The address starts with `bc1` and then `p` plus 58 bech32
+/// characters. The address JSON has no type field. The badge is the address
+/// string, not the label `P2TR tapscript`, and not an uppercased output type.
+/// A `bc1q` pay-to-witness-pubkey-hash address stays `Type P2WPKH` and does
+/// not paint `P2TR`. A longer `bc1q` pay-to-witness-script-hash address stays
+/// `Type P2WSH` and does not paint `P2TR`.
+#[test]
+fn address_screen_paints_p2tr_badge() {
+    let address = "bc1pahzjr2vnfqnqwl0h8jps2aa4zqe29wqxn2nagvd5a2z982k7ttdq8ry370";
+    let rest = address
+        .strip_prefix("bc1p")
+        .expect("longer mainnet address starts with bc1p");
+    assert_eq!(rest.len(), 58, "{address}");
+    assert!(
+        rest.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'a' | b'c'..=b'h' | b'j'..=b'n' | b'p'..=b'z' | b'0' | b'2'..=b'9'
+            )
+        }),
+        "longer bc1p suffix is not bech32: {address}"
+    );
+    let stats = address_stats(address);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let painted = paint_address(address, &stats);
+    assert!(
+        painted.lines().any(|line| line == "Type P2TR"),
+        "Type did not sit beside the P2TR badge: {painted}"
+    );
+    assert_eq!(
+        painted.matches("Type P2TR").count(),
+        1,
+        "P2TR badge was not painted once: {painted}"
+    );
+    assert!(
+        !painted.contains("P2TR tapscript"),
+        "the address badge was the tapscript label: {painted}"
+    );
+    assert!(
+        !painted.contains("V1_P2TR"),
+        "address badge was uppercased into the output type: {painted}"
+    );
+    assert!(
+        !painted.contains("P2WPKH"),
+        "the longer bc1p address painted P2WPKH: {painted}"
+    );
+    assert!(
+        !painted.contains("P2WSH"),
+        "the longer bc1p address painted P2WSH: {painted}"
+    );
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_rest = short
+        .strip_prefix("bc1q")
+        .expect("shorter mainnet address starts with bc1q");
+    assert_eq!(short_rest.len(), 38, "{short}");
+    let short_stats = address_stats(short);
+    assert!(
+        !short_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {short_stats}"
+    );
+    let short_painted = paint_address(short, &short_stats);
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.contains("P2TR"),
+        "the shorter bc1q address painted P2TR: {short_painted}"
+    );
+
+    let script = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let script_rest = script
+        .strip_prefix("bc1q")
+        .expect("longer mainnet address starts with bc1q");
+    assert_eq!(script_rest.len(), 58, "{script}");
+    let script_stats = address_stats(script);
+    assert!(
+        !script_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {script_stats}"
+    );
+    let script_painted = paint_address(script, &script_stats);
+    assert!(
+        script_painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {script_painted}"
+    );
+    assert!(
+        !script_painted.contains("P2TR"),
+        "the longer bc1q address painted P2TR: {script_painted}"
+    );
+}
+
+/// Mainnet base58 pay-to-pubkey-hash paints the badge `P2PKH` beside the
+/// row label `Type`. The address is the Cypress fixture
+/// `1stAprEZapjCYGUACUcXohQqSHF9MU5Kj` (`scriptpubkey_type` `p2pkh`).
+/// Its first character is `1`. `detectAddressType` returns `p2pkh`.
+/// Angular has no dedicated p2pkh case. The default arm uppercases the
+/// type, so the visible text is `P2PKH`. The address JSON has no type
+/// field. This is not an output type line. A `bc1q`
+/// pay-to-witness-pubkey-hash address stays `Type P2WPKH` and does not
+/// paint `P2PKH`. A longer `bc1q` pay-to-witness-script-hash address stays
+/// `Type P2WSH` and does not paint `P2PKH`. A `bc1p` pay-to-taproot
+/// address stays `Type P2TR` and does not paint `P2PKH`. A mainnet
+/// address that starts with `3` paints `Type P2SH` once and does not
+/// paint `P2PKH`. A failed address
+/// load keeps `Error loading address data.` and does not show this badge.
+/// The indexer body `Invalid Bitcoin address` stays.
+#[test]
+fn address_screen_paints_p2pkh_badge() {
+    let address = "1stAprEZapjCYGUACUcXohQqSHF9MU5Kj";
+    let rest = address
+        .strip_prefix('1')
+        .expect("mainnet p2pkh address starts with 1");
+    assert_eq!(rest.len(), 32, "{address}");
+    assert!(
+        rest.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'1'..=b'9'
+                    | b'A'..=b'H'
+                    | b'J'..=b'N'
+                    | b'P'..=b'Z'
+                    | b'a'..=b'k'
+                    | b'm'..=b'z'
+            )
+        }),
+        "p2pkh remainder is not base58: {address}"
+    );
+    let stats = address_stats(address);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let loaded = paint_address(address, &stats);
+    assert!(
+        loaded.lines().any(|line| line == "Type P2PKH"),
+        "Type did not sit beside the P2PKH badge: {loaded}"
+    );
+    assert_eq!(
+        loaded.matches("Type P2PKH").count(),
+        1,
+        "P2PKH badge was not painted once: {loaded}"
+    );
+    assert!(
+        !loaded.contains("Error loading address data."),
+        "a parsed address that returns stats showed the load error: {loaded}"
+    );
+    for absent in ["script hex", "script asm", "witness", "tooltip"] {
+        assert!(
+            !loaded.contains(absent),
+            "{absent} was painted on the p2pkh address: {loaded}"
+        );
+    }
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_rest = short
+        .strip_prefix("bc1q")
+        .expect("shorter mainnet address starts with bc1q");
+    assert_eq!(short_rest.len(), 38, "{short}");
+    let short_stats = address_stats(short);
+    assert!(
+        !short_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {short_stats}"
+    );
+    let short_painted = paint_address(short, &short_stats);
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.contains("P2PKH"),
+        "the shorter bc1q address painted P2PKH: {short_painted}"
+    );
+
+    let script = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let script_rest = script
+        .strip_prefix("bc1q")
+        .expect("longer mainnet address starts with bc1q");
+    assert_eq!(script_rest.len(), 58, "{script}");
+    let script_stats = address_stats(script);
+    assert!(
+        !script_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {script_stats}"
+    );
+    let script_painted = paint_address(script, &script_stats);
+    assert!(
+        script_painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {script_painted}"
+    );
+    assert!(
+        !script_painted.contains("P2PKH"),
+        "the longer bc1q address painted P2PKH: {script_painted}"
+    );
+
+    let taproot = "bc1pahzjr2vnfqnqwl0h8jps2aa4zqe29wqxn2nagvd5a2z982k7ttdq8ry370";
+    let taproot_rest = taproot
+        .strip_prefix("bc1p")
+        .expect("longer mainnet address starts with bc1p");
+    assert_eq!(taproot_rest.len(), 58, "{taproot}");
+    let taproot_stats = address_stats(taproot);
+    assert!(
+        !taproot_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {taproot_stats}"
+    );
+    let taproot_painted = paint_address(taproot, &taproot_stats);
+    assert!(
+        taproot_painted.lines().any(|line| line == "Type P2TR"),
+        "Type did not sit beside the P2TR badge: {taproot_painted}"
+    );
+    assert!(
+        !taproot_painted.contains("P2PKH"),
+        "the longer bc1p address painted P2PKH: {taproot_painted}"
+    );
+
+    let nested = "3Bmb9Jig8A5kHdDSxvDZ6eryj3AXd3swuJ";
+    assert!(nested.starts_with('3'), "{nested}");
+    let nested_rest = nested
+        .strip_prefix('3')
+        .expect("mainnet address starts with 3");
+    assert_eq!(nested_rest.len(), 33, "{nested}");
+    assert!(
+        nested_rest.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'1'..=b'9'
+                    | b'A'..=b'H'
+                    | b'J'..=b'N'
+                    | b'P'..=b'Z'
+                    | b'a'..=b'k'
+                    | b'm'..=b'z'
+            )
+        }),
+        "address that starts with 3 is not base58: {nested}"
+    );
+    let nested_stats = address_stats(nested);
+    assert!(
+        !nested_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {nested_stats}"
+    );
+    let nested_painted = paint_address(nested, &nested_stats);
+    assert!(
+        !nested_painted.contains("P2PKH"),
+        "a mainnet address that starts with 3 painted P2PKH: {nested_painted}"
+    );
+    assert_eq!(
+        nested_painted
+            .lines()
+            .filter(|line| *line == "Type P2SH")
+            .count(),
+        1,
+        "Type did not sit beside the P2SH badge once: {nested_painted}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/address/{address}"),
+            "Invalid Bitcoin address".to_string(),
+        )]),
+    );
+    let err = host
+        .open_address(address)
+        .expect_err("invalid address must fail");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{address}")),
+        "address load did not GET /address/{address}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "address load used a query string: {paths:?}"
+    );
+    let failed = painted(&host);
+    assert!(
+        failed
+            .lines()
+            .any(|line| line == "Error loading address data."),
+        "Error loading address data. is absent: {failed}"
+    );
+    assert!(
+        err.to_string().contains("Invalid Bitcoin address"),
+        "indexer body left the error: {err}"
+    );
+    assert!(
+        failed.lines().any(|line| line == "Invalid Bitcoin address"),
+        "Invalid Bitcoin address was replaced or dropped: {failed}"
+    );
+    assert!(
+        !failed.contains("P2PKH"),
+        "a failed address load showed the P2PKH badge: {failed}"
+    );
+    assert!(
+        !failed.lines().any(|line| line.starts_with("Type ")),
+        "a failed address load painted a type badge: {failed}"
+    );
+}
+
+/// Mainnet base58 pay-to-script-hash paints the badge `P2SH` beside the
+/// row label `Type` when no spend has rewritten the type. The address is
+/// the Cypress pools fixture `3Bmb9Jig8A5kHdDSxvDZ6eryj3AXd3swuJ`. Its
+/// first character is `3`. The remainder is 26 to 34 base58 characters.
+/// `detectAddressType` returns `p2sh`. Angular has no dedicated p2sh case.
+/// The default arm uppercases the type, so the visible text is `P2SH`.
+/// The address JSON has no type field. This is the address Type line, not
+/// an output type line. The letters `P2SH` also appear inside
+/// `P2SH-P2WPKH`, so the check is the exact line. A `bc1q`
+/// pay-to-witness-pubkey-hash address stays `Type P2WPKH` and does not
+/// paint `Type P2SH`. A longer `bc1q` pay-to-witness-script-hash address
+/// stays `Type P2WSH` and does not paint `Type P2SH`. A `bc1p`
+/// pay-to-taproot address stays `Type P2TR` and does not paint `Type P2SH`.
+/// A leading `1` address stays `Type P2PKH` and does not paint `Type P2SH`.
+/// A failed address load keeps `Error loading address data.` and does not
+/// show this badge. The indexer body `Invalid Bitcoin address` stays.
+#[test]
+fn address_screen_paints_p2sh_badge() {
+    let address = "3Bmb9Jig8A5kHdDSxvDZ6eryj3AXd3swuJ";
+    let rest = address
+        .strip_prefix('3')
+        .expect("mainnet p2sh address starts with 3");
+    assert!(
+        (26..=34).contains(&rest.len()),
+        "p2sh remainder length is not 26 to 34: {address}"
+    );
+    assert_eq!(rest.len(), 33, "{address}");
+    assert!(
+        rest.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'1'..=b'9'
+                    | b'A'..=b'H'
+                    | b'J'..=b'N'
+                    | b'P'..=b'Z'
+                    | b'a'..=b'k'
+                    | b'm'..=b'z'
+            )
+        }),
+        "p2sh remainder is not base58: {address}"
+    );
+    let stats = address_stats(address);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let loaded = paint_address(address, &stats);
+    assert!(
+        loaded.lines().any(|line| line == "Type P2SH"),
+        "Type did not sit beside the P2SH badge: {loaded}"
+    );
+    assert_eq!(
+        loaded.lines().filter(|line| *line == "Type P2SH").count(),
+        1,
+        "P2SH badge was not painted once: {loaded}"
+    );
+    assert!(
+        !loaded.contains("P2SH-P2WPKH"),
+        "the no-spend page painted P2SH-P2WPKH: {loaded}"
+    );
+    assert!(
+        !loaded.contains("P2SH-P2WSH"),
+        "the no-spend page painted P2SH-P2WSH: {loaded}"
+    );
+    assert!(
+        !loaded.contains("Error loading address data."),
+        "a parsed address that returns stats showed the load error: {loaded}"
+    );
+    for absent in ["script hex", "script asm", "witness", "tooltip"] {
+        assert!(
+            !loaded.contains(absent),
+            "{absent} was painted on the p2sh address: {loaded}"
+        );
+    }
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_rest = short
+        .strip_prefix("bc1q")
+        .expect("shorter mainnet address starts with bc1q");
+    assert_eq!(short_rest.len(), 38, "{short}");
+    let short_stats = address_stats(short);
+    assert!(
+        !short_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {short_stats}"
+    );
+    let short_painted = paint_address(short, &short_stats);
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.lines().any(|line| line == "Type P2SH"),
+        "the shorter bc1q address painted Type P2SH: {short_painted}"
+    );
+
+    let script = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let script_rest = script
+        .strip_prefix("bc1q")
+        .expect("longer mainnet address starts with bc1q");
+    assert_eq!(script_rest.len(), 58, "{script}");
+    let script_stats = address_stats(script);
+    assert!(
+        !script_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {script_stats}"
+    );
+    let script_painted = paint_address(script, &script_stats);
+    assert!(
+        script_painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {script_painted}"
+    );
+    assert!(
+        !script_painted.lines().any(|line| line == "Type P2SH"),
+        "the longer bc1q address painted Type P2SH: {script_painted}"
+    );
+
+    let taproot = "bc1pahzjr2vnfqnqwl0h8jps2aa4zqe29wqxn2nagvd5a2z982k7ttdq8ry370";
+    let taproot_rest = taproot
+        .strip_prefix("bc1p")
+        .expect("longer mainnet address starts with bc1p");
+    assert_eq!(taproot_rest.len(), 58, "{taproot}");
+    let taproot_stats = address_stats(taproot);
+    assert!(
+        !taproot_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {taproot_stats}"
+    );
+    let taproot_painted = paint_address(taproot, &taproot_stats);
+    assert!(
+        taproot_painted.lines().any(|line| line == "Type P2TR"),
+        "Type did not sit beside the P2TR badge: {taproot_painted}"
+    );
+    assert!(
+        !taproot_painted.lines().any(|line| line == "Type P2SH"),
+        "the longer bc1p address painted Type P2SH: {taproot_painted}"
+    );
+
+    let pubkey = "1stAprEZapjCYGUACUcXohQqSHF9MU5Kj";
+    let pubkey_rest = pubkey
+        .strip_prefix('1')
+        .expect("mainnet p2pkh address starts with 1");
+    assert_eq!(pubkey_rest.len(), 32, "{pubkey}");
+    let pubkey_stats = address_stats(pubkey);
+    assert!(
+        !pubkey_stats.contains("\"type\""),
+        "address JSON must not carry a type field: {pubkey_stats}"
+    );
+    let pubkey_painted = paint_address(pubkey, &pubkey_stats);
+    assert!(
+        pubkey_painted.lines().any(|line| line == "Type P2PKH"),
+        "Type did not sit beside the P2PKH badge: {pubkey_painted}"
+    );
+    assert!(
+        !pubkey_painted.lines().any(|line| line == "Type P2SH"),
+        "the p2pkh address painted Type P2SH: {pubkey_painted}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/address/{address}"),
+            "Invalid Bitcoin address".to_string(),
+        )]),
+    );
+    let err = host
+        .open_address(address)
+        .expect_err("invalid address must fail");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{address}")),
+        "address load did not GET /address/{address}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "address load used a query string: {paths:?}"
+    );
+    let failed = painted(&host);
+    assert!(
+        failed
+            .lines()
+            .any(|line| line == "Error loading address data."),
+        "Error loading address data. is absent: {failed}"
+    );
+    assert!(
+        err.to_string().contains("Invalid Bitcoin address"),
+        "indexer body left the error: {err}"
+    );
+    assert!(
+        failed.lines().any(|line| line == "Invalid Bitcoin address"),
+        "Invalid Bitcoin address was replaced or dropped: {failed}"
+    );
+    assert!(
+        !failed.lines().any(|line| line == "Type P2SH"),
+        "a failed address load showed the P2SH badge: {failed}"
+    );
+    assert!(
+        !failed.lines().any(|line| line.starts_with("Type ")),
+        "a failed address load painted a type badge: {failed}"
+    );
+}
+
+/// Scriptsig from the Angular `transactions-random.json` p2sh-p2wpkh spend.
+const P2SH_P2WPKH_SCRIPTSIG: &str = "1600149b27f072e4b972927c445d1946162a550b0914d8";
+const P2SH_P2WPKH_WITNESS_0: &str = "3040021c23902a01d4c5cff2c33c8bdb778a5aadea78a9a0d6d4db60aaa0fba1022069237d9dbf2db8cff9c260ba71250493682d01a746f4a45c5c7ea386e56d2bc902";
+const P2SH_P2WPKH_WITNESS_1: &str =
+    "0240187acd3e2fd3d8e1acffefa85907b6550730c24f78dfd3301c829fc4daf3cc";
+/// Scriptsig from the same fixture's p2sh-p2wsh spend.
+/// Address `3GcrZrbUuvE4UtUdSbKTXcRnTqmfMdyMAC` in `transactions-random.json`.
+/// A non-empty witness paints `Type P2SH-P2WSH`. An empty witness does not.
+const P2SH_P2WSH_SCRIPTSIG: &str =
+    "220020a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75";
+const P2SH_P2WSH_ADDRESS: &str = "3GcrZrbUuvE4UtUdSbKTXcRnTqmfMdyMAC";
+const P2SH_P2WSH_WITNESS_0: &str = "303f021c65aee6696e80be6e14545cfd64b44f17b0514c150eefdb090c0f0bd9021f3fef4aa95c252a225622aba99e4d5af5a6fe40d177acd593e64cf2f8557ccc03";
+const P2SH_P2WSH_WITNESS_1: &str =
+    "03b55c6f0749e0f3e2caeca05f68e3699f1b3c62a550730f704985a6a9aae437a1";
+const P2SH_P2WSH_WITNESS_2: &str = "76a914db865fd920959506111079995f1e4017b489bfe38763ac6721024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c7c820120876475527c2103443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca52ae67a91446c3747322b220fdb925c9802f0e949c1feab99988ac6868";
+/// Address and 2-of-3 redeem script from the Angular track-address sample.
+const MULTISIG_2_OF_3_ADDRESS: &str = "3L4YUynB4X44rJBY9CmiLMN8Wjti49JCYB";
+const MULTISIG_2_OF_3_REDEEM: &str = "OP_PUSHNUM_2 OP_PUSHBYTES_33 027f2a0df8e86535d08ca3e766a178f90c813d2dd1d55b0166e82518efbffb18c0 OP_PUSHBYTES_33 03556a35844b517e2fc8216701e2e0a64dbcbe62ad420ac6dd73dc79e69efeb695 OP_PUSHBYTES_33 031ef21bd55171032b7aec21ec82932735fb986f1d4d8611feee62ab38acf4a6bb OP_PUSHNUM_3 OP_CHECKMULTISIG";
+const MULTISIG_2_OF_3_SCRIPTSIG: &str = "0048304502210099219ee0cd5da341650078e3c63885b3cc2211069f2551cf436e0100f421e1760220349b4ec284255b458d6da539fa17314e8330459e0a653c254f775d4ec8f32b3f0147304402203a8353c5ee76a2e266432e5f993f882e05725297e64c0833cf44719f7dda8d3b022058a2f72e7739efd21657b4943cac60a0a3c749e712787f0e85726da4c3adcf8e014c695221027f2a0df8e86535d08ca3e766a178f90c813d2dd1d55b0166e82518efbffb18c02103556a35844b517e2fc8216701e2e0a64dbcbe62ad420ac6dd73dc79e69efeb69521031ef21bd55171032b7aec21ec82932735fb986f1d4d8611feee62ab38acf4a6bb53ae";
+const MULTISIG_2_OF_3_PUBKEY: &str =
+    "027f2a0df8e86535d08ca3e766a178f90c813d2dd1d55b0166e82518efbffb18c0";
+/// Wrapped-script redeem from the same Angular fixture. It is not 2-of-3.
+const NOT_2_OF_3_REDEEM: &str =
+    "OP_0 OP_PUSHBYTES_32 a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75";
+/// Lightning witness script from `transactions-random.json`. It is not 2-of-3.
+const NOT_MULTISIG_REDEEM: &str = "OP_DUP OP_HASH160 OP_PUSHBYTES_20 db865fd920959506111079995f1e4017b489bfe3 OP_EQUAL OP_IF OP_CHECKSIG OP_ELSE OP_PUSHBYTES_33 024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c OP_SWAP OP_SIZE OP_PUSHBYTES_1 20 OP_EQUAL OP_NOTIF OP_DROP OP_PUSHNUM_2 OP_SWAP OP_PUSHBYTES_33 03443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca OP_PUSHNUM_2 OP_CHECKMULTISIG OP_ELSE OP_HASH160 OP_PUSHBYTES_20 46c3747322b220fdb925c9802f0e949c1feab999 OP_EQUALVERIFY OP_CHECKSIG OP_ENDIF OP_ENDIF";
+
+fn p2sh_address_txs(
+    prevout_address: &str,
+    scriptsig: &str,
+    scriptsig_asm: &str,
+    witness: &str,
+) -> String {
+    address_txs_with_redeem(
+        prevout_address,
+        "p2sh",
+        scriptsig,
+        scriptsig_asm,
+        witness,
+        None,
+    )
+}
+
+fn address_txs_with_redeem(
+    prevout_address: &str,
+    prevout_type: &str,
+    scriptsig: &str,
+    scriptsig_asm: &str,
+    witness: &str,
+    redeem_asm: Option<&str>,
+) -> String {
+    let redeem = match redeem_asm {
+        Some(asm) => format!(r#","inner_redeemscript_asm":"{asm}""#),
+        None => String::new(),
+    };
+    format!(
+        r#"[{{"txid":"b10c0000004da5a9d1d9b4ae32e09f0b3e62d21a5cce5428d4ad714fb444eb5d","version":1,"locktime":1231006505,"vin":[{{"txid":"cb9b47ac04023b29fb633a8ef04af351ac9fd74c57c9a2163f683516274767e3","vout":2,"prevout":{{"scriptpubkey":"a9143b13a1f71c20c799d86bb624b3898c826d6c82da87","scriptpubkey_asm":"OP_HASH160 OP_PUSHBYTES_20 3b13a1f71c20c799d86bb624b3898c826d6c82da OP_EQUAL","scriptpubkey_type":"{prevout_type}","scriptpubkey_address":"{prevout_address}","value":5139}},"scriptsig":"{scriptsig}","scriptsig_asm":"{scriptsig_asm}","witness":{witness},"is_coinbase":false,"sequence":141{redeem}}}],"vout":[],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":true,"block_height":1}}}}]"#
+    )
+}
+
+fn assert_mainnet_script_address(address: &str) {
+    assert!(address.starts_with('3'), "{address}");
+    let rest = address
+        .strip_prefix('3')
+        .expect("mainnet address starts with 3");
+    assert!(
+        (26..=34).contains(&rest.len()),
+        "p2sh remainder length is not 26 to 34: {address}"
+    );
+    assert!(
+        rest.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'1'..=b'9'
+                    | b'A'..=b'H'
+                    | b'J'..=b'N'
+                    | b'P'..=b'Z'
+                    | b'a'..=b'k'
+                    | b'm'..=b'z'
+            )
+        }),
+        "p2sh remainder is not base58: {address}"
+    );
+}
+
+fn assert_no_type_badge(painted: &str) {
+    assert!(
+        !painted.contains("P2SH-P2WPKH"),
+        "P2SH-P2WPKH was painted: {painted}"
+    );
+    assert!(
+        !painted.contains("P2SH-P2WSH"),
+        "P2SH-P2WSH was painted: {painted}"
+    );
+    assert!(
+        !painted.lines().any(|line| line == "Type P2SH"),
+        "a plain Type P2SH line was painted: {painted}"
+    );
+    assert!(
+        !painted.lines().any(|line| line.starts_with("Type ")),
+        "a type badge was painted: {painted}"
+    );
+}
+
+/// The type was not rewritten, so the address line is `Type P2SH` once.
+/// `P2SH-P2WPKH` contains the letters `P2SH`, so the check is the exact line.
+fn assert_plain_p2sh_once(painted: &str) {
+    assert_eq!(
+        painted.lines().filter(|line| *line == "Type P2SH").count(),
+        1,
+        "Type did not sit beside the P2SH badge once: {painted}"
+    );
+    assert!(
+        !painted
+            .lines()
+            .any(|line| line.starts_with("Type ") && line != "Type P2SH"),
+        "another type badge was painted: {painted}"
+    );
+    assert!(
+        !painted.contains("P2SH-P2WPKH"),
+        "P2SH-P2WPKH was painted: {painted}"
+    );
+    assert!(
+        !painted.contains("P2SH-P2WSH"),
+        "P2SH-P2WSH was painted: {painted}"
+    );
+}
+
+/// Mainnet pay-to-script-hash that spends as wrapped pay-to-witness-pubkey-hash
+/// paints the badge `P2SH-P2WPKH` beside the row label `Type`. The address is
+/// the Angular fixture `375PJxsKRtAq4WoS6u82jvgZW94R8Wx3iH`. Its first character
+/// is `3`. `detectAddressType` starts it as `p2sh`. `processInputs` changes the
+/// type to `p2sh-p2wpkh` when a vin spending this address has a non-empty
+/// witness and a scriptsig hex string that starts with `160014`. Angular has
+/// no dedicated case. The default arm uppercases the type, so the visible text
+/// is `P2SH-P2WPKH`. The address JSON has no type field. The Type row appears
+/// only after the no-query `GET /address/:script/txs` succeeds. This is not
+/// `Type P2SH` and not `P2SH-P2WSH`. The scriptsig and the witness stay off
+/// the screen. A `bc1q` pay-to-witness-pubkey-hash address stays `Type P2WPKH`.
+/// A longer `bc1q` address stays `Type P2WSH`. A `bc1p` address stays `Type P2TR`.
+/// A leading `1` address stays `Type P2PKH`. None of those paint `P2SH-P2WPKH`.
+/// A mainnet address that starts with `3` and has no matching spend does not
+/// paint this badge. A spend whose scriptsig starts with `160014` and whose
+/// witness is empty does not paint it. A spend with a witness whose scriptsig
+/// does not start with `160014` does not paint it. That `220020` spend paints
+/// `Type P2SH-P2WSH` once. An input that does not
+/// spend this address does not paint it. A failed address load keeps
+/// `Error loading address data.` and `Invalid Bitcoin address`.
+#[test]
+fn address_screen_paints_p2sh_p2wpkh_badge() {
+    let address = "375PJxsKRtAq4WoS6u82jvgZW94R8Wx3iH";
+    assert_mainnet_script_address(address);
+    let witness = format!(r#"["{P2SH_P2WPKH_WITNESS_0}","{P2SH_P2WPKH_WITNESS_1}"]"#);
+    let txs = p2sh_address_txs(
+        address,
+        P2SH_P2WPKH_SCRIPTSIG,
+        "OP_PUSHBYTES_22 00149b27f072e4b972927c445d1946162a550b0914d8",
+        &witness,
+    );
+    assert!(
+        txs.contains(P2SH_P2WPKH_SCRIPTSIG) && txs.contains(P2SH_P2WPKH_WITNESS_0),
+        "the fixture spend left the transaction list"
+    );
+    let stats = loaded_address_stats(address, 1, 0);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let loaded = paint_address_loaded(address, 1, 0, &txs);
+    assert!(
+        loaded.lines().any(|line| line == "Type P2SH-P2WPKH"),
+        "Type did not sit beside the P2SH-P2WPKH badge: {loaded}"
+    );
+    assert_eq!(
+        loaded.matches("Type P2SH-P2WPKH").count(),
+        1,
+        "P2SH-P2WPKH badge was not painted once: {loaded}"
+    );
+    assert!(
+        !loaded.lines().any(|line| line == "Type P2SH"),
+        "a plain Type P2SH line was painted: {loaded}"
+    );
+    assert!(
+        !loaded.contains("P2SH-P2WSH"),
+        "the wrapped pubkey spend painted P2SH-P2WSH: {loaded}"
+    );
+    assert!(
+        !loaded.contains("Error loading address data."),
+        "a parsed address that returns stats showed the load error: {loaded}"
+    );
+    for absent in [
+        P2SH_P2WPKH_SCRIPTSIG,
+        P2SH_P2WPKH_WITNESS_0,
+        P2SH_P2WPKH_WITNESS_1,
+        "script hex",
+        "script asm",
+        "witness",
+        "tooltip",
+    ] {
+        assert!(
+            !loaded.contains(absent),
+            "{absent} was painted on the p2sh-p2wpkh address: {loaded}"
+        );
+    }
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_painted = paint_address(short, &address_stats(short));
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.contains("P2SH-P2WPKH"),
+        "the shorter bc1q address painted P2SH-P2WPKH: {short_painted}"
+    );
+
+    let script = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let script_painted = paint_address(script, &address_stats(script));
+    assert!(
+        script_painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {script_painted}"
+    );
+    assert!(
+        !script_painted.contains("P2SH-P2WPKH"),
+        "the longer bc1q address painted P2SH-P2WPKH: {script_painted}"
+    );
+
+    let taproot = "bc1pahzjr2vnfqnqwl0h8jps2aa4zqe29wqxn2nagvd5a2z982k7ttdq8ry370";
+    let taproot_painted = paint_address(taproot, &address_stats(taproot));
+    assert!(
+        taproot_painted.lines().any(|line| line == "Type P2TR"),
+        "Type did not sit beside the P2TR badge: {taproot_painted}"
+    );
+    assert!(
+        !taproot_painted.contains("P2SH-P2WPKH"),
+        "the longer bc1p address painted P2SH-P2WPKH: {taproot_painted}"
+    );
+
+    let pubkey = "1stAprEZapjCYGUACUcXohQqSHF9MU5Kj";
+    let pubkey_painted = paint_address(pubkey, &address_stats(pubkey));
+    assert!(
+        pubkey_painted.lines().any(|line| line == "Type P2PKH"),
+        "Type did not sit beside the P2PKH badge: {pubkey_painted}"
+    );
+    assert!(
+        !pubkey_painted.contains("P2SH-P2WPKH"),
+        "the p2pkh address painted P2SH-P2WPKH: {pubkey_painted}"
+    );
+
+    let nested = "3Bmb9Jig8A5kHdDSxvDZ6eryj3AXd3swuJ";
+    assert_mainnet_script_address(nested);
+    let nested_painted = paint_address(nested, &address_stats(nested));
+    assert_plain_p2sh_once(&nested_painted);
+
+    let idle = paint_address(address, &address_stats(address));
+    assert_plain_p2sh_once(&idle);
+
+    let empty_witness = p2sh_address_txs(
+        address,
+        P2SH_P2WPKH_SCRIPTSIG,
+        "OP_PUSHBYTES_22 00149b27f072e4b972927c445d1946162a550b0914d8",
+        "[]",
+    );
+    let empty_witness_painted = paint_address_loaded(address, 1, 0, &empty_witness);
+    assert_plain_p2sh_once(&empty_witness_painted);
+
+    let other = "3GcrZrbUuvE4UtUdSbKTXcRnTqmfMdyMAC";
+    assert_mainnet_script_address(other);
+    let other_witness = r#"["303f021c65aee6696e80be6e14545cfd64b44f17b0514c150eefdb090c0f0bd9021f3fef4aa95c252a225622aba99e4d5af5a6fe40d177acd593e64cf2f8557ccc03","03b55c6f0749e0f3e2caeca05f68e3699f1b3c62a550730f704985a6a9aae437a1"]"#;
+    let other_txs = p2sh_address_txs(
+        other,
+        P2SH_P2WSH_SCRIPTSIG,
+        "OP_PUSHBYTES_34 0020a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75",
+        other_witness,
+    );
+    let other_painted = paint_address_loaded(other, 1, 0, &other_txs);
+    assert!(
+        other_painted.lines().any(|line| line == "Type P2SH-P2WSH"),
+        "Type did not sit beside the P2SH-P2WSH badge: {other_painted}"
+    );
+    assert_eq!(
+        other_painted.matches("Type P2SH-P2WSH").count(),
+        1,
+        "P2SH-P2WSH badge was not painted once: {other_painted}"
+    );
+    assert!(
+        !other_painted.contains("P2SH-P2WPKH"),
+        "the wrapped script spend painted P2SH-P2WPKH: {other_painted}"
+    );
+    assert!(
+        !other_painted.lines().any(|line| line == "Type P2SH"),
+        "a plain Type P2SH line was painted: {other_painted}"
+    );
+    assert!(
+        !other_painted.contains(P2SH_P2WSH_SCRIPTSIG),
+        "the scriptsig was painted: {other_painted}"
+    );
+
+    let foreign = p2sh_address_txs(
+        nested,
+        P2SH_P2WPKH_SCRIPTSIG,
+        "OP_PUSHBYTES_22 00149b27f072e4b972927c445d1946162a550b0914d8",
+        &witness,
+    );
+    let foreign_painted = paint_address_loaded(address, 1, 0, &foreign);
+    assert_plain_p2sh_once(&foreign_painted);
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/address/{address}"),
+            "Invalid Bitcoin address".to_string(),
+        )]),
+    );
+    let err = host
+        .open_address(address)
+        .expect_err("invalid address must fail");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{address}")),
+        "address load did not GET /address/{address}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "address load used a query string: {paths:?}"
+    );
+    let failed = painted(&host);
+    assert!(
+        failed
+            .lines()
+            .any(|line| line == "Error loading address data."),
+        "Error loading address data. is absent: {failed}"
+    );
+    assert!(
+        err.to_string().contains("Invalid Bitcoin address"),
+        "indexer body left the error: {err}"
+    );
+    assert!(
+        failed.lines().any(|line| line == "Invalid Bitcoin address"),
+        "Invalid Bitcoin address was replaced or dropped: {failed}"
+    );
+    assert_no_type_badge(&failed);
+}
+
+/// Mainnet pay-to-script-hash that spends as wrapped pay-to-witness-script-hash
+/// paints the badge `P2SH-P2WSH` beside the row label `Type`. The address is
+/// the Angular fixture `3GcrZrbUuvE4UtUdSbKTXcRnTqmfMdyMAC`. Its first character
+/// is `3`. `detectAddressType` starts it as `p2sh`. `processInputs` changes the
+/// type to `p2sh-p2wsh` when a vin spending this address has a non-empty
+/// witness and a scriptsig hex string that starts with `220020`. Angular has
+/// no dedicated case. The default arm uppercases the type, so the visible text
+/// is `P2SH-P2WSH`. The address JSON has no type field. The Type row appears
+/// only after the no-query `GET /address/:script/txs` succeeds. This is not
+/// `Type P2SH` and not `P2SH-P2WPKH`. The scriptsig and the witness stay off
+/// the screen. A `160014` spend stays `Type P2SH-P2WPKH` and does not paint
+/// `P2SH-P2WSH`. A `bc1q` pay-to-witness-pubkey-hash address stays `Type P2WPKH`.
+/// A longer `bc1q` address stays `Type P2WSH`. A `bc1p` address stays `Type P2TR`.
+/// A leading `1` address stays `Type P2PKH`. None of those paint `P2SH-P2WSH`.
+/// A mainnet address that starts with `3` and has no matching spend does not
+/// paint this badge. A spend whose scriptsig starts with `220020` and whose
+/// witness is empty does not paint it. An input that does not spend this
+/// address does not paint it. A failed address load keeps
+/// `Error loading address data.` and `Invalid Bitcoin address`.
+#[test]
+fn address_screen_paints_p2sh_p2wsh_badge() {
+    let address = P2SH_P2WSH_ADDRESS;
+    assert_mainnet_script_address(address);
+    assert!(
+        P2SH_P2WSH_SCRIPTSIG.starts_with("220020"),
+        "fixture scriptsig does not start with 220020"
+    );
+    let witness =
+        format!(r#"["{P2SH_P2WSH_WITNESS_0}","{P2SH_P2WSH_WITNESS_1}","{P2SH_P2WSH_WITNESS_2}"]"#);
+    let txs = p2sh_address_txs(
+        address,
+        P2SH_P2WSH_SCRIPTSIG,
+        "OP_PUSHBYTES_34 0020a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75",
+        &witness,
+    );
+    assert!(
+        txs.contains(P2SH_P2WSH_SCRIPTSIG) && txs.contains(P2SH_P2WSH_WITNESS_0),
+        "the fixture spend left the transaction list"
+    );
+    let stats = loaded_address_stats(address, 1, 0);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let loaded = paint_address_loaded(address, 1, 0, &txs);
+    assert!(
+        loaded.lines().any(|line| line == "Type P2SH-P2WSH"),
+        "Type did not sit beside the P2SH-P2WSH badge: {loaded}"
+    );
+    assert_eq!(
+        loaded.matches("Type P2SH-P2WSH").count(),
+        1,
+        "P2SH-P2WSH badge was not painted once: {loaded}"
+    );
+    assert!(
+        !loaded.lines().any(|line| line == "Type P2SH"),
+        "a plain Type P2SH line was painted: {loaded}"
+    );
+    assert!(
+        !loaded.contains("P2SH-P2WPKH"),
+        "the wrapped script spend painted P2SH-P2WPKH: {loaded}"
+    );
+    assert!(
+        !loaded.contains("Error loading address data."),
+        "a parsed address that returns stats showed the load error: {loaded}"
+    );
+    for absent in [
+        P2SH_P2WSH_SCRIPTSIG,
+        P2SH_P2WSH_WITNESS_0,
+        P2SH_P2WSH_WITNESS_1,
+        P2SH_P2WSH_WITNESS_2,
+        "script hex",
+        "script asm",
+        "witness",
+        "tooltip",
+    ] {
+        assert!(
+            !loaded.contains(absent),
+            "{absent} was painted on the p2sh-p2wsh address: {loaded}"
+        );
+    }
+
+    let wrapped_pubkey = "375PJxsKRtAq4WoS6u82jvgZW94R8Wx3iH";
+    assert_mainnet_script_address(wrapped_pubkey);
+    let pubkey_witness = format!(r#"["{P2SH_P2WPKH_WITNESS_0}","{P2SH_P2WPKH_WITNESS_1}"]"#);
+    let pubkey_txs = p2sh_address_txs(
+        wrapped_pubkey,
+        P2SH_P2WPKH_SCRIPTSIG,
+        "OP_PUSHBYTES_22 00149b27f072e4b972927c445d1946162a550b0914d8",
+        &pubkey_witness,
+    );
+    let pubkey_painted = paint_address_loaded(wrapped_pubkey, 1, 0, &pubkey_txs);
+    assert!(
+        pubkey_painted
+            .lines()
+            .any(|line| line == "Type P2SH-P2WPKH"),
+        "Type did not sit beside the P2SH-P2WPKH badge: {pubkey_painted}"
+    );
+    assert_eq!(
+        pubkey_painted.matches("Type P2SH-P2WPKH").count(),
+        1,
+        "P2SH-P2WPKH badge was not painted once: {pubkey_painted}"
+    );
+    assert!(
+        !pubkey_painted.contains("P2SH-P2WSH"),
+        "the wrapped pubkey spend painted P2SH-P2WSH: {pubkey_painted}"
+    );
+    assert!(
+        !pubkey_painted.lines().any(|line| line == "Type P2SH"),
+        "a plain Type P2SH line was painted: {pubkey_painted}"
+    );
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_painted = paint_address(short, &address_stats(short));
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.contains("P2SH-P2WSH"),
+        "the shorter bc1q address painted P2SH-P2WSH: {short_painted}"
+    );
+
+    let script = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let script_painted = paint_address(script, &address_stats(script));
+    assert!(
+        script_painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {script_painted}"
+    );
+    assert!(
+        !script_painted.contains("P2SH-P2WSH"),
+        "the longer bc1q address painted P2SH-P2WSH: {script_painted}"
+    );
+
+    let taproot = "bc1pahzjr2vnfqnqwl0h8jps2aa4zqe29wqxn2nagvd5a2z982k7ttdq8ry370";
+    let taproot_painted = paint_address(taproot, &address_stats(taproot));
+    assert!(
+        taproot_painted.lines().any(|line| line == "Type P2TR"),
+        "Type did not sit beside the P2TR badge: {taproot_painted}"
+    );
+    assert!(
+        !taproot_painted.contains("P2SH-P2WSH"),
+        "the longer bc1p address painted P2SH-P2WSH: {taproot_painted}"
+    );
+
+    let pubkey = "1stAprEZapjCYGUACUcXohQqSHF9MU5Kj";
+    let pubkey_address_painted = paint_address(pubkey, &address_stats(pubkey));
+    assert!(
+        pubkey_address_painted
+            .lines()
+            .any(|line| line == "Type P2PKH"),
+        "Type did not sit beside the P2PKH badge: {pubkey_address_painted}"
+    );
+    assert!(
+        !pubkey_address_painted.contains("P2SH-P2WSH"),
+        "the p2pkh address painted P2SH-P2WSH: {pubkey_address_painted}"
+    );
+
+    let nested = "3Bmb9Jig8A5kHdDSxvDZ6eryj3AXd3swuJ";
+    assert_mainnet_script_address(nested);
+    let nested_painted = paint_address(nested, &address_stats(nested));
+    assert_plain_p2sh_once(&nested_painted);
+
+    let idle = paint_address(address, &address_stats(address));
+    assert_plain_p2sh_once(&idle);
+
+    let empty_witness = p2sh_address_txs(
+        address,
+        P2SH_P2WSH_SCRIPTSIG,
+        "OP_PUSHBYTES_34 0020a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75",
+        "[]",
+    );
+    let empty_witness_painted = paint_address_loaded(address, 1, 0, &empty_witness);
+    assert_plain_p2sh_once(&empty_witness_painted);
+
+    let foreign = p2sh_address_txs(
+        nested,
+        P2SH_P2WSH_SCRIPTSIG,
+        "OP_PUSHBYTES_34 0020a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75",
+        &witness,
+    );
+    let foreign_painted = paint_address_loaded(address, 1, 0, &foreign);
+    assert_plain_p2sh_once(&foreign_painted);
+    assert!(
+        !foreign_painted.contains(P2SH_P2WSH_SCRIPTSIG),
+        "the scriptsig was painted: {foreign_painted}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/address/{address}"),
+            "Invalid Bitcoin address".to_string(),
+        )]),
+    );
+    let err = host
+        .open_address(address)
+        .expect_err("invalid address must fail");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{address}")),
+        "address load did not GET /address/{address}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "address load used a query string: {paths:?}"
+    );
+    let failed = painted(&host);
+    assert!(
+        failed
+            .lines()
+            .any(|line| line == "Error loading address data."),
+        "Error loading address data. is absent: {failed}"
+    );
+    assert!(
+        err.to_string().contains("Invalid Bitcoin address"),
+        "indexer body left the error: {err}"
+    );
+    assert!(
+        failed.lines().any(|line| line == "Invalid Bitcoin address"),
+        "Invalid Bitcoin address was replaced or dropped: {failed}"
+    );
+    assert_no_type_badge(&failed);
+}
+
+/// Mainnet pay-to-script-hash whose spend carries a 2-of-3 redeem script paints
+/// the warning `Multisig 2 of 3`. The address and the redeem script are the
+/// Angular track-address sample. The label is the word Multisig, the required
+/// signature count, the word of, and the key count. The address JSON has no
+/// type field. The line appears only after the no-query `GET /address/:script/txs`
+/// succeeds. A `160014` spend with a witness still paints `Type P2SH-P2WPKH`
+/// and does not show this warning, even when the same redeem script is present.
+/// An empty witness keeps the redeem script, so that `160014` spend does show
+/// the warning and does not paint `Type P2SH-P2WPKH`. A `220020` spend still
+/// paints `Type P2SH-P2WSH`. A tapscript address does not show the warning.
+/// A redeem script that is not 2-of-3 does not show this exact text. The asm,
+/// the script hex, and the witness stay off the successful screen. A failed
+/// address load keeps `Error loading address data.` and `Invalid Bitcoin address`.
+#[test]
+fn address_screen_paints_multisig_badge() {
+    let address = MULTISIG_2_OF_3_ADDRESS;
+    assert_mainnet_script_address(address);
+    assert!(
+        MULTISIG_2_OF_3_REDEEM.contains("OP_PUSHNUM_2")
+            && MULTISIG_2_OF_3_REDEEM.contains("OP_PUSHNUM_3")
+            && MULTISIG_2_OF_3_REDEEM.ends_with("OP_CHECKMULTISIG"),
+        "the Angular redeem script left the fixture"
+    );
+    assert!(
+        !MULTISIG_2_OF_3_SCRIPTSIG.starts_with("160014")
+            && !MULTISIG_2_OF_3_SCRIPTSIG.starts_with("220020"),
+        "the Angular scriptsig is a wrapped segwit spend"
+    );
+    let txs = address_txs_with_redeem(
+        address,
+        "p2sh",
+        MULTISIG_2_OF_3_SCRIPTSIG,
+        "OP_0",
+        "[]",
+        Some(MULTISIG_2_OF_3_REDEEM),
+    );
+    assert!(
+        txs.contains(MULTISIG_2_OF_3_REDEEM) && txs.contains(MULTISIG_2_OF_3_PUBKEY),
+        "the fixture spend left the transaction list"
+    );
+    let stats = loaded_address_stats(address, 1, 0);
+    assert!(
+        !stats.contains("\"type\""),
+        "address JSON must not carry a type field: {stats}"
+    );
+    let loaded = paint_address_loaded(address, 1, 0, &txs);
+    assert!(
+        loaded.lines().any(|line| line == "Multisig 2 of 3"),
+        "the screen did not show Multisig 2 of 3: {loaded}"
+    );
+    assert!(
+        !loaded.contains("Error loading address data."),
+        "a parsed address that returns stats showed the load error: {loaded}"
+    );
+    assert!(
+        !loaded.lines().any(|line| line == "Type P2SH-P2WPKH"),
+        "the plain multisig spend painted Type P2SH-P2WPKH: {loaded}"
+    );
+    assert!(
+        !loaded.lines().any(|line| line == "Type P2SH-P2WSH"),
+        "the plain multisig spend painted Type P2SH-P2WSH: {loaded}"
+    );
+    assert!(
+        !loaded.lines().any(|line| line == "Type MULTISIG"),
+        "the warning replaced the output type line: {loaded}"
+    );
+    for absent in [
+        MULTISIG_2_OF_3_REDEEM,
+        MULTISIG_2_OF_3_SCRIPTSIG,
+        MULTISIG_2_OF_3_PUBKEY,
+        "OP_CHECKMULTISIG",
+        "OP_PUSHBYTES_33",
+        "OP_PUSHNUM_2",
+        "script hex",
+        "script asm",
+        "witness",
+        "tooltip",
+    ] {
+        assert!(
+            !loaded.contains(absent),
+            "{absent} was painted on the multisig address: {loaded}"
+        );
+    }
+
+    let kept = address_txs_with_redeem(
+        address,
+        "p2sh",
+        P2SH_P2WPKH_SCRIPTSIG,
+        "OP_PUSHBYTES_22 00149b27f072e4b972927c445d1946162a550b0914d8",
+        "[]",
+        Some(MULTISIG_2_OF_3_REDEEM),
+    );
+    let kept_painted = paint_address_loaded(address, 1, 0, &kept);
+    assert!(
+        kept_painted.lines().any(|line| line == "Multisig 2 of 3"),
+        "an empty witness dropped the redeem script: {kept_painted}"
+    );
+    assert!(
+        !kept_painted.lines().any(|line| line == "Type P2SH-P2WPKH"),
+        "an empty witness painted Type P2SH-P2WPKH: {kept_painted}"
+    );
+
+    let wrapped_pubkey = "375PJxsKRtAq4WoS6u82jvgZW94R8Wx3iH";
+    assert_mainnet_script_address(wrapped_pubkey);
+    let pubkey_witness = format!(r#"["{P2SH_P2WPKH_WITNESS_0}","{P2SH_P2WPKH_WITNESS_1}"]"#);
+    let pubkey_txs = address_txs_with_redeem(
+        wrapped_pubkey,
+        "p2sh",
+        P2SH_P2WPKH_SCRIPTSIG,
+        "OP_PUSHBYTES_22 00149b27f072e4b972927c445d1946162a550b0914d8",
+        &pubkey_witness,
+        Some(MULTISIG_2_OF_3_REDEEM),
+    );
+    let pubkey_painted = paint_address_loaded(wrapped_pubkey, 1, 0, &pubkey_txs);
+    assert!(
+        pubkey_painted
+            .lines()
+            .any(|line| line == "Type P2SH-P2WPKH"),
+        "Type did not sit beside the P2SH-P2WPKH badge: {pubkey_painted}"
+    );
+    assert!(
+        !pubkey_painted.lines().any(|line| line == "Multisig 2 of 3"),
+        "the wrapped pubkey spend showed Multisig 2 of 3: {pubkey_painted}"
+    );
+
+    let wrapped_script = P2SH_P2WSH_ADDRESS;
+    assert_mainnet_script_address(wrapped_script);
+    let script_witness =
+        format!(r#"["{P2SH_P2WSH_WITNESS_0}","{P2SH_P2WSH_WITNESS_1}","{P2SH_P2WSH_WITNESS_2}"]"#);
+    let script_txs = p2sh_address_txs(
+        wrapped_script,
+        P2SH_P2WSH_SCRIPTSIG,
+        "OP_PUSHBYTES_34 0020a18160de7291554f349c7d5cbee4ab97fb542e94cf302ce8d7e9747e4188ca75",
+        &script_witness,
+    );
+    let script_painted = paint_address_loaded(wrapped_script, 1, 0, &script_txs);
+    assert!(
+        script_painted.lines().any(|line| line == "Type P2SH-P2WSH"),
+        "Type did not sit beside the P2SH-P2WSH badge: {script_painted}"
+    );
+    assert!(
+        !script_painted.lines().any(|line| line == "Multisig 2 of 3"),
+        "the wrapped script spend showed Multisig 2 of 3: {script_painted}"
+    );
+
+    let taproot = "bc1pahzjr2vnfqnqwl0h8jps2aa4zqe29wqxn2nagvd5a2z982k7ttdq8ry370";
+    let tap_witness = format!(r#"["{P2SH_P2WPKH_WITNESS_0}"]"#);
+    let tap_txs = address_txs_with_redeem(
+        taproot,
+        "v1_p2tr",
+        MULTISIG_2_OF_3_SCRIPTSIG,
+        "OP_0",
+        &tap_witness,
+        Some(MULTISIG_2_OF_3_REDEEM),
+    );
+    let tap_painted = paint_address_loaded(taproot, 1, 0, &tap_txs);
+    assert!(
+        tap_painted.lines().any(|line| line == "Type P2TR"),
+        "Type did not sit beside the P2TR badge: {tap_painted}"
+    );
+    assert!(
+        !tap_painted.lines().any(|line| line == "Multisig 2 of 3"),
+        "a tapscript address showed Multisig 2 of 3: {tap_painted}"
+    );
+
+    let other = "3Bmb9Jig8A5kHdDSxvDZ6eryj3AXd3swuJ";
+    assert_mainnet_script_address(other);
+    let other_txs =
+        address_txs_with_redeem(other, "p2sh", "00", "OP_0", "[]", Some(NOT_MULTISIG_REDEEM));
+    let other_painted = paint_address_loaded(other, 1, 0, &other_txs);
+    assert!(
+        !other_painted.lines().any(|line| line == "Multisig 2 of 3"),
+        "a redeem script that is not 2-of-3 showed Multisig 2 of 3: {other_painted}"
+    );
+    let program_txs = address_txs_with_redeem(
+        wrapped_script,
+        "p2sh",
+        "00",
+        "OP_0",
+        "[]",
+        Some(NOT_2_OF_3_REDEEM),
+    );
+    let program_painted = paint_address_loaded(wrapped_script, 1, 0, &program_txs);
+    assert!(
+        !program_painted
+            .lines()
+            .any(|line| line == "Multisig 2 of 3"),
+        "the wrapped-script redeem showed Multisig 2 of 3: {program_painted}"
+    );
+
+    let short = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let short_painted = paint_address(short, &address_stats(short));
+    assert!(
+        short_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type did not sit beside the P2WPKH badge: {short_painted}"
+    );
+    assert!(
+        !short_painted.lines().any(|line| line == "Multisig 2 of 3"),
+        "the shorter bc1q address showed Multisig 2 of 3: {short_painted}"
+    );
+
+    let script = "bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4";
+    let script_hash_painted = paint_address(script, &address_stats(script));
+    assert!(
+        script_hash_painted.lines().any(|line| line == "Type P2WSH"),
+        "Type did not sit beside the P2WSH badge: {script_hash_painted}"
+    );
+    assert!(
+        !script_hash_painted
+            .lines()
+            .any(|line| line == "Multisig 2 of 3"),
+        "the longer bc1q address showed Multisig 2 of 3: {script_hash_painted}"
+    );
+
+    let pubkey = "1stAprEZapjCYGUACUcXohQqSHF9MU5Kj";
+    let pubkey_address_painted = paint_address(pubkey, &address_stats(pubkey));
+    assert!(
+        pubkey_address_painted
+            .lines()
+            .any(|line| line == "Type P2PKH"),
+        "Type did not sit beside the P2PKH badge: {pubkey_address_painted}"
+    );
+    assert!(
+        !pubkey_address_painted
+            .lines()
+            .any(|line| line == "Multisig 2 of 3"),
+        "the p2pkh address showed Multisig 2 of 3: {pubkey_address_painted}"
+    );
+
+    let idle = paint_address(address, &address_stats(address));
+    assert!(
+        !idle.lines().any(|line| line == "Multisig 2 of 3"),
+        "a p2sh address with no spend showed Multisig 2 of 3: {idle}"
+    );
+    assert_plain_p2sh_once(&idle);
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/address/{address}"),
+            "Invalid Bitcoin address".to_string(),
+        )]),
+    );
+    let err = host
+        .open_address(address)
+        .expect_err("invalid address must fail");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{address}")),
+        "address load did not GET /address/{address}: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "address load used a query string: {paths:?}"
+    );
+    let failed = painted(&host);
+    assert!(
+        failed
+            .lines()
+            .any(|line| line == "Error loading address data."),
+        "Error loading address data. is absent: {failed}"
+    );
+    assert!(
+        err.to_string().contains("Invalid Bitcoin address"),
+        "indexer body left the error: {err}"
+    );
+    assert!(
+        failed.lines().any(|line| line == "Invalid Bitcoin address"),
+        "Invalid Bitcoin address was replaced or dropped: {failed}"
+    );
+    assert!(
+        !failed.lines().any(|line| line == "Multisig 2 of 3"),
+        "a failed load showed Multisig 2 of 3: {failed}"
+    );
+    assert_no_type_badge(&failed);
+}
+
 #[test]
 fn address_screen_paints_confirmed_chain_balance() {
     let funded = paint_address(
@@ -2663,6 +4152,237 @@ fn transaction_screen_paints_p2tr_tapscript_label() {
     assert_p2tr_script_stays_off(&output_only);
 }
 
+const PREVIOUS_OUTPUT_SCRIPT: &str = "Previous output script";
+const POS_ASM: &str = "POSASMDEAD";
+const POS_HEX: &str = "POSHEXDEAD";
+const POS_SIG: &str = "POSSIGHEXDEAD";
+const POS_SIG_ASM: &str = "POSSIGASMDEAD";
+const POS_WIT: &str = "POSWITDEAD";
+const POS_INNER: &str = "POSINNERDEAD";
+const POS_LEAF: &str = "POSLEAFDEAD";
+
+fn pos_line_count(painted: &str) -> usize {
+    painted
+        .lines()
+        .filter(|line| *line == PREVIOUS_OUTPUT_SCRIPT)
+        .count()
+}
+
+fn assert_pos_bytes_stay_off(painted: &str) {
+    for needle in [
+        POS_ASM,
+        POS_HEX,
+        POS_SIG,
+        POS_SIG_ASM,
+        POS_WIT,
+        POS_INNER,
+        POS_LEAF,
+        "scriptpubkey_asm",
+        "script asm",
+        "leaf version",
+        "Leaf version",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn pos_prevout(kind: &str) -> String {
+    format!(
+        r#""prevout":{{"scriptpubkey":"{POS_HEX}","scriptpubkey_asm":"{POS_ASM}","scriptpubkey_type":"{kind}","value":5}},"#
+    )
+}
+
+fn pos_vin(prevout_field: &str, extra: &str) -> String {
+    format!(
+        r#"{{"txid":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","vout":0,{prevout_field}"scriptsig":"{POS_SIG}","scriptsig_asm":"{POS_SIG_ASM}","witness":["{POS_WIT}"],"is_coinbase":false,"sequence":1{extra}}}"#
+    )
+}
+
+fn paint_previous_output_script(txid: &str, vin: &str) -> String {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    let body = format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin}],"vout":[{{"scriptpubkey":"{POS_HEX}","scriptpubkey_asm":"{POS_ASM}","scriptpubkey_type":"p2pkh","value":1}}],"size":10,"weight":7,"sigops":0,"fee":1}}"#
+    );
+    for needle in [POS_ASM, POS_HEX, POS_SIG, POS_SIG_ASM, POS_WIT] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not registered: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+/// `Previous output script` from `GET /tx/:txid` when the input has a prevout.
+///
+/// The line is exactly those words, once per previous output. A missing prevout
+/// does not get it. Script hex, script asm, scriptsig, witness, the inner
+/// tapscript string, and leaf version stay off the screen. A p2sh input still
+/// paints `P2SH redeem script`. A v1_p2tr input still paints `P2TR tapscript`.
+/// The push screen does not gain the words.
+#[test]
+fn transaction_screen_paints_previous_output_script() {
+    let present = paint_previous_output_script("posone", &pos_vin(&pos_prevout("v0_p2wpkh"), ""));
+    assert!(
+        present.contains("input outpoint"),
+        "a previous output dropped the input outpoint: {present}"
+    );
+    assert_eq!(
+        pos_line_count(&present),
+        1,
+        "a previous output was not exactly one line `Previous output script`: {present}"
+    );
+    assert_eq!(
+        present.matches(PREVIOUS_OUTPUT_SCRIPT).count(),
+        1,
+        "the label was not painted once: {present}"
+    );
+    assert!(
+        present
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WPKH"),
+        "Previous output type was dropped: {present}"
+    );
+    assert!(!present.contains("P2TR tapscript"), "{present}");
+    assert!(!present.contains("P2SH redeem script"), "{present}");
+    assert_pos_bytes_stay_off(&present);
+
+    let two = paint_previous_output_script(
+        "postwo",
+        &format!(
+            "{},{}",
+            pos_vin(&pos_prevout("v0_p2wpkh"), ""),
+            pos_vin(&pos_prevout("p2sh"), "")
+        ),
+    );
+    assert_eq!(
+        pos_line_count(&two),
+        2,
+        "two previous outputs were not two lines `Previous output script`: {two}"
+    );
+    assert_eq!(
+        two.matches(PREVIOUS_OUTPUT_SCRIPT).count(),
+        2,
+        "the label was not painted twice: {two}"
+    );
+    assert_pos_bytes_stay_off(&two);
+
+    let missing = paint_previous_output_script("posnull", &pos_vin(r#""prevout":null,"#, ""));
+    assert!(
+        missing.contains("input outpoint"),
+        "a missing prevout dropped the input outpoint: {missing}"
+    );
+    assert_eq!(
+        pos_line_count(&missing),
+        0,
+        "a missing prevout gained `Previous output script`: {missing}"
+    );
+    assert!(
+        !missing.contains(PREVIOUS_OUTPUT_SCRIPT),
+        "a missing prevout gained `Previous output script`: {missing}"
+    );
+    assert_pos_bytes_stay_off(&missing);
+
+    let p2sh = paint_previous_output_script(
+        "posp2sh",
+        &pos_vin(
+            &pos_prevout("p2sh"),
+            r#","inner_redeemscript_asm":"OP_DUP OP_HASH160""#,
+        ),
+    );
+    assert_eq!(
+        pos_line_count(&p2sh),
+        1,
+        "a p2sh previous output was not one line `Previous output script`: {p2sh}"
+    );
+    assert_eq!(
+        p2sh.lines()
+            .filter(|line| *line == "P2SH redeem script OP_DUP OP_HASH160")
+            .count(),
+        1,
+        "P2SH redeem script was dropped: {p2sh}"
+    );
+    assert!(!p2sh.contains("P2TR tapscript"), "{p2sh}");
+    assert_pos_bytes_stay_off(&p2sh);
+
+    let p2sh_missing = paint_previous_output_script(
+        "posp2shnull",
+        &pos_vin(
+            r#""prevout":null,"#,
+            r#","inner_redeemscript_asm":"OP_DUP OP_HASH160""#,
+        ),
+    );
+    assert_eq!(
+        pos_line_count(&p2sh_missing),
+        0,
+        "a p2sh input with no prevout gained `Previous output script`: {p2sh_missing}"
+    );
+    assert_eq!(
+        p2sh_missing
+            .lines()
+            .filter(|line| *line == "P2SH redeem script OP_DUP OP_HASH160")
+            .count(),
+        1,
+        "P2SH redeem script was dropped: {p2sh_missing}"
+    );
+    assert_pos_bytes_stay_off(&p2sh_missing);
+
+    let p2tr = paint_previous_output_script(
+        "posp2tr",
+        &pos_vin(
+            &pos_prevout("v1_p2tr"),
+            &format!(r#","inner_witnessscript_asm":"{POS_INNER}","leaf_version":"{POS_LEAF}""#),
+        ),
+    );
+    assert_eq!(
+        pos_line_count(&p2tr),
+        1,
+        "a v1_p2tr previous output was not one line `Previous output script`: {p2tr}"
+    );
+    assert_eq!(
+        p2tr.lines()
+            .filter(|line| *line == "P2TR tapscript")
+            .count(),
+        1,
+        "P2TR tapscript was dropped: {p2tr}"
+    );
+    assert!(!p2tr.contains("P2SH redeem script"), "{p2tr}");
+    assert_pos_bytes_stay_off(&p2tr);
+
+    let (mut host, _) = host_with(Network::Mainnet, BTreeMap::new());
+    host.activate(Screen::Broadcast).expect("broadcast");
+    let push = painted(&host);
+    assert!(
+        !push.contains(PREVIOUS_OUTPUT_SCRIPT),
+        "the push screen painted Previous output script: {push}"
+    );
+    assert_eq!(
+        push.lines()
+            .filter(|line| *line == "Broadcast Transaction")
+            .count(),
+        1,
+        "Broadcast Transaction was dropped: {push}"
+    );
+}
+
 fn paint_tx_input(txid: &str, input_tail: &str) -> String {
     let tx = format!(
         r#"{{
@@ -3214,6 +4934,209 @@ fn transaction_screen_paints_inputs_outputs_heading() {
     assert_heading_absent(&blocks);
 }
 
+fn show_more_input(index: usize) -> String {
+    format!(
+        r#"{{"txid":"prev","vout":{index},"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}}"#
+    )
+}
+
+fn show_more_output(index: usize) -> String {
+    format!(r#"{{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"","value":{index}}}"#)
+}
+
+fn show_more_tx(txid: &str, inputs: usize, outputs: usize) -> String {
+    let vin = (0..inputs)
+        .map(show_more_input)
+        .collect::<Vec<_>>()
+        .join(",");
+    let vout = (0..outputs)
+        .map(show_more_output)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin}],"vout":[{vout}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+    )
+}
+
+fn paint_show_more(txid: &str, inputs: usize, outputs: usize) -> String {
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), show_more_tx(txid, inputs, outputs))]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "{paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn assert_no_show_more_words(painted: &str) {
+    for word in ["Show all", "Show more", "remaining"] {
+        assert!(
+            !painted.lines().any(|line| line.contains(word)),
+            "{word} was painted: {painted}"
+        );
+    }
+}
+
+fn assert_input_outpoints(painted: &str, shown: usize, total: usize) {
+    for index in 0..shown {
+        let line = format!("input outpoint prev:{index}");
+        assert!(
+            painted.lines().any(|row| row == line),
+            "input {index} was hidden: {painted}"
+        );
+    }
+    for index in shown..total {
+        let line = format!("input outpoint prev:{index}");
+        assert!(
+            !painted.lines().any(|row| row == line),
+            "input {index} was painted past the cutoff: {painted}"
+        );
+    }
+}
+
+fn assert_output_values(painted: &str, shown: usize, total: usize) {
+    for index in 0..shown {
+        let line = format!("output address  value {index}");
+        assert!(
+            painted.lines().any(|row| row == line),
+            "output {index} was hidden: {painted}"
+        );
+    }
+    for index in shown..total {
+        let line = format!("output address  value {index}");
+        assert!(
+            !painted.lines().any(|row| row == line),
+            "output {index} was painted past the cutoff: {painted}"
+        );
+    }
+}
+
+fn assert_show_more_line(painted: &str, line: &str) {
+    assert_eq!(
+        painted.lines().filter(|row| *row == line).count(),
+        1,
+        "the show more line is absent: {painted}"
+    );
+    assert!(!painted.contains("<button"), "{painted}");
+    assert!(!painted.contains("<span"), "{painted}");
+}
+
+/// Transactions-list button from `GET /tx/:txid` with no query string.
+///
+/// The button is painted when `tx.vin.length > getVinLimit(tx)`.
+/// `inputRowLimit` is 12. When `vin.length - limit <= 5`, `getVinLimit`
+/// returns `vin.length` and the button stays off. The label is `Show all`
+/// when `getVinLimit(tx, true) >= tx.vin.length`, and `Show more` otherwise,
+/// then `(N remaining)` where N is `tx.vin.length - getVinLimit(tx)`.
+/// `showMoreIncrement` is 1000. Outputs use `getVoutLimit` the same way.
+#[test]
+fn transaction_screen_paints_show_more_inputs() {
+    let eighteen = paint_show_more("showin18", 18, 1);
+    assert_show_more_line(&eighteen, "Show all (6 remaining)");
+    assert!(!eighteen.contains("Show more"), "{eighteen}");
+    assert_input_outpoints(&eighteen, 12, 18);
+    assert_output_values(&eighteen, 1, 1);
+    let rows: Vec<&str> = eighteen.lines().collect();
+    let last_input = rows
+        .iter()
+        .position(|line| *line == "input outpoint prev:11")
+        .expect("input 11");
+    let button = rows
+        .iter()
+        .position(|line| *line == "Show all (6 remaining)")
+        .expect("button");
+    let output = rows
+        .iter()
+        .position(|line| *line == "output address  value 0")
+        .expect("output");
+    assert!(last_input < button && button < output, "{eighteen}");
+
+    let dozen = paint_show_more("showin12", 12, 1);
+    assert_no_show_more_words(&dozen);
+    assert_input_outpoints(&dozen, 12, 12);
+    assert_output_values(&dozen, 1, 1);
+
+    let seventeen = paint_show_more("showin17", 17, 1);
+    assert_no_show_more_words(&seventeen);
+    assert_input_outpoints(&seventeen, 17, 17);
+    assert_output_values(&seventeen, 1, 1);
+
+    let within_tail = paint_show_more("showin13", 13, 1);
+    assert_no_show_more_words(&within_tail);
+    assert_input_outpoints(&within_tail, 13, 13);
+
+    let show_more = paint_show_more("showin1006", 1006, 1);
+    assert_show_more_line(&show_more, "Show more (994 remaining)");
+    assert!(!show_more.contains("Show all"), "{show_more}");
+    assert_input_outpoints(&show_more, 12, 1006);
+    assert_output_values(&show_more, 1, 1);
+
+    let show_all_next = paint_show_more("showin1005", 1005, 1);
+    assert_show_more_line(&show_all_next, "Show all (993 remaining)");
+    assert_input_outpoints(&show_all_next, 12, 1005);
+
+    let outputs = paint_show_more("showout18", 1, 18);
+    assert_show_more_line(&outputs, "Show all (6 remaining)");
+    assert_input_outpoints(&outputs, 1, 1);
+    assert_output_values(&outputs, 12, 18);
+    let out_rows: Vec<&str> = outputs.lines().collect();
+    let last_output = out_rows
+        .iter()
+        .position(|line| *line == "output address  value 11")
+        .expect("output 11");
+    let out_button = out_rows
+        .iter()
+        .position(|line| *line == "Show all (6 remaining)")
+        .expect("output button");
+    assert!(last_output < out_button, "{outputs}");
+
+    let out_seventeen = paint_show_more("showout17", 1, 17);
+    assert_no_show_more_words(&out_seventeen);
+    assert_output_values(&out_seventeen, 17, 17);
+    assert_input_outpoints(&out_seventeen, 1, 1);
+
+    let dozen_outputs = paint_show_more("showout12", 1, 12);
+    assert_no_show_more_words(&dozen_outputs);
+    assert_output_values(&dozen_outputs, 12, 12);
+
+    let out_more = paint_show_more("showout1006", 1, 1006);
+    assert_show_more_line(&out_more, "Show more (994 remaining)");
+    assert!(!out_more.contains("Show all"), "{out_more}");
+    assert_output_values(&out_more, 12, 1006);
+    assert_input_outpoints(&out_more, 1, 1);
+
+    let inputs_only = paint_show_more("showin18out12", 18, 12);
+    assert_show_more_line(&inputs_only, "Show all (6 remaining)");
+    assert_input_outpoints(&inputs_only, 12, 18);
+    assert_output_values(&inputs_only, 12, 12);
+
+    let both = paint_show_more("showboth", 18, 1006);
+    assert_show_more_line(&both, "Show all (6 remaining)");
+    assert_show_more_line(&both, "Show more (994 remaining)");
+    assert_input_outpoints(&both, 12, 18);
+    assert_output_values(&both, 12, 1006);
+    let both_rows: Vec<&str> = both.lines().collect();
+    let input_button = both_rows
+        .iter()
+        .position(|line| *line == "Show all (6 remaining)")
+        .expect("input button");
+    let output_button = both_rows
+        .iter()
+        .position(|line| *line == "Show more (994 remaining)")
+        .expect("output button");
+    assert!(input_button < output_button, "{both}");
+}
+
 const PREVIOUS_OUTPUT_TYPE: &str = "Previous output type";
 
 fn pot_prevout(kind: &str) -> String {
@@ -3720,6 +5643,1018 @@ fn transaction_screen_paints_output_type() {
             !painted.contains(&format!("tx txid {txid}")),
             "an unparsed body painted a transaction row: {painted}"
         );
+    }
+}
+
+const ANC_HEX: &str = "ancpubhexdead";
+const ANC_ASM: &str = "ancasmdead";
+const ANC_SIG: &str = "ancsighexdead";
+const ANC_SIG_ASM: &str = "ancsigasmdead";
+const ANC_WIT: &str = "ancwitdead";
+const ANC_INNER: &str = "ancinnerdead";
+const ANC_LEAF: &str = "ancleafdead";
+
+fn anchor_vin() -> String {
+    format!(
+        r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{ANC_HEX}","scriptpubkey_asm":"{ANC_ASM}","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"{ANC_SIG}","scriptsig_asm":"{ANC_SIG_ASM}","witness":["{ANC_WIT}"],"is_coinbase":false,"sequence":1,"inner_witnessscript_asm":"{ANC_INNER}","leaf_version":"{ANC_LEAF}"}}"#
+    )
+}
+
+fn anchor_vout(type_field: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"{ANC_HEX}","scriptpubkey_asm":"{ANC_ASM}",{type_field}"value":1}}"#
+    )
+}
+
+fn anchor_tx(txid: &str, vout: &str) -> String {
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{}],"vout":[{vout}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4}}}}"#,
+        anchor_vin()
+    )
+}
+
+fn paint_anchor_tx(txid: &str, vout: &str) -> (Result<(), ClientError>, String) {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    assert!(
+        !txid.to_ascii_lowercase().contains("anchor"),
+        "the txid must not contain the type word: {txid}"
+    );
+    let body = anchor_tx(txid, vout);
+    for needle in [
+        ANC_HEX,
+        ANC_ASM,
+        ANC_SIG,
+        ANC_SIG_ASM,
+        ANC_WIT,
+        ANC_INNER,
+        ANC_LEAF,
+    ] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    let opened = host.open_transaction(txid);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not requested: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains('?')
+            && !path.contains('#')
+            && !path.starts_with("/address/")),
+        "a transaction open invented a route, a query, or a fragment: {paths:?}"
+    );
+    (opened, painted(&host))
+}
+
+fn assert_anchor_bytes_off(painted: &str) {
+    for needle in [
+        ANC_HEX,
+        ANC_ASM,
+        ANC_SIG,
+        ANC_SIG_ASM,
+        ANC_WIT,
+        ANC_INNER,
+        ANC_LEAF,
+        "scriptpubkey",
+        "script asm",
+        "leaf version",
+        "Leaf version",
+        "<span",
+        "output-type",
+        "scriptpubkey-type",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn assert_one_fee_and_confirmed(painted: &str) {
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "Fee 50 sats")
+            .count(),
+        1,
+        "the details Fee row was dropped or repeated: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+            .count(),
+        1,
+        "a second Fee row was painted: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "Fee rate 0.50 sat/vB")
+            .count(),
+        1,
+        "Fee rate was dropped or repeated: {painted}"
+    );
+    assert_eq!(
+        painted.lines().filter(|line| *line == "Confirmed").count(),
+        1,
+        "Confirmed was dropped or the letter case changed: {painted}"
+    );
+    assert!(
+        !painted.lines().any(|line| {
+            line == "confirmed"
+                || line == "CONFIRMED"
+                || line == "Unconfirmed"
+                || line == "unconfirmed"
+        }),
+        "confirmation letter case changed: {painted}"
+    );
+}
+
+/// Output script type `anchor` from `GET /tx/:txid`.
+///
+/// A nonempty `vout.scriptpubkey_type` of `anchor` paints the exact line
+/// `Type ANCHOR`. An empty string, a missing key, and JSON null omit that
+/// line. `output script type anchor` stays the indexer spelling. Script hex,
+/// script asm, scriptsig, witness, the inner tapscript, and leaf version stay
+/// off the screen. This is not an address span. `GET /address/:script` is not
+/// called. The path has no query and no fragment.
+#[test]
+fn transaction_screen_paints_anchor_output_type() {
+    let (opened, painted) =
+        paint_anchor_tx("atypeone", &anchor_vout(r#""scriptpubkey_type":"anchor","#));
+    opened.expect("anchor output");
+    assert!(
+        painted.contains("tx txid atypeone"),
+        "the parsed transaction was hidden: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == INPUTS_OUTPUTS_HEADING)
+            .count(),
+        1,
+        "Inputs & Outputs was dropped: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "Type ANCHOR")
+            .count(),
+        1,
+        "scriptpubkey_type anchor did not paint the exact line Type ANCHOR: {painted}"
+    );
+    assert_eq!(
+        painted.matches("Type ANCHOR").count(),
+        1,
+        "Type ANCHOR was not once: {painted}"
+    );
+    assert_eq!(
+        painted.matches("ANCHOR").count(),
+        1,
+        "ANCHOR leaked outside Type ANCHOR: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "output script type anchor")
+            .count(),
+        1,
+        "the indexer spelling was dropped: {painted}"
+    );
+    assert_eq!(
+        painted.matches("anchor").count(),
+        1,
+        "lowercase anchor leaked outside the indexer spelling: {painted}"
+    );
+    assert!(
+        !painted
+            .lines()
+            .any(|line| line == "ANCHOR" || line == "anchor"),
+        "an address classification line was painted: {painted}"
+    );
+    let rows: Vec<&str> = painted.lines().collect();
+    let previous = rows
+        .iter()
+        .position(|line| *line == "Previous output script");
+    let address = rows
+        .iter()
+        .position(|line| *line == "output address  value 1");
+    let raw = rows
+        .iter()
+        .position(|line| *line == "output script type anchor");
+    let upper = rows.iter().position(|line| *line == "Type ANCHOR");
+    assert!(
+        previous.is_some() && address.is_some() && raw.is_some() && upper.is_some(),
+        "Previous output script or the anchor type lines were dropped: {painted}"
+    );
+    assert!(
+        previous.unwrap() < address.unwrap()
+            && address.unwrap() < raw.unwrap()
+            && raw.unwrap() < upper.unwrap(),
+        "Type ANCHOR was not after the indexer spelling on the output row: {painted}"
+    );
+    assert!(
+        !painted.contains("P2TR tapscript"),
+        "an anchor output painted P2TR tapscript: {painted}"
+    );
+    assert!(
+        !painted.contains("P2SH redeem script"),
+        "an anchor output painted P2SH redeem script: {painted}"
+    );
+    assert_one_fee_and_confirmed(&painted);
+    assert_anchor_bytes_off(&painted);
+
+    let (empty_opened, empty) =
+        paint_anchor_tx("atypeempty", &anchor_vout(r#""scriptpubkey_type":"","#));
+    empty_opened.expect("empty output type");
+    assert!(
+        empty.contains("tx txid atypeempty"),
+        "an empty type hid the transaction: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "Previous output script"),
+        "an empty output type dropped Previous output script: {empty}"
+    );
+    assert_output_type_lines(&empty, &[]);
+    assert!(
+        !empty.contains("output script type"),
+        "an empty type painted a script type line: {empty}"
+    );
+    assert!(!empty.to_ascii_lowercase().contains("anchor"), "{empty}");
+    assert_one_fee_and_confirmed(&empty);
+    assert_anchor_bytes_off(&empty);
+
+    for (txid, type_field) in [
+        ("atypemiss", ""),
+        ("atypenull", r#""scriptpubkey_type":null,"#),
+    ] {
+        let (_opened, omitted) = paint_anchor_tx(txid, &anchor_vout(type_field));
+        assert!(
+            omitted.contains(txid),
+            "a missing scriptpubkey_type hid the screen: {omitted}"
+        );
+        assert_output_type_lines(&omitted, &[]);
+        assert!(
+            !omitted.contains("Type ANCHOR"),
+            "a missing scriptpubkey_type painted Type ANCHOR: {omitted}"
+        );
+        assert!(
+            !omitted.to_ascii_lowercase().contains("anchor"),
+            "{omitted}"
+        );
+        assert_anchor_bytes_off(&omitted);
+    }
+}
+
+const WSH_HEX: &str = "wshpubhexdead";
+const WSH_ASM: &str = "wshasmdead";
+const WSH_SIG: &str = "wshsighexdead";
+const WSH_SIG_ASM: &str = "wshsigasmdead";
+const WSH_WIT: &str = "wshwitdead";
+const WSH_INNER: &str = "wshinnerdead";
+const WSH_LEAF: &str = "wshleafdead";
+
+fn v0_p2wsh_vin() -> String {
+    format!(
+        r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{WSH_HEX}","scriptpubkey_asm":"{WSH_ASM}","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"{WSH_SIG}","scriptsig_asm":"{WSH_SIG_ASM}","witness":["{WSH_WIT}"],"is_coinbase":false,"sequence":1,"inner_witnessscript_asm":"{WSH_INNER}","leaf_version":"{WSH_LEAF}"}}"#
+    )
+}
+
+fn v0_p2wsh_vout(type_field: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"{WSH_HEX}","scriptpubkey_asm":"{WSH_ASM}",{type_field}"value":1}}"#
+    )
+}
+
+fn v0_p2wsh_tx(txid: &str, vout: &str) -> String {
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{}],"vout":[{vout}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4}}}}"#,
+        v0_p2wsh_vin()
+    )
+}
+
+fn paint_v0_p2wsh_tx(txid: &str, vout: &str) -> (Result<(), ClientError>, String) {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    assert!(
+        !txid.to_ascii_lowercase().contains("v0_p2wsh")
+            && !txid.to_ascii_lowercase().contains("p2wsh"),
+        "the txid must not contain the type word: {txid}"
+    );
+    let body = v0_p2wsh_tx(txid, vout);
+    for needle in [
+        WSH_HEX,
+        WSH_ASM,
+        WSH_SIG,
+        WSH_SIG_ASM,
+        WSH_WIT,
+        WSH_INNER,
+        WSH_LEAF,
+    ] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    let opened = host.open_transaction(txid);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not requested: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains('?')
+            && !path.contains('#')
+            && !path.starts_with("/address/")),
+        "a transaction open invented a route, a query, or a fragment: {paths:?}"
+    );
+    (opened, painted(&host))
+}
+
+fn assert_v0_p2wsh_bytes_off(painted: &str) {
+    for needle in [
+        WSH_HEX,
+        WSH_ASM,
+        WSH_SIG,
+        WSH_SIG_ASM,
+        WSH_WIT,
+        WSH_INNER,
+        WSH_LEAF,
+        "scriptpubkey",
+        "script asm",
+        "leaf version",
+        "Leaf version",
+        "<span",
+        "output-type",
+        "scriptpubkey-type",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn assert_v0_p2wsh_leaves_other_rows(painted: &str) {
+    for line in [
+        "Transaction fee",
+        "P2PK",
+        "OP_RETURN",
+        "Type ANCHOR",
+        "Show all",
+        "Show more",
+        "P2TR tapscript",
+        "P2SH redeem script",
+    ] {
+        assert!(
+            !painted.contains(line),
+            "{line} changed on a v0_p2wsh screen: {painted}"
+        );
+    }
+}
+
+/// Output script type `v0_p2wsh` from `GET /tx/:txid`.
+///
+/// A nonempty `vout.scriptpubkey_type` of `v0_p2wsh` paints the exact line
+/// `Type V0_P2WSH`. An empty string, a missing key, and JSON null omit that
+/// line. `output script type v0_p2wsh` stays the indexer spelling. Script hex,
+/// script asm, scriptsig, witness, the inner tapscript, and leaf version stay
+/// off the screen. This is not an address span. `GET /address/:script` is not
+/// called. The path has no query and no fragment. The confirmation line on
+/// this fixture stays `Confirmed`. The count line `confirmations 1` is not
+/// this fixture.
+#[test]
+fn transaction_screen_paints_v0_p2wsh_output_type() {
+    let (opened, painted) = paint_v0_p2wsh_tx(
+        "wshone",
+        &v0_p2wsh_vout(r#""scriptpubkey_type":"v0_p2wsh","#),
+    );
+    opened.expect("v0_p2wsh output");
+    assert!(
+        painted.contains("tx txid wshone"),
+        "the parsed transaction was hidden: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == INPUTS_OUTPUTS_HEADING)
+            .count(),
+        1,
+        "Inputs & Outputs was dropped: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "Type V0_P2WSH")
+            .count(),
+        1,
+        "scriptpubkey_type v0_p2wsh did not paint the exact line Type V0_P2WSH: {painted}"
+    );
+    assert_output_type_lines(&painted, &["Type V0_P2WSH"]);
+    assert_eq!(
+        painted.matches("Type V0_P2WSH").count(),
+        1,
+        "Type V0_P2WSH was not once: {painted}"
+    );
+    assert_eq!(
+        painted.matches("V0_P2WSH").count(),
+        1,
+        "V0_P2WSH leaked outside Type V0_P2WSH: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "output script type v0_p2wsh")
+            .count(),
+        1,
+        "the indexer spelling was dropped: {painted}"
+    );
+    assert_eq!(
+        painted.matches("v0_p2wsh").count(),
+        1,
+        "lowercase v0_p2wsh leaked outside the indexer spelling: {painted}"
+    );
+    assert!(
+        !painted
+            .lines()
+            .any(|line| line == "V0_P2WSH" || line == "v0_p2wsh"),
+        "an address classification line was painted: {painted}"
+    );
+    let rows: Vec<&str> = painted.lines().collect();
+    let previous = rows
+        .iter()
+        .position(|line| *line == "Previous output script");
+    let address = rows
+        .iter()
+        .position(|line| *line == "output address  value 1");
+    let raw = rows
+        .iter()
+        .position(|line| *line == "output script type v0_p2wsh");
+    let upper = rows.iter().position(|line| *line == "Type V0_P2WSH");
+    assert!(
+        previous.is_some() && address.is_some() && raw.is_some() && upper.is_some(),
+        "Previous output script or the v0_p2wsh type lines were dropped: {painted}"
+    );
+    assert!(
+        previous.unwrap() < address.unwrap()
+            && address.unwrap() < raw.unwrap()
+            && raw.unwrap() < upper.unwrap(),
+        "Type V0_P2WSH was not after the indexer spelling on the output row: {painted}"
+    );
+    assert_one_fee_and_confirmed(&painted);
+    assert_v0_p2wsh_leaves_other_rows(&painted);
+    assert_v0_p2wsh_bytes_off(&painted);
+
+    let (empty_opened, empty) =
+        paint_v0_p2wsh_tx("wshempty", &v0_p2wsh_vout(r#""scriptpubkey_type":"","#));
+    empty_opened.expect("empty output type");
+    assert!(
+        empty.contains("tx txid wshempty"),
+        "an empty type hid the transaction: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "Previous output script"),
+        "an empty output type dropped Previous output script: {empty}"
+    );
+    assert_output_type_lines(&empty, &[]);
+    assert!(
+        !empty.contains("output script type"),
+        "an empty type painted a script type line: {empty}"
+    );
+    assert!(
+        !empty.contains("Type V0_P2WSH"),
+        "an empty type painted Type V0_P2WSH: {empty}"
+    );
+    assert!(!empty.to_ascii_lowercase().contains("v0_p2wsh"), "{empty}");
+    assert_one_fee_and_confirmed(&empty);
+    assert_v0_p2wsh_leaves_other_rows(&empty);
+    assert_v0_p2wsh_bytes_off(&empty);
+
+    for (txid, type_field) in [("wshmiss", ""), ("wshnull", r#""scriptpubkey_type":null,"#)] {
+        let (_opened, omitted) = paint_v0_p2wsh_tx(txid, &v0_p2wsh_vout(type_field));
+        assert!(
+            omitted.contains(txid),
+            "a missing scriptpubkey_type hid the screen: {omitted}"
+        );
+        assert_output_type_lines(&omitted, &[]);
+        assert!(
+            !omitted.contains("Type V0_P2WSH"),
+            "a missing scriptpubkey_type painted Type V0_P2WSH: {omitted}"
+        );
+        assert!(
+            !omitted.to_ascii_lowercase().contains("v0_p2wsh"),
+            "{omitted}"
+        );
+        assert_v0_p2wsh_leaves_other_rows(&omitted);
+        assert_v0_p2wsh_bytes_off(&omitted);
+    }
+}
+
+const MSIG_HEX: &str = "msigpubhexdead";
+const MSIG_ASM: &str = "msigasmdead";
+const MSIG_SIG: &str = "msigsighexdead";
+const MSIG_SIG_ASM: &str = "msigsigasmdead";
+const MSIG_WIT: &str = "msigwitdead";
+const MSIG_INNER: &str = "msiginnerdead";
+const MSIG_LEAF: &str = "msigleafdead";
+
+fn multisig_vin() -> String {
+    format!(
+        r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{MSIG_HEX}","scriptpubkey_asm":"{MSIG_ASM}","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"{MSIG_SIG}","scriptsig_asm":"{MSIG_SIG_ASM}","witness":["{MSIG_WIT}"],"is_coinbase":false,"sequence":1,"inner_witnessscript_asm":"{MSIG_INNER}","leaf_version":"{MSIG_LEAF}"}}"#
+    )
+}
+
+fn multisig_vout(type_field: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"{MSIG_HEX}","scriptpubkey_asm":"{MSIG_ASM}",{type_field}"value":1}}"#
+    )
+}
+
+fn multisig_tx(txid: &str, vout: &str) -> String {
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{}],"vout":[{vout}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4}}}}"#,
+        multisig_vin()
+    )
+}
+
+fn paint_multisig_tx(txid: &str, vout: &str) -> (Result<(), ClientError>, String) {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    assert!(
+        !txid.to_ascii_lowercase().contains("multisig"),
+        "the txid must not contain the type word: {txid}"
+    );
+    let body = multisig_tx(txid, vout);
+    for needle in [
+        MSIG_HEX,
+        MSIG_ASM,
+        MSIG_SIG,
+        MSIG_SIG_ASM,
+        MSIG_WIT,
+        MSIG_INNER,
+        MSIG_LEAF,
+    ] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    let opened = host.open_transaction(txid);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not requested: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains('?')
+            && !path.contains('#')
+            && !path.starts_with("/address/")),
+        "a transaction open invented a route, a query, or a fragment: {paths:?}"
+    );
+    (opened, painted(&host))
+}
+
+fn assert_multisig_bytes_off(painted: &str) {
+    for needle in [
+        MSIG_HEX,
+        MSIG_ASM,
+        MSIG_SIG,
+        MSIG_SIG_ASM,
+        MSIG_WIT,
+        MSIG_INNER,
+        MSIG_LEAF,
+        "scriptpubkey",
+        "script asm",
+        "leaf version",
+        "Leaf version",
+        "<span",
+        "output-type",
+        "scriptpubkey-type",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn assert_multisig_leaves_other_rows(painted: &str) {
+    for line in [
+        "Transaction fee",
+        "P2PK",
+        "OP_RETURN",
+        "Type ANCHOR",
+        "Type V0_P2WSH",
+        "Show all",
+        "Show more",
+        "P2TR tapscript",
+        "P2SH redeem script",
+    ] {
+        assert!(
+            !painted.contains(line),
+            "{line} changed on a multisig screen: {painted}"
+        );
+    }
+}
+
+/// Output script type `multisig` from `GET /tx/:txid`.
+///
+/// A nonempty `vout.scriptpubkey_type` of `multisig` paints the exact line
+/// `Type MULTISIG`. An empty string, a missing key, and JSON null omit that
+/// line. `output script type multisig` stays the indexer spelling. Script hex,
+/// script asm, scriptsig, witness, the inner tapscript, and leaf version stay
+/// off the screen. This is not an address span. `GET /address/:script` is not
+/// called. The path has no query and no fragment. The confirmation line on
+/// this fixture stays `Confirmed`. The count line `confirmations 1` is not
+/// this fixture.
+#[test]
+fn transaction_screen_paints_multisig_output_type() {
+    let (opened, painted) = paint_multisig_tx(
+        "msigone",
+        &multisig_vout(r#""scriptpubkey_type":"multisig","#),
+    );
+    opened.expect("multisig output");
+    assert!(
+        painted.contains("tx txid msigone"),
+        "the parsed transaction was hidden: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == INPUTS_OUTPUTS_HEADING)
+            .count(),
+        1,
+        "Inputs & Outputs was dropped: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "Type MULTISIG")
+            .count(),
+        1,
+        "scriptpubkey_type multisig did not paint the exact line Type MULTISIG: {painted}"
+    );
+    assert_output_type_lines(&painted, &["Type MULTISIG"]);
+    assert_eq!(
+        painted.matches("Type MULTISIG").count(),
+        1,
+        "Type MULTISIG was not once: {painted}"
+    );
+    assert_eq!(
+        painted.matches("MULTISIG").count(),
+        1,
+        "MULTISIG leaked outside Type MULTISIG: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "output script type multisig")
+            .count(),
+        1,
+        "the indexer spelling was dropped: {painted}"
+    );
+    assert_eq!(
+        painted.matches("multisig").count(),
+        1,
+        "lowercase multisig leaked outside the indexer spelling: {painted}"
+    );
+    assert!(
+        !painted
+            .lines()
+            .any(|line| line == "MULTISIG" || line == "multisig"),
+        "an address classification line was painted: {painted}"
+    );
+    let rows: Vec<&str> = painted.lines().collect();
+    let previous = rows
+        .iter()
+        .position(|line| *line == "Previous output script");
+    let address = rows
+        .iter()
+        .position(|line| *line == "output address  value 1");
+    let raw = rows
+        .iter()
+        .position(|line| *line == "output script type multisig");
+    let upper = rows.iter().position(|line| *line == "Type MULTISIG");
+    assert!(
+        previous.is_some() && address.is_some() && raw.is_some() && upper.is_some(),
+        "Previous output script or the multisig type lines were dropped: {painted}"
+    );
+    assert!(
+        previous.unwrap() < address.unwrap()
+            && address.unwrap() < raw.unwrap()
+            && raw.unwrap() < upper.unwrap(),
+        "Type MULTISIG was not after the indexer spelling on the output row: {painted}"
+    );
+    assert_one_fee_and_confirmed(&painted);
+    assert_multisig_leaves_other_rows(&painted);
+    assert_multisig_bytes_off(&painted);
+
+    let (empty_opened, empty) =
+        paint_multisig_tx("msigempty", &multisig_vout(r#""scriptpubkey_type":"","#));
+    empty_opened.expect("empty output type");
+    assert!(
+        empty.contains("tx txid msigempty"),
+        "an empty type hid the transaction: {empty}"
+    );
+    assert!(
+        empty.lines().any(|line| line == "Previous output script"),
+        "an empty output type dropped Previous output script: {empty}"
+    );
+    assert_output_type_lines(&empty, &[]);
+    assert!(
+        !empty.contains("output script type"),
+        "an empty type painted a script type line: {empty}"
+    );
+    assert!(
+        !empty.contains("Type MULTISIG"),
+        "an empty type painted Type MULTISIG: {empty}"
+    );
+    assert!(!empty.to_ascii_lowercase().contains("multisig"), "{empty}");
+    assert_one_fee_and_confirmed(&empty);
+    assert_multisig_leaves_other_rows(&empty);
+    assert_multisig_bytes_off(&empty);
+
+    for (txid, type_field) in [
+        ("msigmiss", ""),
+        ("msignull", r#""scriptpubkey_type":null,"#),
+    ] {
+        let (_opened, omitted) = paint_multisig_tx(txid, &multisig_vout(type_field));
+        assert!(
+            omitted.contains(txid),
+            "a missing scriptpubkey_type hid the screen: {omitted}"
+        );
+        assert_output_type_lines(&omitted, &[]);
+        assert!(
+            !omitted.contains("Type MULTISIG"),
+            "a missing scriptpubkey_type painted Type MULTISIG: {omitted}"
+        );
+        assert!(
+            !omitted.to_ascii_lowercase().contains("multisig"),
+            "{omitted}"
+        );
+        assert_multisig_leaves_other_rows(&omitted);
+        assert_multisig_bytes_off(&omitted);
+    }
+}
+
+const ETYP_HEX: &str = "etyppubhexdead";
+const ETYP_ASM: &str = "etypasmdead";
+const ETYP_SIG: &str = "etypsighexdead";
+const ETYP_SIG_ASM: &str = "etypsigasmdead";
+const ETYP_WIT: &str = "etypwitdead";
+const ETYP_INNER: &str = "etypinnerdead";
+const ETYP_LEAF: &str = "etypleafdead";
+
+fn empty_type_vin() -> String {
+    format!(
+        r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{ETYP_HEX}","scriptpubkey_asm":"{ETYP_ASM}","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"{ETYP_SIG}","scriptsig_asm":"{ETYP_SIG_ASM}","witness":["{ETYP_WIT}"],"is_coinbase":false,"sequence":1,"inner_witnessscript_asm":"{ETYP_INNER}","leaf_version":"{ETYP_LEAF}"}}"#
+    )
+}
+
+fn empty_type_vout(type_field: &str) -> String {
+    format!(
+        r#"{{"scriptpubkey":"{ETYP_HEX}","scriptpubkey_asm":"{ETYP_ASM}",{type_field}"value":1}}"#
+    )
+}
+
+fn empty_type_tx(txid: &str, vout: &str) -> String {
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{}],"vout":[{vout}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4}}}}"#,
+        empty_type_vin()
+    )
+}
+
+fn paint_empty_type_tx(txid: &str, vout: &str) -> (Result<(), ClientError>, String) {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    assert!(
+        !txid.to_ascii_lowercase().contains("empty"),
+        "the txid must not contain the type word: {txid}"
+    );
+    let body = empty_type_tx(txid, vout);
+    for needle in [
+        ETYP_HEX,
+        ETYP_ASM,
+        ETYP_SIG,
+        ETYP_SIG_ASM,
+        ETYP_WIT,
+        ETYP_INNER,
+        ETYP_LEAF,
+    ] {
+        assert!(body.contains(needle), "fixture omitted {needle}: {body}");
+    }
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    let opened = host.open_transaction(txid);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not requested: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains('?')
+            && !path.contains('#')
+            && !path.starts_with("/address/")),
+        "a transaction open invented a route, a query, or a fragment: {paths:?}"
+    );
+    (opened, painted(&host))
+}
+
+fn assert_empty_type_bytes_off(painted: &str) {
+    for needle in [
+        ETYP_HEX,
+        ETYP_ASM,
+        ETYP_SIG,
+        ETYP_SIG_ASM,
+        ETYP_WIT,
+        ETYP_INNER,
+        ETYP_LEAF,
+        "scriptpubkey",
+        "script asm",
+        "leaf version",
+        "Leaf version",
+        "<span",
+        "output-type",
+        "scriptpubkey-type",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+fn assert_empty_type_leaves_other_rows(painted: &str) {
+    for line in [
+        "Transaction fee",
+        "P2PK",
+        "OP_RETURN",
+        "Type ANCHOR",
+        "Type V0_P2WSH",
+        "Type MULTISIG",
+        "Show all",
+        "Show more",
+        "P2TR tapscript",
+        "P2SH redeem script",
+        "Why is this block empty?",
+    ] {
+        assert!(
+            !painted.contains(line),
+            "{line} changed on an empty-type screen: {painted}"
+        );
+    }
+}
+
+/// Output script type `empty` from `GET /tx/:txid`.
+///
+/// A nonempty `vout.scriptpubkey_type` of `empty` paints the exact line
+/// `Type EMPTY`. An empty string, a missing key, and JSON null omit that
+/// line. Those three are not the type value `empty`. `output script type empty`
+/// stays the indexer spelling. Script hex, script asm, scriptsig, witness,
+/// the inner tapscript, and leaf version stay off the screen. This is not an
+/// address span. `GET /address/:script` is not called. The path has no query
+/// and no fragment. The confirmation line on this fixture stays `Confirmed`.
+/// The count line `confirmations 1` is not this fixture. `Why is this block
+/// empty?` is a different string and is not this screen.
+#[test]
+fn transaction_screen_paints_empty_output_type() {
+    let (opened, painted) = paint_empty_type_tx(
+        "etypeone",
+        &empty_type_vout(r#""scriptpubkey_type":"empty","#),
+    );
+    opened.expect("empty output type");
+    assert!(
+        painted.contains("tx txid etypeone"),
+        "the parsed transaction was hidden: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == INPUTS_OUTPUTS_HEADING)
+            .count(),
+        1,
+        "Inputs & Outputs was dropped: {painted}"
+    );
+    assert_eq!(
+        painted.lines().filter(|line| *line == "Type EMPTY").count(),
+        1,
+        "scriptpubkey_type empty did not paint the exact line Type EMPTY: {painted}"
+    );
+    assert_output_type_lines(&painted, &["Type EMPTY"]);
+    assert_eq!(
+        painted.matches("Type EMPTY").count(),
+        1,
+        "Type EMPTY was not once: {painted}"
+    );
+    assert_eq!(
+        painted.matches("EMPTY").count(),
+        1,
+        "EMPTY leaked outside Type EMPTY: {painted}"
+    );
+    assert_eq!(
+        painted
+            .lines()
+            .filter(|line| *line == "output script type empty")
+            .count(),
+        1,
+        "the indexer spelling was dropped: {painted}"
+    );
+    assert_eq!(
+        painted.matches("empty").count(),
+        1,
+        "lowercase empty leaked outside the indexer spelling: {painted}"
+    );
+    assert!(
+        !painted
+            .lines()
+            .any(|line| line == "EMPTY" || line == "empty"),
+        "an address classification line was painted: {painted}"
+    );
+    let rows: Vec<&str> = painted.lines().collect();
+    let previous = rows
+        .iter()
+        .position(|line| *line == "Previous output script");
+    let address = rows
+        .iter()
+        .position(|line| *line == "output address  value 1");
+    let raw = rows
+        .iter()
+        .position(|line| *line == "output script type empty");
+    let upper = rows.iter().position(|line| *line == "Type EMPTY");
+    assert!(
+        previous.is_some() && address.is_some() && raw.is_some() && upper.is_some(),
+        "Previous output script or the empty type lines were dropped: {painted}"
+    );
+    assert!(
+        previous.unwrap() < address.unwrap()
+            && address.unwrap() < raw.unwrap()
+            && raw.unwrap() < upper.unwrap(),
+        "Type EMPTY was not after the indexer spelling on the output row: {painted}"
+    );
+    assert_one_fee_and_confirmed(&painted);
+    assert_empty_type_leaves_other_rows(&painted);
+    assert_empty_type_bytes_off(&painted);
+
+    let (blank_opened, blank) =
+        paint_empty_type_tx("etypeblank", &empty_type_vout(r#""scriptpubkey_type":"","#));
+    blank_opened.expect("blank output type");
+    assert!(
+        blank.contains("tx txid etypeblank"),
+        "an empty type string hid the transaction: {blank}"
+    );
+    assert!(
+        blank.lines().any(|line| line == "Previous output script"),
+        "an empty output type dropped Previous output script: {blank}"
+    );
+    assert_output_type_lines(&blank, &[]);
+    assert!(
+        !blank.contains("output script type"),
+        "an empty type string painted a script type line: {blank}"
+    );
+    assert!(
+        !blank.contains("Type EMPTY"),
+        "an empty type string painted Type EMPTY: {blank}"
+    );
+    assert!(!blank.to_ascii_lowercase().contains("empty"), "{blank}");
+    assert_one_fee_and_confirmed(&blank);
+    assert_empty_type_leaves_other_rows(&blank);
+    assert_empty_type_bytes_off(&blank);
+
+    for (txid, type_field) in [
+        ("etypemiss", ""),
+        ("etypenull", r#""scriptpubkey_type":null,"#),
+    ] {
+        let (_opened, omitted) = paint_empty_type_tx(txid, &empty_type_vout(type_field));
+        assert!(
+            omitted.contains(txid),
+            "a missing scriptpubkey_type hid the screen: {omitted}"
+        );
+        assert_output_type_lines(&omitted, &[]);
+        assert!(
+            !omitted.contains("Type EMPTY"),
+            "a missing scriptpubkey_type painted Type EMPTY: {omitted}"
+        );
+        assert!(!omitted.to_ascii_lowercase().contains("empty"), "{omitted}");
+        assert_empty_type_leaves_other_rows(&omitted);
+        assert_empty_type_bytes_off(&omitted);
     }
 }
 
@@ -5252,6 +8187,99 @@ fn transaction_screen_paints_transaction_fee_label() {
     assert_screen_keeps_timestamp(&ordinary, "feeord");
 }
 
+/// Address-type caption from `GET /tx/:txid` when `scriptpubkey_type` is `fee`.
+///
+/// The address-type element body is the exact line `fee`. `Type FEE`,
+/// `Transaction fee`, and `output script type fee` stay. An ordinary output
+/// does not gain this line. An input whose prevout type is `fee` does not
+/// gain this line. The path has no query and no fragment.
+#[test]
+fn transaction_screen_paints_address_type_fee() {
+    const LABEL: &str = "fee";
+
+    fn tx_body(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin_json}],"vout":[{vout_json}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vin_json: &str, vout_json: &str) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, vin_json, vout_json))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    let fee_vout =
+        r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":0}"#;
+    let fee_out = paint("addrtypefee", "", fee_vout);
+    assert!(
+        fee_out.lines().any(|line| line == LABEL),
+        "the exact line is absent: {fee_out}"
+    );
+    assert_eq!(
+        fee_out.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "the address-type fee caption was not once: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "Type FEE"),
+        "Type FEE was dropped: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "Transaction fee"),
+        "Transaction fee was dropped: {fee_out}"
+    );
+    assert!(
+        fee_out.lines().any(|line| line == "output script type fee"),
+        "output script type fee was dropped: {fee_out}"
+    );
+
+    let ordinary = r#"{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qordinary","value":9}"#;
+    let ordinary_out = paint("addrtypeord", "", ordinary);
+    assert!(
+        !ordinary_out.lines().any(|line| line == LABEL),
+        "an ordinary output painted the address-type fee caption: {ordinary_out}"
+    );
+
+    let fee_input = r#""prevout":{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"fee","value":5},"#;
+    let input_out = paint(
+        "addrtypein",
+        &format!(
+            r#"{{"txid":"prev","vout":0,{fee_input}"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}"#
+        ),
+        ordinary,
+    );
+    assert!(
+        !input_out.lines().any(|line| line == LABEL),
+        "an input whose prevout type is fee painted the address-type fee caption: {input_out}"
+    );
+    assert!(
+        input_out
+            .lines()
+            .any(|line| line == "Previous output type FEE"),
+        "Previous output type FEE was dropped: {input_out}"
+    );
+}
+
 /// Output address cell from `GET /tx/:txid` when `scriptpubkey_type` is `p2pk`.
 ///
 /// The scriptpubkeyType pipe returns the exact line `P2PK` for the lowercase
@@ -6076,6 +9104,145 @@ fn transaction_screen_paints_op_return_label() {
     assert_screen_keeps_timestamp(&other, "opretother");
 }
 
+/// Runestone beside `OP_RETURN` from a no-query `GET /tx/:txid`.
+///
+/// An `op_return` output whose `scriptpubkey` hex starts with `6a5d` paints
+/// the exact line `Runestone`. `OP_RETURN` and `Type OP_RETURN` stay. An
+/// `op_return` output whose script does not start with `6a5d` does not paint
+/// `Runestone`. A non-`op_return` output does not, even when its script hex
+/// starts with `6a5d`. Script hex, script asm, scriptsig, and witness stay off.
+#[test]
+fn transaction_screen_paints_runestone() {
+    const STONE_SCRIPT: &str = "6a5ddeadbeef";
+    const PLAIN_SCRIPT: &str = "6a046869";
+    const OTHER_SCRIPT: &str = "6a5dnotopreturn";
+    const ASM: &str = "asmsentinel";
+    const SIG: &str = "sigsentinel";
+    const SIG_ASM: &str = "sigasmsentinel";
+    const WIT: &str = "witsentinel";
+
+    fn vout(script: &str, kind: &str) -> String {
+        format!(
+            r#"{{"scriptpubkey":"{script}","scriptpubkey_asm":"{ASM}","scriptpubkey_type":"{kind}","value":0}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, vout_json: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{{"txid":"prev","vout":0,"prevout":null,"scriptsig":"{SIG}","scriptsig_asm":"{SIG_ASM}","witness":["{WIT}"],"is_coinbase":false,"sequence":1}}],"vout":[{vout_json}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vout_json: &str) -> String {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, vout_json))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn assert_script_stays_off(text: &str) {
+        for needle in [
+            STONE_SCRIPT,
+            PLAIN_SCRIPT,
+            OTHER_SCRIPT,
+            ASM,
+            SIG,
+            SIG_ASM,
+            WIT,
+        ] {
+            assert!(!text.contains(needle), "{needle} was painted: {text}");
+        }
+    }
+
+    let stone = paint("runestone", &vout(STONE_SCRIPT, "op_return"));
+    assert!(
+        stone.contains("tx txid runestone"),
+        "the parsed transaction was hidden: {stone}"
+    );
+    assert!(
+        stone.lines().any(|line| line == "Runestone"),
+        "Runestone is absent: {stone}"
+    );
+    assert_eq!(
+        stone.lines().filter(|line| *line == "Runestone").count(),
+        1,
+        "Runestone was not painted once: {stone}"
+    );
+    assert_eq!(
+        stone.lines().filter(|line| *line == "OP_RETURN").count(),
+        1,
+        "OP_RETURN was dropped or repeated: {stone}"
+    );
+    assert_eq!(
+        stone
+            .lines()
+            .filter(|line| *line == "Type OP_RETURN")
+            .count(),
+        1,
+        "Type OP_RETURN was dropped or repeated: {stone}"
+    );
+    assert!(
+        stone
+            .lines()
+            .any(|line| line == "output script type op_return"),
+        "output script type op_return was dropped: {stone}"
+    );
+    assert_script_stays_off(&stone);
+
+    let plain = paint("runestoneplain", &vout(PLAIN_SCRIPT, "op_return"));
+    assert!(
+        plain.contains("tx txid runestoneplain"),
+        "the parsed transaction was hidden: {plain}"
+    );
+    assert!(
+        !plain.lines().any(|line| line.contains("Runestone")),
+        "an OP_RETURN that does not start with 6a5d painted Runestone: {plain}"
+    );
+    assert_eq!(
+        plain.lines().filter(|line| *line == "OP_RETURN").count(),
+        1,
+        "OP_RETURN was dropped: {plain}"
+    );
+    assert!(
+        plain.lines().any(|line| line == "Type OP_RETURN"),
+        "Type OP_RETURN was dropped: {plain}"
+    );
+    assert_script_stays_off(&plain);
+
+    let other = paint("runestoneother", &vout(OTHER_SCRIPT, "v0_p2wpkh"));
+    assert!(
+        other.contains("tx txid runestoneother"),
+        "the parsed transaction was hidden: {other}"
+    );
+    assert!(
+        !other.lines().any(|line| line.contains("Runestone")),
+        "a non-OP_RETURN output painted Runestone: {other}"
+    );
+    assert!(
+        other.lines().any(|line| line == "Type V0_P2WPKH"),
+        "Type V0_P2WPKH was dropped: {other}"
+    );
+    assert!(
+        !other.lines().any(|line| line == "OP_RETURN"),
+        "a non-OP_RETURN output painted OP_RETURN: {other}"
+    );
+    assert_script_stays_off(&other);
+}
+
 /// Transaction screen from `GET /tx/:txid`, field `status.block_time`.
 ///
 /// One exact line `Timestamp` sits immediately before the existing raw
@@ -6522,6 +9689,135 @@ fn assert_hash_line_has_no_mark(painted: &str, expected: &str) {
         "Hash line used a unicode ellipsis: {line}"
     );
     assert!(!line.contains('\u{200e}'), "Hash line used U+200E: {line}");
+}
+
+/// A failed no-query block load paints Angular's span above the indexer body.
+/// The span is `Error loading block data.` The italic line stays `Block not found`.
+#[test]
+fn block_screen_paints_load_error() {
+    let id = "nope";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/block/{id}"), "Block not found".to_string())]),
+    );
+    let err = host.open_block(id).expect_err("missing block must fail");
+    assert!(
+        err.to_string().contains("Block not found"),
+        "indexer body left the error: {err}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/block/nope"),
+        "block load did not GET /block/nope: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "block load used a query string: {paths:?}"
+    );
+    let painted = painted(&host);
+    assert!(
+        painted.lines().any(|line| line == "Block not found"),
+        "Block not found was replaced or dropped: {painted}"
+    );
+    assert!(
+        painted
+            .lines()
+            .any(|line| line == "Error loading block data."),
+        "Error loading block data. is absent: {painted}"
+    );
+    let span_at = painted.find("Error loading block data.").expect("span");
+    let body_at = painted.find("Block not found").expect("indexer body");
+    assert!(
+        span_at < body_at,
+        "the span did not sit above Block not found: {painted}"
+    );
+    assert_eq!(
+        painted.matches("Error loading block data.").count(),
+        1,
+        "the span was not painted once: {painted}"
+    );
+    assert_eq!(host.notice, "Block not found");
+}
+
+/// A failed no-query `GET /address/:addr` paints Angular's span above the indexer body.
+/// The span is `Error loading address data.` The body stays `Invalid Bitcoin address`.
+/// A parsed address that returns stats does not show the span, and `Type P2WPKH` stays.
+#[test]
+fn address_screen_paints_load_error() {
+    let address = "notanaddress";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/address/{address}"),
+            "Invalid Bitcoin address".to_string(),
+        )]),
+    );
+    let err = host
+        .open_address(address)
+        .expect_err("invalid address must fail");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/address/notanaddress"),
+        "address load did not GET /address/notanaddress: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "address load used a query string: {paths:?}"
+    );
+    let painted = painted(&host);
+    assert!(
+        painted
+            .lines()
+            .any(|line| line == "Error loading address data."),
+        "Error loading address data. is absent: {painted}"
+    );
+    assert!(
+        err.to_string().contains("Invalid Bitcoin address"),
+        "indexer body left the error: {err}"
+    );
+    assert!(
+        painted
+            .lines()
+            .any(|line| line == "Invalid Bitcoin address"),
+        "Invalid Bitcoin address was replaced or dropped: {painted}"
+    );
+    let span_at = painted.find("Error loading address data.").expect("span");
+    let body_at = painted
+        .find("Invalid Bitcoin address")
+        .expect("indexer body");
+    assert!(
+        span_at < body_at,
+        "the span did not sit above Invalid Bitcoin address: {painted}"
+    );
+    assert_eq!(
+        painted.matches("Error loading address data.").count(),
+        1,
+        "the span was not painted once: {painted}"
+    );
+    assert!(
+        !painted.contains("400 Bad Request"),
+        "a 400 Bad Request prefix was added: {painted}"
+    );
+    assert!(
+        !painted.contains("Error loading block data."),
+        "the block sentence replaced the address span: {painted}"
+    );
+    assert_eq!(host.notice, "Invalid Bitcoin address");
+
+    let good = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let good_painted = paint_address(good, &address_stats(good));
+    assert!(
+        !good_painted.contains("Error loading address data."),
+        "a parsed address that returns stats showed the load error: {good_painted}"
+    );
+    assert!(
+        good_painted.lines().any(|line| line == "Type P2WPKH"),
+        "Type P2WPKH left a successful load: {good_painted}"
+    );
 }
 
 /// Block Hash from `GET /block/:hash`, shortened like Angular `shortenString` of length 13.
@@ -7053,8 +10349,8 @@ fn block_screen_paints_nonce_hex() {
         .collect();
     assert_eq!(
         zero_hex_lines,
-        vec!["nonce 0 0x00000000"],
-        "0x00000000 was not only the nonce line: {zero}"
+        vec!["Nonce 0x00000000", "nonce 0 0x00000000"],
+        "0x00000000 was not only the nonce lines: {zero}"
     );
     assert!(
         zero.lines().any(|line| line == "version 1 0x00000001"),
@@ -8960,6 +12256,63 @@ fn asset_screen_paints_asset_title() {
     );
 }
 
+/// Asset h2 count. Angular `i18n="asset.M_of_N"` paints `{loaded} of {txCount}`
+/// when the loaded list is not empty. `txCount` is chain `tx_count` plus
+/// mempool `tx_count` from `GET /asset/:id`. The h2 has no noun after the count.
+/// An empty list does not paint the line. The request path has no query string.
+#[test]
+fn screen_paints_asset_loaded_of() {
+    const LABEL: &str = "1 of 12";
+    let txs = r#"[{"txid":"assetchaintx","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":1,"status":{"confirmed":true}}]"#;
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), "[]".to_string()),
+            (
+                format!("/asset/{ISSUED_ASSET}"),
+                issued_name_document(
+                    AssetNameField::Text("Test Asset"),
+                    AssetNameField::Text("TEST"),
+                ),
+            ),
+            (format!("/asset/{ISSUED_ASSET}/txs"), txs.to_string()),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("dashboard");
+    host.set_query(ISSUED_ASSET);
+    host.reload().expect("issued asset");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/asset/{ISSUED_ASSET}")),
+        "the asset document was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    assert!(
+        paint.lines().any(|line| line == LABEL),
+        "1 of 12 absent\n{paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "1 of 12 was missing or repeated: {paint}"
+    );
+    assert_paint_is_not_html(&paint);
+}
+
 /// Plaintext broadcast form heading. One line, not the button and not HTML.
 #[test]
 fn broadcast_screen_paints_broadcast_transaction() {
@@ -9161,6 +12514,98 @@ fn assets_registry_paints_issuer_domain_column_header() {
     assert_paint_is_not_html(&paint);
     assert!(!paint.contains("&amp;"), "{paint}");
     assert!(!paint.contains("&#"), "{paint}");
+}
+
+/// Assets list cell from `GET /assets/registry`. `entity.domain` is its own
+/// line. The column header stays `Issuer domain` once.
+///
+/// The line is the stored domain. It is not `Issuer example.com` and it is
+/// not a second copy of the header. A missing domain omits the line. The
+/// request path has no query string.
+#[test]
+fn assets_registry_paints_the_issuer_domain_value() {
+    const DOMAIN: &str = "example.com";
+    let asset = "12".repeat(32);
+    let registry = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","entity":{{"domain":"{DOMAIN}"}},"precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), registry),
+        ]),
+    );
+    host.activate(Screen::Dashboard).expect("assets registry");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry"),
+        "the assets registry was not requested: {paths:?}"
+    );
+    for path in &paths {
+        assert_path_has_no_query_or_hash(path);
+    }
+    let paint = painted(&host);
+    assert!(
+        paint.lines().any(|line| line == "Test Asset"),
+        "the issued name was dropped: {paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == "TEST"),
+        "the ticker value was dropped: {paint}"
+    );
+    assert_eq!(
+        paint
+            .lines()
+            .filter(|line| *line == "Issuer domain")
+            .count(),
+        1,
+        "the domain value was counted as the column header: {paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == DOMAIN).count(),
+        1,
+        "the issuer domain value was not one line {DOMAIN}: {paint}"
+    );
+    assert!(
+        !paint.lines().any(|line| line == format!("Issuer {DOMAIN}")),
+        "the asset-page issuer line was painted on the registry list: {paint}"
+    );
+    assert_paint_is_not_html(&paint);
+
+    let bare = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, _) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), bare),
+        ]),
+    );
+    host.activate(Screen::Dashboard)
+        .expect("registry without a domain");
+    let missing = painted(&host);
+    assert!(
+        !missing.lines().any(|line| line == DOMAIN),
+        "a missing domain painted {DOMAIN}: {missing}"
+    );
 }
 
 /// Assets list column header. Angular `i18n="Asset ID header"` paints the
@@ -10191,5 +13636,6299 @@ fn recent_transactions_paint_fee_header() {
     assert!(
         blocks.contains("difficulty 1") && !blocks.contains("difficulty 1.0"),
         "difficulty left plain_number: {blocks}"
+    );
+}
+
+fn loaded_tx(txid: &str) -> String {
+    format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[],"vout":[],"size":2,"weight":8,"sigops":0,"fee":4,"status":{{"confirmed":true,"block_height":12}}}}"#
+    )
+}
+
+fn loaded_txs(txids: &[&str]) -> String {
+    let rows = txids
+        .iter()
+        .map(|txid| loaded_tx(txid))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{rows}]")
+}
+
+fn loaded_address_stats(address: &str, chain_count: u64, mempool_count: u64) -> String {
+    format!(
+        r#"{{"address":"{address}","chain_stats":{{"tx_count":{chain_count},"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":10,"spent_txo_sum":0}},"mempool_stats":{{"tx_count":{mempool_count},"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}}}"#
+    )
+}
+
+fn loaded_scripthash_stats(hash: &str, chain_count: u64, mempool_count: u64) -> String {
+    format!(
+        r#"{{"scripthash":"{hash}","chain_stats":{{"tx_count":{chain_count},"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":10,"spent_txo_sum":0}},"mempool_stats":{{"tx_count":{mempool_count},"funded_txo_count":0,"spent_txo_count":0,"funded_txo_sum":0,"spent_txo_sum":0}}}}"#
+    )
+}
+
+fn assert_first_page_paths(paths: &[String]) {
+    for path in paths {
+        assert!(!path.contains('?'), "{path}");
+        assert!(!path.contains('#'), "{path}");
+        assert!(!path.contains("after_txid"), "{path}");
+    }
+}
+
+fn paint_address_loaded(address: &str, chain_count: u64, mempool_count: u64, txs: &str) -> String {
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                format!("/address/{address}"),
+                loaded_address_stats(address, chain_count, mempool_count),
+            ),
+            (format!("/address/{address}/txs"), txs.to_string()),
+            (format!("/address/{address}/utxo"), "[]".to_string()),
+        ]),
+    );
+    host.open_address(address).expect("address");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{address}/txs")),
+        "first page was not requested: {paths:?}"
+    );
+    assert_first_page_paths(&paths);
+    painted(&host)
+}
+
+fn paint_scripthash_loaded(hash: &str, chain_count: u64, mempool_count: u64, txs: &str) -> String {
+    assert_eq!(hash.len(), 64, "{hash}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                format!("/scripthash/{hash}"),
+                loaded_scripthash_stats(hash, chain_count, mempool_count),
+            ),
+            (format!("/scripthash/{hash}/txs"), txs.to_string()),
+            (format!("/scripthash/{hash}/utxo"), "[]".to_string()),
+        ]),
+    );
+    host.open_address(hash).expect("scripthash");
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/scripthash/{hash}/txs")),
+        "first page was not requested: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.starts_with("/address/")),
+        "scripthash used the address route: {paths:?}"
+    );
+    assert_first_page_paths(&paths);
+    painted(&host)
+}
+
+fn assert_exact_line_once(paint: &str, line: &str) {
+    assert_eq!(
+        paint.lines().filter(|row| *row == line).count(),
+        1,
+        "expected one exact line {line:?}\n{paint}"
+    );
+}
+
+fn assert_heading_above_list(paint: &str, heading: &str) {
+    let heading_at = paint
+        .lines()
+        .position(|line| line == heading)
+        .unwrap_or_else(|| panic!("heading missing: {heading:?}\n{paint}"));
+    let list_at = paint
+        .lines()
+        .position(|line| line.starts_with("address tx txid "))
+        .unwrap_or_else(|| panic!("loaded transaction list missing\n{paint}"));
+    assert!(
+        heading_at < list_at,
+        "heading is not above the loaded list\n{paint}"
+    );
+}
+
+fn assert_transactions_sum_stays(paint: &str, sum: i128) {
+    let label = format!("Transactions {sum}");
+    assert!(
+        paint
+            .lines()
+            .any(|line| line.contains(&label) && !line.contains(" of ")),
+        "Transactions-plus-sum line was replaced\n{paint}"
+    );
+}
+
+fn assert_empty_has_no_count_line(paint: &str) {
+    assert!(
+        paint.lines().any(|line| line == "\u{00A0}"),
+        "empty loaded list did not leave a non-breaking space\n{paint}"
+    );
+    assert!(
+        !paint.lines().any(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words.len() == 4
+                && words[1] == "of"
+                && (words[3] == "transaction" || words[3] == "transactions")
+        }),
+        "empty loaded list painted a count\n{paint}"
+    );
+    assert!(
+        !paint.contains("0 of "),
+        "empty loaded list painted a fake zero count\n{paint}"
+    );
+}
+
+/// Address h2 above the loaded transaction list.
+///
+/// One loaded transaction is `{loaded} of {chain tx_count + mempool tx_count} transaction`.
+/// More than one uses `transactions`. An empty loaded list is a non-breaking space
+/// and does not get that line. Address and scripthash share this screen.
+/// `Transactions {sum}` stays. The first page is `GET /address/:addr/txs` or
+/// `GET /scripthash/:hash/txs` with no query string and no `after_txid`.
+#[test]
+fn address_screen_paints_loaded_transactions_of() {
+    const CHAIN: u64 = 4;
+    const MEMPOOL: u64 = 3;
+    const SUM: i128 = 7;
+
+    let one = paint_address_loaded("bc1qloadedone", CHAIN, MEMPOOL, &loaded_txs(&["loadedtx1"]));
+    assert_exact_line_once(&one, "1 of 7 transaction");
+    assert!(
+        !one.lines().any(|line| line == "1 of 7 transactions"),
+        "one loaded transaction used the plural\n{one}"
+    );
+    assert!(
+        !one.lines()
+            .any(|line| line == "1 of 4 transaction" || line == "1 of 3 transaction"),
+        "the heading used one tx_count instead of the sum\n{one}"
+    );
+    assert_heading_above_list(&one, "1 of 7 transaction");
+    assert_transactions_sum_stays(&one, SUM);
+    assert!(one.contains("address tx txid loadedtx1"), "{one}");
+
+    let many = paint_address_loaded(
+        "bc1qloadedmany",
+        CHAIN,
+        MEMPOOL,
+        &loaded_txs(&["loadedtx2", "loadedtx3"]),
+    );
+    assert_exact_line_once(&many, "2 of 7 transactions");
+    assert!(
+        !many.lines().any(|line| line == "2 of 7 transaction"),
+        "more than one loaded transaction used the singular\n{many}"
+    );
+    assert_heading_above_list(&many, "2 of 7 transactions");
+    assert_transactions_sum_stays(&many, SUM);
+
+    let empty = paint_address_loaded("bc1qloadednone", CHAIN, MEMPOOL, "[]");
+    assert_empty_has_no_count_line(&empty);
+    assert_transactions_sum_stays(&empty, SUM);
+    let nbsp_at = empty
+        .lines()
+        .position(|line| line == "\u{00A0}")
+        .expect("nbsp");
+    let list_at = empty
+        .lines()
+        .position(|line| line == "The address transaction list is empty.")
+        .expect("empty list");
+    assert!(
+        nbsp_at < list_at,
+        "non-breaking space is not above the list\n{empty}"
+    );
+
+    let hash_one = "c1".repeat(32);
+    let script_one =
+        paint_scripthash_loaded(&hash_one, CHAIN, MEMPOOL, &loaded_txs(&["scripthash1"]));
+    assert_exact_line_once(&script_one, "1 of 7 transaction");
+    assert_heading_above_list(&script_one, "1 of 7 transaction");
+    assert_transactions_sum_stays(&script_one, SUM);
+
+    let hash_many = "c2".repeat(32);
+    let script_many = paint_scripthash_loaded(
+        &hash_many,
+        CHAIN,
+        MEMPOOL,
+        &loaded_txs(&["scripthash2", "scripthash3"]),
+    );
+    assert_exact_line_once(&script_many, "2 of 7 transactions");
+    assert_transactions_sum_stays(&script_many, SUM);
+
+    let hash_empty = "c3".repeat(32);
+    let script_empty = paint_scripthash_loaded(&hash_empty, CHAIN, MEMPOOL, "[]");
+    assert_empty_has_no_count_line(&script_empty);
+    assert_transactions_sum_stays(&script_empty, SUM);
+}
+
+/// Transaction page badge from a no-query `GET /tx/:txid`.
+///
+/// `tx-features.component.html` line 2 is the word `SegWit` when segwit is
+/// enabled and the realized weight savings are nonzero and the potential
+/// savings are zero. The word stays off when that gain is zero or segwit is
+/// off. The tooltip stays off. The RBF badge stays off. The line
+/// `confirmations 1` stays. `P2WPKH` is the address badge, not this line.
+/// `OP_RETURN` stays. This fixture does not paint `Runestone`.
+#[test]
+fn transaction_screen_paints_segwit_badge() {
+    const WIT: &str = "aabb";
+    const OP_RETURN_SCRIPT: &str = "6a046869";
+
+    fn vin(witness: bool) -> String {
+        let witness_field = if witness {
+            format!(r#","witness":["{WIT}"]"#)
+        } else {
+            String::new()
+        };
+        format!(
+            r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0 OP_PUSHBYTES_20 aa","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":4294967295{witness_field}}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, height: u64, witness: bool) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{}],"vout":[{{"scriptpubkey":"{OP_RETURN_SCRIPT}","scriptpubkey_asm":"OP_RETURN OP_PUSHBYTES_4","scriptpubkey_type":"op_return","value":0}}],"size":10,"weight":400,"sigops":0,"fee":1,"status":{{"confirmed":true,"block_height":{height}}}}}"#,
+            vin(witness)
+        )
+    }
+
+    fn paint(txid: &str, height: u64, witness: bool) -> String {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/tx/{txid}"), tx_body(txid, height, witness)),
+                ("/blocks/tip/height".to_string(), height.to_string()),
+            ]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn assert_badge_neighbors(painted: &str) {
+        assert!(
+            painted.lines().any(|line| line == "confirmations 1"),
+            "confirmations 1 left the screen: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == "OP_RETURN").count(),
+            1,
+            "OP_RETURN was dropped or repeated: {painted}"
+        );
+        assert!(
+            !painted.lines().any(|line| line == "Runestone"),
+            "this fixture painted Runestone: {painted}"
+        );
+        assert!(
+            painted
+                .lines()
+                .any(|line| line == "Previous output type V0_P2WPKH"),
+            "Previous output type V0_P2WPKH was dropped: {painted}"
+        );
+        assert!(
+            !painted
+                .lines()
+                .any(|line| line == "P2WPKH" || line == "Type P2WPKH"),
+            "the address badge was painted on the transaction page: {painted}"
+        );
+        assert!(
+            !painted.lines().any(|line| line == "RBF"),
+            "the RBF badge was painted: {painted}"
+        );
+        assert!(
+            !painted.contains("Replace-By-Fee") && !painted.contains("on fees"),
+            "a badge tooltip was painted: {painted}"
+        );
+        assert!(
+            !painted.contains("native SegWit"),
+            "the SegWit tooltip was painted: {painted}"
+        );
+    }
+
+    let on = paint("segwiton", 800_000, true);
+    assert!(
+        on.lines().any(|line| line == "SegWit"),
+        "SegWit is absent: {on}"
+    );
+    assert_eq!(
+        on.lines().filter(|line| *line == "SegWit").count(),
+        1,
+        "SegWit was not painted once: {on}"
+    );
+    assert_badge_neighbors(&on);
+
+    let zero = paint("segwitzero", 800_000, false);
+    assert!(
+        zero.contains("tx txid segwitzero"),
+        "a zero gain hid the transaction: {zero}"
+    );
+    assert!(
+        !zero.contains("SegWit"),
+        "a zero gain painted SegWit: {zero}"
+    );
+    assert_badge_neighbors(&zero);
+
+    let off = paint("segwitoff", 477_119, true);
+    assert!(
+        off.contains("tx txid segwitoff"),
+        "segwit off hid the transaction: {off}"
+    );
+    assert!(!off.contains("SegWit"), "segwit off painted SegWit: {off}");
+    assert_badge_neighbors(&off);
+}
+
+/// Transaction page badge from a no-query `GET /tx/:txid`.
+///
+/// `tx-features.component.html` lines 11-25 are the word `Taproot` when
+/// taproot is enabled. Confirmed mainnet is on at height 709632. The word
+/// stays off below that height. An unconfirmed transaction is on. Liquid
+/// hides the features row. The tooltip stays off. The RBF badge stays off.
+/// The line `confirmations 1` stays. `SegWit` is a different badge. `P2WPKH`
+/// is the address badge, not this line. `Runestone` stays. Script hex, script
+/// asm, scriptsig, and witness stay off the page.
+#[test]
+fn transaction_screen_paints_taproot_badge() {
+    const WIT: &str = "taprootwit";
+    const PREV_SCRIPT: &str = "0014taprootprev";
+    const PREV_ASM: &str = "taprootprevasm";
+    const STONE_SCRIPT: &str = "6a5dtaprootstone";
+    const STONE_ASM: &str = "taprootstoneasm";
+    const SIG: &str = "taprootsig";
+    const SIG_ASM: &str = "taprootsigasm";
+
+    fn vin(witness: bool) -> String {
+        let witness_field = if witness {
+            format!(r#","witness":["{WIT}"]"#)
+        } else {
+            String::new()
+        };
+        format!(
+            r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{PREV_SCRIPT}","scriptpubkey_asm":"{PREV_ASM}","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"{SIG}","scriptsig_asm":"{SIG_ASM}","is_coinbase":false,"sequence":4294967295{witness_field}}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, status: &str, witness: bool) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{}],"vout":[{{"scriptpubkey":"{STONE_SCRIPT}","scriptpubkey_asm":"{STONE_ASM}","scriptpubkey_type":"op_return","value":0}}],"size":10,"weight":400,"sigops":0,"fee":1,"status":{status}}}"#,
+            vin(witness)
+        )
+    }
+
+    fn paint(
+        network: Network,
+        txid: &str,
+        status: &str,
+        witness: bool,
+        tip: Option<u64>,
+    ) -> String {
+        let mut bodies = BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, status, witness))]);
+        if let Some(height) = tip {
+            bodies.insert("/blocks/tip/height".to_string(), height.to_string());
+        }
+        let (mut host, rec) = host_with(network, bodies);
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn assert_script_stays_off(text: &str) {
+        for needle in [
+            WIT,
+            PREV_SCRIPT,
+            PREV_ASM,
+            STONE_SCRIPT,
+            STONE_ASM,
+            SIG,
+            SIG_ASM,
+        ] {
+            assert!(!text.contains(needle), "{needle} was painted: {text}");
+        }
+    }
+
+    fn assert_badge_neighbors(painted: &str) {
+        assert!(
+            painted.lines().any(|line| line == "confirmations 1"),
+            "confirmations 1 left the screen: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == "OP_RETURN").count(),
+            1,
+            "OP_RETURN was dropped or repeated: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == "Runestone").count(),
+            1,
+            "Runestone was dropped or repeated: {painted}"
+        );
+        assert!(
+            painted
+                .lines()
+                .any(|line| line == "Previous output type V0_P2WPKH"),
+            "Previous output type V0_P2WPKH was dropped: {painted}"
+        );
+        assert!(
+            !painted
+                .lines()
+                .any(|line| line == "P2WPKH" || line == "Type P2WPKH"),
+            "the address badge was painted on the transaction page: {painted}"
+        );
+        assert!(
+            !painted.lines().any(|line| line == "RBF"),
+            "the RBF badge was painted: {painted}"
+        );
+        assert!(
+            !painted.contains("Replace-By-Fee")
+                && !painted.contains("on fees")
+                && !painted.contains("uses Taproot")
+                && !painted.contains("does not use Taproot")
+                && !painted.contains("native SegWit"),
+            "a badge tooltip was painted: {painted}"
+        );
+        assert_script_stays_off(painted);
+    }
+
+    let on = paint(
+        Network::Mainnet,
+        "taprooton",
+        r#"{"confirmed":true,"block_height":800000}"#,
+        true,
+        Some(800_000),
+    );
+    assert!(
+        on.lines().any(|line| line == "Taproot"),
+        "Taproot is absent: {on}"
+    );
+    assert_eq!(
+        on.lines().filter(|line| *line == "Taproot").count(),
+        1,
+        "Taproot was not painted once: {on}"
+    );
+    assert!(
+        on.lines().any(|line| line == "SegWit"),
+        "SegWit left the screen: {on}"
+    );
+    assert_badge_neighbors(&on);
+
+    let off = paint(
+        Network::Mainnet,
+        "taprootoff",
+        r#"{"confirmed":true,"block_height":709631}"#,
+        true,
+        Some(709_631),
+    );
+    assert!(
+        off.contains("tx txid taprootoff"),
+        "taproot off hid the transaction: {off}"
+    );
+    assert!(
+        !off.contains("Taproot"),
+        "taproot off painted Taproot: {off}"
+    );
+    assert!(
+        off.lines().any(|line| line == "SegWit"),
+        "SegWit left the screen when taproot was off: {off}"
+    );
+    assert_badge_neighbors(&off);
+
+    let pending = paint(
+        Network::Mainnet,
+        "taprootpending",
+        r#"{"confirmed":false}"#,
+        true,
+        Some(800_000),
+    );
+    assert!(
+        pending.contains("tx txid taprootpending"),
+        "an unconfirmed transaction was hidden: {pending}"
+    );
+    assert_eq!(
+        pending.lines().filter(|line| *line == "Taproot").count(),
+        1,
+        "an unconfirmed transaction did not paint Taproot once: {pending}"
+    );
+    assert!(
+        pending.lines().any(|line| line == "Unconfirmed"),
+        "the unconfirmed line left the screen: {pending}"
+    );
+    assert!(
+        !pending.lines().any(|line| line == "RBF"),
+        "the RBF badge was painted: {pending}"
+    );
+    assert!(
+        pending.lines().any(|line| line == "Runestone"),
+        "Runestone left the unconfirmed screen: {pending}"
+    );
+    assert_script_stays_off(&pending);
+    assert!(
+        !pending.contains("on fees") && !pending.contains("uses Taproot"),
+        "a badge tooltip was painted: {pending}"
+    );
+
+    let liquid = paint(
+        Network::Liquid,
+        "taprootliquid",
+        r#"{"confirmed":false}"#,
+        true,
+        Some(1),
+    );
+    assert!(
+        liquid.contains("tx txid taprootliquid"),
+        "liquid hid the transaction: {liquid}"
+    );
+    assert!(
+        !liquid.contains("Taproot"),
+        "liquid painted Taproot: {liquid}"
+    );
+    assert!(
+        liquid.lines().any(|line| line == "Runestone"),
+        "Runestone left the liquid screen: {liquid}"
+    );
+    assert_script_stays_off(&liquid);
+}
+
+/// Transaction input warning from a no-query `GET /tx/:txid`.
+///
+/// A `v0_p2wsh` input paints the line `Lightning Force Close` when
+/// `inner_witnessscript_asm` matches the commitment-output pattern in
+/// `script.utils.ts` and the witness item under the last item is not the
+/// one-byte revocation marker `01`. The delayed to_local case uses an empty
+/// stack item and paints the line. The stored `01` case does not paint this
+/// line and does not paint `Revoked Lightning Force Close`. A witness script
+/// that is not the commitment pattern does not paint it. The asm, the witness,
+/// and the script hex stay off the screen. This is not a Lightning route.
+/// `Multisig 2 of 3`, `Type P2SH-P2WPKH`, and `Type P2SH-P2WSH` are other
+/// labels. The output type line stays `Type MULTISIG`.
+const FORCE_CLOSE_TXID: &str = "b10c0000004da5a9d1d9b4ae32e09f0b3e62d21a5cce5428d4ad714fb444eb5d";
+const FORCE_CLOSE_PREV: &str = "637db3928a8fb1b22b81f92dc738ee7637e5b172d650363d0b327429578bd001";
+const FORCE_CLOSE_ADDRESS: &str = "bc1q49fs59nletdxwtq59mnrdhx3w9uku6003cm658mh7dw93mwh5dts2w2kht";
+const FORCE_CLOSE_SCRIPT_HEX: &str =
+    "0020a9530a167fcada672c142ee636dcd171796e69ef8e37aa1f77f35c58edd7a357";
+const FORCE_CLOSE_SCRIPT_ASM: &str =
+    "OP_0 OP_PUSHBYTES_32 a9530a167fcada672c142ee636dcd171796e69ef8e37aa1f77f35c58edd7a357";
+const FORCE_CLOSE_SIG: &str = "303d021c32f9454db85cb1a4ca63a9883d4347c5e13f3654e884ae44e9efa3c8021d62f07fe452c06b084bc3e09afd3aac4039136549a465533bc1ca66967902";
+const FORCE_CLOSE_WITNESS_SCRIPT: &str = "632102fd6db4de50399b2aa086edb23f8e140bbc823d6651e024a0eb871288068789cd67012ab27521034134a2bb35c3f83dab2489d96160741888b8b5589bb694dea6e7bc24486e9c6f68ac";
+const FORCE_CLOSE_COMMITMENT_ASM: &str = "OP_IF OP_PUSHBYTES_33 02fd6db4de50399b2aa086edb23f8e140bbc823d6651e024a0eb871288068789cd OP_ELSE OP_PUSHBYTES_1 2a OP_CSV OP_DROP OP_PUSHBYTES_33 034134a2bb35c3f83dab2489d96160741888b8b5589bb694dea6e7bc24486e9c6f OP_ENDIF OP_CHECKSIG";
+const FORCE_CLOSE_OTHER_ASM: &str = "OP_DUP OP_HASH160 OP_PUSHBYTES_20 db865fd920959506111079995f1e4017b489bfe3 OP_EQUAL OP_IF OP_CHECKSIG OP_ELSE OP_PUSHBYTES_33 024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c OP_SWAP OP_SIZE OP_PUSHBYTES_1 20 OP_EQUAL OP_NOTIF OP_DROP OP_PUSHNUM_2 OP_SWAP OP_PUSHBYTES_33 03443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca OP_PUSHNUM_2 OP_CHECKMULTISIG OP_ELSE OP_HASH160 OP_PUSHBYTES_20 46c3747322b220fdb925c9802f0e949c1feab999 OP_EQUALVERIFY OP_CHECKSIG OP_ENDIF OP_ENDIF";
+const FORCE_CLOSE_OTHER_WITNESS: &str = r#"["303f021c65aee6696e80be6e14545cfd64b44f17b0514c150eefdb090c0f0bd9021f3fef4aa95c252a225622aba99e4d5af5a6fe40d177acd593e64cf2f8557ccc03","03b55c6f0749e0f3e2caeca05f68e3699f1b3c62a550730f704985a6a9aae437a1","76a914db865fd920959506111079995f1e4017b489bfe38763ac6721024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c7c820120876475527c2103443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca52ae67a91446c3747322b220fdb925c9802f0e949c1feab99988ac6868"]"#;
+const FORCE_CLOSE_OUT_HEX: &str =
+    "5121028b45a50f795be0413680036665d17a3eca099648ea80637bc3a70a7d2b52ae2851ae";
+const FORCE_CLOSE_OUT_ASM: &str = "OP_PUSHNUM_1 OP_PUSHBYTES_33 028b45a50f795be0413680036665d17a3eca099648ea80637bc3a70a7d2b52ae28 OP_PUSHNUM_1 OP_CHECKMULTISIG";
+const FORCE_CLOSE_LINE: &str = "Lightning Force Close";
+const FORCE_CLOSE_REVOKED: &str = "Revoked Lightning Force Close";
+
+fn force_close_witness(under_last: &str) -> String {
+    format!(r#"["{FORCE_CLOSE_SIG}","{under_last}","{FORCE_CLOSE_WITNESS_SCRIPT}"]"#)
+}
+
+fn force_close_vin(witness: &str, witness_asm: &str) -> String {
+    format!(
+        r#"{{"txid":"{FORCE_CLOSE_PREV}","vout":0,"prevout":{{"scriptpubkey":"{FORCE_CLOSE_SCRIPT_HEX}","scriptpubkey_asm":"{FORCE_CLOSE_SCRIPT_ASM}","scriptpubkey_type":"v0_p2wsh","scriptpubkey_address":"{FORCE_CLOSE_ADDRESS}","value":8149}},"scriptsig":"","scriptsig_asm":"","witness":{witness},"is_coinbase":false,"sequence":4190024921,"inner_witnessscript_asm":"{witness_asm}"}}"#
+    )
+}
+
+fn force_close_tx(vin_json: &str) -> String {
+    format!(
+        r#"{{"txid":"{FORCE_CLOSE_TXID}","version":1,"locktime":1231006505,"vin":[{vin_json}],"vout":[{{"scriptpubkey":"{FORCE_CLOSE_OUT_HEX}","scriptpubkey_asm":"{FORCE_CLOSE_OUT_ASM}","scriptpubkey_type":"multisig","value":582}}],"size":3500,"weight":8186,"sigops":115,"fee":71294}}"#
+    )
+}
+
+fn paint_force_close(witness: &str, witness_asm: &str) -> (Vec<String>, String) {
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            format!("/tx/{FORCE_CLOSE_TXID}"),
+            force_close_tx(&force_close_vin(witness, witness_asm)),
+        )]),
+    );
+    host.open_transaction(FORCE_CLOSE_TXID)
+        .unwrap_or_else(|err| panic!("tx {FORCE_CLOSE_TXID} did not open: {err}"));
+    (rec.gets(), painted(&host))
+}
+
+fn assert_force_close_request(paths: &[String]) {
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/tx/{FORCE_CLOSE_TXID}")),
+        "no-query GET /tx/:txid is missing: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a transaction open used a query or a fragment: {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains("/lightning")),
+        "a transaction open added a Lightning route: {paths:?}"
+    );
+}
+
+fn assert_force_close_script_off(text: &str) {
+    for needle in [
+        FORCE_CLOSE_COMMITMENT_ASM,
+        FORCE_CLOSE_OTHER_ASM,
+        FORCE_CLOSE_SCRIPT_HEX,
+        FORCE_CLOSE_SCRIPT_ASM,
+        FORCE_CLOSE_SIG,
+        FORCE_CLOSE_WITNESS_SCRIPT,
+        FORCE_CLOSE_OUT_HEX,
+        FORCE_CLOSE_OUT_ASM,
+        "303f021c65aee6696e80be6e14545cfd64b44f17b0514c150eefdb090c0f0bd9021f3fef4aa95c252a225622aba99e4d5af5a6fe40d177acd593e64cf2f8557ccc03",
+        "03b55c6f0749e0f3e2caeca05f68e3699f1b3c62a550730f704985a6a9aae437a1",
+        "76a914db865fd920959506111079995f1e4017b489bfe38763ac6721024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c7c820120876475527c2103443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca52ae67a91446c3747322b220fdb925c9802f0e949c1feab99988ac6868",
+        "title=",
+        "tooltip",
+        "/lightning",
+        FORCE_CLOSE_REVOKED,
+    ] {
+        assert!(
+            !text.contains(needle),
+            "{needle} leaked into the screen: {text}"
+        );
+    }
+}
+
+fn assert_force_close_neighbors(text: &str) {
+    assert!(
+        text.lines().any(|line| line == INPUTS_OUTPUTS_HEADING),
+        "Inputs & Outputs left the screen: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == "Type MULTISIG").count(),
+        1,
+        "the output type line Type MULTISIG was replaced: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line == "Previous output type V0_P2WSH"),
+        "Previous output type V0_P2WSH was replaced: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line == "input script type v0_p2wsh"),
+        "input script type v0_p2wsh was replaced: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Multisig 2 of 3"),
+        "this commitment spend painted Multisig 2 of 3: {text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line == "Type P2SH-P2WPKH" || line == "Type P2SH-P2WSH"),
+        "an address type badge was painted on this transaction: {text}"
+    );
+}
+
+#[test]
+fn transaction_screen_paints_lightning_force_close() {
+    assert!(
+        FORCE_CLOSE_COMMITMENT_ASM.starts_with("OP_IF OP_PUSHBYTES_33 "),
+        "the commitment witness script was replaced"
+    );
+    assert!(
+        FORCE_CLOSE_COMMITMENT_ASM.ends_with(" OP_ENDIF OP_CHECKSIG"),
+        "the commitment witness script was replaced"
+    );
+    assert!(
+        !FORCE_CLOSE_OTHER_ASM.starts_with("OP_IF OP_PUSHBYTES_33 "),
+        "the non-commitment witness script was replaced"
+    );
+
+    let (paths, text) = paint_force_close(&force_close_witness(""), FORCE_CLOSE_COMMITMENT_ASM);
+    assert_force_close_request(&paths);
+    assert!(
+        text.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "the parsed transaction was hidden: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == FORCE_CLOSE_LINE),
+        "the screen did not show Lightning Force Close: {text}"
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| *line == FORCE_CLOSE_LINE)
+            .count(),
+        1,
+        "Lightning Force Close was not painted once: {text}"
+    );
+    let rows: Vec<&str> = text.lines().collect();
+    let outpoint = rows
+        .iter()
+        .position(|line| *line == format!("input outpoint {FORCE_CLOSE_PREV}:0"));
+    let warning = rows.iter().position(|line| *line == FORCE_CLOSE_LINE);
+    let output = rows
+        .iter()
+        .position(|line| line.starts_with("output address "));
+    assert!(
+        outpoint.is_some() && warning.is_some() && output.is_some(),
+        "the input or the output left the screen: {text}"
+    );
+    assert!(
+        outpoint.unwrap() < warning.unwrap() && warning.unwrap() < output.unwrap(),
+        "Lightning Force Close was not on the transaction input: {text}"
+    );
+    assert_force_close_neighbors(&text);
+    assert_force_close_script_off(&text);
+
+    let (revoked_paths, revoked) =
+        paint_force_close(&force_close_witness("01"), FORCE_CLOSE_COMMITMENT_ASM);
+    assert_force_close_request(&revoked_paths);
+    assert!(
+        revoked.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "the stored 01 case hid the transaction: {revoked}"
+    );
+    assert!(
+        !revoked.lines().any(|line| line == FORCE_CLOSE_LINE),
+        "the stored 01 case painted Lightning Force Close: {revoked}"
+    );
+    assert!(
+        !revoked.contains(FORCE_CLOSE_REVOKED),
+        "the stored 01 case painted Revoked Lightning Force Close: {revoked}"
+    );
+    assert_force_close_neighbors(&revoked);
+    assert_force_close_script_off(&revoked);
+
+    let (other_paths, other) = paint_force_close(FORCE_CLOSE_OTHER_WITNESS, FORCE_CLOSE_OTHER_ASM);
+    assert_force_close_request(&other_paths);
+    assert!(
+        other.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "a non-commitment witness script hid the transaction: {other}"
+    );
+    assert!(
+        !other.lines().any(|line| line == FORCE_CLOSE_LINE),
+        "a non-commitment witness script painted Lightning Force Close: {other}"
+    );
+    assert!(
+        !other.contains(FORCE_CLOSE_REVOKED),
+        "a non-commitment witness script painted Revoked Lightning Force Close: {other}"
+    );
+    assert_force_close_neighbors(&other);
+    assert_force_close_script_off(&other);
+}
+
+/// Transaction input warning from a no-query `GET /tx/:txid`.
+///
+/// A `v0_p2wsh` input paints the line `Lightning HTLC` when
+/// `inner_witnessscript_asm` matches the offered or received HTLC pattern
+/// in `script.utils.ts` and the witness item under the last item is
+/// non-empty and its length is not 66. A 66-character item is the revoked
+/// case. An empty item is the expired case. Those sentences stay off this
+/// screen, and so does `Revoked Lightning Force Close`. The stored offered
+/// script whose middle witness item is 66 hex characters does not paint
+/// `Lightning HTLC`. The asm, the witness, and the script hex stay off the
+/// screen. This is not a Lightning route.
+const HTLC_LINE: &str = "Lightning HTLC";
+const HTLC_REVOKED: &str = "Revoked Lightning HTLC";
+const HTLC_EXPIRED: &str = "Expired Lightning HTLC";
+/// Payment preimage, 32 bytes. Non-empty, and not 66 hex characters.
+const HTLC_PREIMAGE: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+/// Same stored offered spend, the item under the witness script. 33 bytes.
+const HTLC_REVOKED_ITEM: &str =
+    "03b55c6f0749e0f3e2caeca05f68e3699f1b3c62a550730f704985a6a9aae437a1";
+const HTLC_SIG: &str = "303f021c65aee6696e80be6e14545cfd64b44f17b0514c150eefdb090c0f0bd9021f3fef4aa95c252a225622aba99e4d5af5a6fe40d177acd593e64cf2f8557ccc03";
+const HTLC_SCRIPT: &str = "76a914db865fd920959506111079995f1e4017b489bfe38763ac6721024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c7c820120876475527c2103443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca52ae67a91446c3747322b220fdb925c9802f0e949c1feab99988ac6868";
+/// `detectScriptTemplate` received HTLC, same hashes, plus a 3-byte CLTV push.
+const HTLC_RECEIVED_ASM: &str = "OP_DUP OP_HASH160 OP_PUSHBYTES_20 db865fd920959506111079995f1e4017b489bfe3 OP_EQUAL OP_IF OP_CHECKSIG OP_ELSE OP_PUSHBYTES_33 024d560f7f5d28aae5e1a8aa2b7ba615d7fc48e4ea27e5d27336e6a8f5fa0f5c8c OP_SWAP OP_SIZE OP_PUSHBYTES_1 20 OP_EQUAL OP_IF OP_HASH160 OP_PUSHBYTES_20 46c3747322b220fdb925c9802f0e949c1feab999 OP_EQUALVERIFY OP_PUSHNUM_2 OP_SWAP OP_PUSHBYTES_33 03443e8834fa7d79d7b5e95e0e9d0847f6b03ac3ea977979858b4104947fca87ca OP_PUSHNUM_2 OP_CHECKMULTISIG OP_ELSE OP_DROP OP_PUSHBYTES_3 80b12a OP_CLTV OP_DROP OP_CHECKSIG OP_ENDIF OP_ENDIF";
+
+fn htlc_witness(under_last: &str) -> String {
+    format!(r#"["{HTLC_SIG}","{under_last}","{HTLC_SCRIPT}"]"#)
+}
+
+fn assert_htlc_sentences_off(text: &str) {
+    for needle in [HTLC_REVOKED, HTLC_EXPIRED, FORCE_CLOSE_REVOKED] {
+        assert!(
+            !text.contains(needle),
+            "{needle} leaked into the screen: {text}"
+        );
+    }
+}
+
+fn assert_paints_exact_htlc(text: &str) {
+    assert!(
+        text.lines().any(|line| line == HTLC_LINE),
+        "the screen did not show Lightning HTLC: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == HTLC_LINE).count(),
+        1,
+        "Lightning HTLC was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(HTLC_LINE))
+            .all(|line| line == HTLC_LINE),
+        "Lightning HTLC was painted inside a longer sentence: {text}"
+    );
+    let rows: Vec<&str> = text.lines().collect();
+    let outpoint = rows
+        .iter()
+        .position(|line| *line == format!("input outpoint {FORCE_CLOSE_PREV}:0"));
+    let warning = rows.iter().position(|line| *line == HTLC_LINE);
+    let output = rows
+        .iter()
+        .position(|line| line.starts_with("output address "));
+    assert!(
+        outpoint.is_some() && warning.is_some() && output.is_some(),
+        "the input or the output left the screen: {text}"
+    );
+    assert!(
+        outpoint.unwrap() < warning.unwrap() && warning.unwrap() < output.unwrap(),
+        "Lightning HTLC was not on the transaction input: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == FORCE_CLOSE_LINE),
+        "this HTLC spend painted Lightning Force Close: {text}"
+    );
+    assert_htlc_sentences_off(text);
+    assert_force_close_neighbors(text);
+    assert_force_close_script_off(text);
+    assert!(
+        !text.contains(HTLC_PREIMAGE),
+        "the preimage leaked into the screen: {text}"
+    );
+}
+
+fn assert_no_htlc_line(text: &str) {
+    assert!(
+        !text.lines().any(|line| line == HTLC_LINE),
+        "the screen painted Lightning HTLC: {text}"
+    );
+    assert!(
+        text.lines().all(|line| !line.contains(HTLC_LINE)),
+        "Lightning HTLC was painted inside a longer sentence: {text}"
+    );
+    assert_htlc_sentences_off(text);
+    assert_force_close_neighbors(text);
+    assert_force_close_script_off(text);
+}
+
+#[test]
+fn transaction_screen_paints_lightning_htlc() {
+    assert_eq!(
+        HTLC_PREIMAGE.len(),
+        64,
+        "the preimage must not be 66 characters"
+    );
+    assert!(!HTLC_PREIMAGE.is_empty(), "the preimage must be non-empty");
+    assert_eq!(
+        HTLC_REVOKED_ITEM.len(),
+        66,
+        "the stored revoked item was replaced"
+    );
+    assert!(
+        FORCE_CLOSE_OTHER_ASM.contains(" OP_NOTIF OP_DROP OP_PUSHNUM_2 "),
+        "the stored offered HTLC witness script was replaced"
+    );
+    assert!(
+        HTLC_RECEIVED_ASM.contains(" OP_EQUAL OP_IF OP_HASH160 OP_PUSHBYTES_20 "),
+        "the received HTLC witness script was replaced"
+    );
+    assert!(
+        !HTLC_RECEIVED_ASM.contains(" OP_NOTIF "),
+        "the received HTLC witness script was replaced"
+    );
+    assert_eq!(
+        FORCE_CLOSE_OTHER_WITNESS,
+        htlc_witness(HTLC_REVOKED_ITEM),
+        "the stored 66-character stack was replaced"
+    );
+
+    let (paths, offered) = paint_force_close(&htlc_witness(HTLC_PREIMAGE), FORCE_CLOSE_OTHER_ASM);
+    assert_force_close_request(&paths);
+    assert!(
+        offered.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "the parsed transaction was hidden: {offered}"
+    );
+    assert_paints_exact_htlc(&offered);
+
+    let (received_paths, received) =
+        paint_force_close(&htlc_witness(HTLC_PREIMAGE), HTLC_RECEIVED_ASM);
+    assert_force_close_request(&received_paths);
+    assert!(
+        received.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "the received HTLC hid the transaction: {received}"
+    );
+    assert_paints_exact_htlc(&received);
+    assert!(
+        !received.contains(HTLC_RECEIVED_ASM),
+        "the received witness script leaked into the screen: {received}"
+    );
+
+    let (stored_paths, stored) =
+        paint_force_close(FORCE_CLOSE_OTHER_WITNESS, FORCE_CLOSE_OTHER_ASM);
+    assert_force_close_request(&stored_paths);
+    assert!(
+        stored.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "the stored 66-character offered HTLC hid the transaction: {stored}"
+    );
+    assert_no_htlc_line(&stored);
+
+    let (expired_paths, expired) = paint_force_close(&htlc_witness(""), FORCE_CLOSE_OTHER_ASM);
+    assert_force_close_request(&expired_paths);
+    assert!(
+        expired.contains(&format!("tx txid {FORCE_CLOSE_TXID}")),
+        "the empty HTLC item hid the transaction: {expired}"
+    );
+    assert_no_htlc_line(&expired);
+
+    let (commitment_paths, commitment) =
+        paint_force_close(&force_close_witness(""), FORCE_CLOSE_COMMITMENT_ASM);
+    assert_force_close_request(&commitment_paths);
+    assert!(
+        commitment.lines().any(|line| line == FORCE_CLOSE_LINE),
+        "Lightning Force Close left the commitment spend: {commitment}"
+    );
+    assert_no_htlc_line(&commitment);
+}
+
+/// Transaction input button from a no-query `GET /tx/:txid`.
+///
+/// A `v1_p2tr` input paints the exact line `Inscription` when the network is
+/// not Liquid and the taproot script-path script includes the bytes
+/// `0063036f7264`. That script is the witness item `parseTaproot` names
+/// `scriptPath.script`. A key-path spend, a script that lacks those bytes, and
+/// a non-`v1_p2tr` input do not paint it. Liquid does not paint it. `Runestone`
+/// stays on an `op_return` script that starts with `6a5d`. The script, the
+/// witness, and the script hex stay off the line. There is no tooltip.
+#[test]
+fn transaction_screen_paints_inscription() {
+    const LINE: &str = "Inscription";
+    const MARK: &str = "0063036f7264";
+    const SCRIPT: &str = "aa0063036f7264bb";
+    const PLAIN: &str = "51ac";
+    const STACK: &str = "cc0063036f7264dd";
+    const CONTROL: &str = "c0111111111111111111111111111111111111111111111111111111111111111111";
+    const ANNEX: &str = "50annexsentinel";
+    const SIG: &str = "inscriptionsigsentinel";
+    const SIG_ASM: &str = "inscriptionsigasm";
+    const PREV: &str = "5120inscriptionprev";
+    const PREV_ASM: &str = "inscriptionprevasm";
+    const STONE: &str = "6a5dinscriptionstone";
+    const STONE_ASM: &str = "inscriptionstoneasm";
+
+    fn witness(items: &[&str]) -> String {
+        let body = items
+            .iter()
+            .map(|item| format!("\"{item}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("[{body}]")
+    }
+
+    fn vin(kind: &str, witness_json: &str) -> String {
+        format!(
+            r#"{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{PREV}","scriptpubkey_asm":"{PREV_ASM}","scriptpubkey_type":"{kind}","value":5}},"scriptsig":"{SIG}","scriptsig_asm":"{SIG_ASM}","witness":{witness_json},"is_coinbase":false,"sequence":4294967295}}"#
+        )
+    }
+
+    fn tx_body(txid: &str, vin_json: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin_json}],"vout":[{{"scriptpubkey":"{STONE}","scriptpubkey_asm":"{STONE_ASM}","scriptpubkey_type":"op_return","value":0}}],"size":10,"weight":400,"sigops":0,"fee":1,"status":{{"confirmed":true,"block_height":800000}}}}"#
+        )
+    }
+
+    fn paint(network: Network, txid: &str, kind: &str, witness_json: &str) -> String {
+        let (mut host, rec) = host_with(
+            network,
+            BTreeMap::from([
+                (
+                    format!("/tx/{txid}"),
+                    tx_body(txid, &vin(kind, witness_json)),
+                ),
+                ("/blocks/tip/height".to_string(), "800000".to_string()),
+            ]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn assert_script_stays_off(text: &str) {
+        for needle in [
+            MARK, SCRIPT, PLAIN, STACK, CONTROL, ANNEX, SIG, SIG_ASM, PREV, PREV_ASM, STONE,
+            STONE_ASM,
+        ] {
+            assert!(!text.contains(needle), "{needle} was painted: {text}");
+        }
+    }
+
+    fn assert_exact_inscription(text: &str) {
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "Inscription is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "Inscription was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "Inscription was painted inside a longer sentence: {text}"
+        );
+    }
+
+    fn assert_no_inscription(text: &str) {
+        assert!(
+            !text.lines().any(|line| line == LINE),
+            "the screen painted Inscription: {text}"
+        );
+        assert!(
+            text.lines().all(|line| !line.contains(LINE)),
+            "Inscription was painted inside a longer sentence: {text}"
+        );
+    }
+
+    fn assert_input_neighbors(text: &str, previous: &str) {
+        let rows: Vec<&str> = text.lines().collect();
+        let outpoint = rows
+            .iter()
+            .position(|line| *line == "input outpoint prev:0");
+        let output = rows
+            .iter()
+            .position(|line| line.starts_with("output address "));
+        assert!(
+            outpoint.is_some() && output.is_some() && outpoint.unwrap() < output.unwrap(),
+            "the input or the output left the screen: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == previous),
+            "{previous} was dropped: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == "Runestone").count(),
+            1,
+            "Runestone was dropped or repeated: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == "OP_RETURN").count(),
+            1,
+            "OP_RETURN was dropped or repeated: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "confirmations 1"),
+            "confirmations 1 left the screen: {text}"
+        );
+        assert!(
+            !text.contains("tooltip") && !text.contains("Inscription data"),
+            "a tooltip was painted: {text}"
+        );
+        assert_script_stays_off(text);
+    }
+
+    let marked = witness(&[SIG, SCRIPT, CONTROL]);
+    let on = paint(Network::Mainnet, "inscriptionon", "v1_p2tr", &marked);
+    assert!(
+        on.contains("tx txid inscriptionon"),
+        "the parsed transaction was hidden: {on}"
+    );
+    assert_exact_inscription(&on);
+    let rows: Vec<&str> = on.lines().collect();
+    let outpoint = rows
+        .iter()
+        .position(|line| *line == "input outpoint prev:0");
+    let button = rows.iter().position(|line| *line == LINE);
+    let output = rows
+        .iter()
+        .position(|line| line.starts_with("output address "));
+    assert!(
+        outpoint.is_some() && button.is_some() && output.is_some(),
+        "the input or the output left the screen: {on}"
+    );
+    assert!(
+        outpoint.unwrap() < button.unwrap() && button.unwrap() < output.unwrap(),
+        "Inscription was not on the transaction input: {on}"
+    );
+    assert_eq!(
+        on.lines().filter(|line| *line == "P2TR tapscript").count(),
+        1,
+        "P2TR tapscript was dropped or repeated: {on}"
+    );
+    assert!(
+        on.lines().any(|line| line == "Taproot"),
+        "Taproot left the screen: {on}"
+    );
+    assert!(
+        on.lines().any(|line| line == "SegWit"),
+        "SegWit left the screen: {on}"
+    );
+    assert_input_neighbors(&on, "Previous output type V1_P2TR");
+
+    let annex = witness(&[SIG, SCRIPT, CONTROL, ANNEX]);
+    let annexed = paint(Network::Mainnet, "inscriptionannex", "v1_p2tr", &annex);
+    assert!(
+        annexed.contains("tx txid inscriptionannex"),
+        "an annexed script-path spend hid the transaction: {annexed}"
+    );
+    assert_exact_inscription(&annexed);
+    assert_input_neighbors(&annexed, "Previous output type V1_P2TR");
+
+    let plain = witness(&[SIG, PLAIN, CONTROL]);
+    let without = paint(Network::Mainnet, "inscriptionplain", "v1_p2tr", &plain);
+    assert!(
+        without.contains("tx txid inscriptionplain"),
+        "a v1_p2tr input without the marker hid the transaction: {without}"
+    );
+    assert_no_inscription(&without);
+    assert_eq!(
+        without
+            .lines()
+            .filter(|line| *line == "P2TR tapscript")
+            .count(),
+        1,
+        "P2TR tapscript was dropped: {without}"
+    );
+    assert_input_neighbors(&without, "Previous output type V1_P2TR");
+
+    let stacked = witness(&[STACK, PLAIN, CONTROL]);
+    let other_item = paint(Network::Mainnet, "inscriptionstack", "v1_p2tr", &stacked);
+    assert!(
+        other_item.contains("tx txid inscriptionstack"),
+        "a marker outside the script-path script hid the transaction: {other_item}"
+    );
+    assert_no_inscription(&other_item);
+    assert_input_neighbors(&other_item, "Previous output type V1_P2TR");
+
+    let key_path = witness(&[SCRIPT]);
+    let key = paint(Network::Mainnet, "inscriptionkey", "v1_p2tr", &key_path);
+    assert!(
+        key.contains("tx txid inscriptionkey"),
+        "a key-path spend hid the transaction: {key}"
+    );
+    assert_no_inscription(&key);
+    assert_input_neighbors(&key, "Previous output type V1_P2TR");
+
+    let other = paint(Network::Mainnet, "inscriptionother", "v0_p2wpkh", &marked);
+    assert!(
+        other.contains("tx txid inscriptionother"),
+        "a non-taproot input hid the transaction: {other}"
+    );
+    assert_no_inscription(&other);
+    assert!(
+        !other.lines().any(|line| line == "P2TR tapscript"),
+        "a v0_p2wpkh input painted P2TR tapscript: {other}"
+    );
+    assert_input_neighbors(&other, "Previous output type V0_P2WPKH");
+
+    let liquid = paint(Network::Liquid, "inscriptionliquid", "v1_p2tr", &marked);
+    assert!(
+        liquid.contains("tx txid inscriptionliquid"),
+        "liquid hid the transaction: {liquid}"
+    );
+    assert_no_inscription(&liquid);
+    assert!(
+        !liquid.lines().any(|line| line == "Taproot"),
+        "liquid painted Taproot: {liquid}"
+    );
+    assert_eq!(
+        liquid
+            .lines()
+            .filter(|line| *line == "P2TR tapscript")
+            .count(),
+        1,
+        "P2TR tapscript was dropped on liquid: {liquid}"
+    );
+    assert_input_neighbors(&liquid, "Previous output type V1_P2TR");
+}
+
+/// Details button on the loaded transaction page from no-query `GET /tx/:txid`.
+///
+/// `transaction.component.html` paints a button whose text is `Details`.
+/// The click toggles script rows on the transaction list. It does not open
+/// the flow diagram. `Show diagram` stays off. A line equal to `Details`
+/// passes. `Transaction Details` and `Click Details for more` do not.
+/// `confirmations 1` stays. Script hex stays off.
+#[test]
+fn transaction_screen_paints_details_button() {
+    const LINE: &str = "Details";
+    const TXID: &str = "detailsbtn";
+    const SCRIPT: &str = "0014aa";
+    const SIG: &str = "deadbeef";
+    const WIT: &str = "abcdwitnesshex";
+
+    let tx = format!(
+        r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"{SCRIPT}","scriptpubkey_asm":"OP_0 OP_PUSHBYTES_20 aa","scriptpubkey_type":"v0_p2wpkh","value":5}},"scriptsig":"{SIG}","scriptsig_asm":"OP_CHECKSIG","witness":["{WIT}"],"is_coinbase":false,"sequence":4294967295}}],"vout":[{{"scriptpubkey":"6a046869","scriptpubkey_asm":"OP_RETURN OP_PUSHBYTES_4","scriptpubkey_type":"op_return","value":0}}],"size":10,"weight":400,"sigops":0,"fee":1,"status":{{"confirmed":true,"block_height":800000}}}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/tx/{TXID}"), tx),
+            ("/blocks/tip/height".to_string(), "800000".to_string()),
+        ]),
+    );
+    host.open_transaction(TXID)
+        .unwrap_or_else(|err| panic!("tx {TXID} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{TXID}")),
+        "GET /tx/{TXID} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a transaction open used a query or a fragment: {paths:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.contains(&format!("tx txid {TXID}")),
+        "the parsed transaction was hidden: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Details is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Details was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Details was painted inside a longer sentence: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Inputs & Outputs"),
+        "Inputs & Outputs was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "confirmations 1"),
+        "confirmations 1 left the screen: {text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line == "Show diagram" || line == "Hide diagram"),
+        "the diagram control was painted: {text}"
+    );
+    assert!(!text.contains(SCRIPT), "{text}");
+    assert!(!text.contains(SIG), "{text}");
+    assert!(!text.contains(WIT), "{text}");
+    assert!(!text.contains("OP_CHECKSIG"), "{text}");
+}
+
+/// Page heading from no-query `GET /tx/:txid`.
+///
+/// `transaction.component.html` paints an h1 whose text is `Transaction`.
+/// A line equal to `Transaction` passes. A longer line that contains that
+/// word does not. `Transaction hex` stays off. `Details` and
+/// `Inputs & Outputs` stay.
+#[test]
+fn transaction_screen_paints_transaction_heading() {
+    const LINE: &str = "Transaction";
+    const TXID: &str = "pageheading";
+    let vin = r#"{"txid":"prev","vout":0,"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}"#;
+    let vout = r#"{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"","value":9}"#;
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{TXID}"), tx_with_parties(TXID, vin, vout))]),
+    );
+    host.open_transaction(TXID)
+        .unwrap_or_else(|err| panic!("tx {TXID} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{TXID}")),
+        "GET /tx/{TXID} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a transaction open used a query or a fragment: {paths:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.contains(&format!("tx txid {TXID}")),
+        "the parsed transaction was hidden: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Transaction is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Transaction was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Transaction was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Transaction was not once: {text}"
+    );
+    assert!(
+        !text.contains("Transaction hex"),
+        "Transaction hex was painted: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Inputs & Outputs"),
+        "Inputs & Outputs was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Details"),
+        "Details was dropped: {text}"
+    );
+}
+
+/// Page heading from no-query `GET /address/:address`.
+///
+/// `address.component.html` paints an h1 whose text is `Address`.
+/// A line equal to `Address` passes. A longer line that contains that
+/// word does not. `Error loading address data` does not. A type badge
+/// line does not. The loaded address line and `Type P2WPKH` stay.
+#[test]
+fn screen_paints_address_heading() {
+    const LINE: &str = "Address";
+    const ADDRESS: &str = "bc1q8yj0herd4r4yxszw3nkfvt53433thk0f5qst4g";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/address/{ADDRESS}"), address_stats(ADDRESS)),
+            (format!("/address/{ADDRESS}/txs"), "[]".to_string()),
+            (format!("/address/{ADDRESS}/utxo"), "[]".to_string()),
+        ]),
+    );
+    host.open_address(ADDRESS)
+        .unwrap_or_else(|err| panic!("address {ADDRESS} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{ADDRESS}")),
+        "GET /address/{ADDRESS} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "an address open used a query or a fragment: {paths:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.contains(&format!("address {ADDRESS}")),
+        "the parsed address was hidden: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Address is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Address was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Address was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Address was not once: {text}"
+    );
+    assert!(
+        !text.contains("Error loading address data"),
+        "Error loading address data was painted: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Type P2WPKH"),
+        "the type badge was dropped: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.starts_with("Type "))
+            .all(|line| line != LINE && !line.contains(LINE)),
+        "an address type badge line satisfied the heading: {text}"
+    );
+}
+
+/// Heading from no-query `GET /mempool/recent` on the dashboard and the recent page.
+///
+/// `dashboard.component.html` and `recent-transactions-list.component.html`
+/// both paint `Recent Transactions`. A line equal to that heading passes.
+/// A longer sentence that contains those words does not. The recent row stays
+/// `recent txid {txid} fee {fee} vsize {vsize} value {value}`.
+#[test]
+fn screen_paints_recent_transactions_heading() {
+    const HEADING: &str = "Recent Transactions";
+    const ROW: &str = "recent txid recent-heading fee 10 vsize 0 value 1";
+
+    fn summary() -> String {
+        r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string()
+    }
+
+    fn recent_body() -> String {
+        r#"[{"txid":"recent-heading","fee":10,"vsize":0,"value":1}]"#.to_string()
+    }
+
+    fn assert_heading_and_row(painted: &str) {
+        assert!(
+            painted.lines().any(|line| line == HEADING),
+            "Recent Transactions is absent: {painted}"
+        );
+        assert_eq!(
+            painted.lines().filter(|line| *line == HEADING).count(),
+            1,
+            "Recent Transactions was not painted once: {painted}"
+        );
+        assert!(
+            painted
+                .lines()
+                .filter(|line| line.contains(HEADING))
+                .all(|line| line == HEADING),
+            "Recent Transactions was painted inside a longer sentence: {painted}"
+        );
+        assert_eq!(
+            painted.matches(HEADING).count(),
+            1,
+            "Recent Transactions was not once: {painted}"
+        );
+        assert!(
+            painted.lines().any(|line| line == ROW),
+            "the recent row changed: {painted}"
+        );
+        let row = painted
+            .lines()
+            .find(|line| *line == ROW)
+            .unwrap_or_else(|| panic!("missing recent row: {painted}"));
+        assert!(
+            !row.contains("sat/vB") && !row.contains("fee_rate"),
+            "the recent row gained a fee rate suffix: {row}"
+        );
+        let lines: Vec<&str> = painted.lines().collect();
+        let heading_at = lines.iter().position(|line| *line == HEADING);
+        let row_at = lines.iter().position(|line| *line == ROW);
+        assert!(
+            heading_at.is_some() && row_at.is_some() && heading_at < row_at,
+            "Recent Transactions was not before the recent row: {painted}"
+        );
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/mempool/recent"),
+            "did not GET /mempool/recent: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            ("/mempool".to_string(), summary()),
+            ("/mempool/recent".to_string(), recent_body()),
+        ]),
+    );
+    let opened = host.activate(Screen::Mempool);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("recent page did not open: {err}"));
+    assert_heading_and_row(&painted(&host));
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            ("/mempool".to_string(), summary()),
+            ("/mempool/recent".to_string(), recent_body()),
+        ]),
+    );
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    assert_heading_and_row(&painted(&host));
+}
+
+/// Page heading from no-query `GET /block/:hash`.
+///
+/// `block.component.html` paints `Block` when the block is not stale and
+/// height is null or greater than 0. Height 0 uses `Genesis`. A stale block
+/// uses `Stale Block`. A line equal to `Block` passes. A longer line that
+/// contains that word does not. `Block Header Hex` stays off. `TXs` stays.
+#[test]
+fn screen_paints_block_heading() {
+    const LINE: &str = "Block";
+    const ID: &str = "blockheading";
+
+    fn open_block_paint(id: &str, body: String) -> (String, Vec<String>) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/block/{id}"), body),
+                (format!("/block/{id}/txs"), "[]".to_string()),
+                (format!("/block/{id}/txids"), "[]".to_string()),
+            ]),
+        );
+        host.open_block(id)
+            .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+        (painted(&host), rec.gets())
+    }
+
+    fn assert_block_line_once(text: &str) {
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "Block is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "Block was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "Block was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(text.matches(LINE).count(), 1, "Block was not once: {text}");
+    }
+
+    let (text, paths) = open_block_paint(ID, block_json(ID));
+    assert!(
+        paths.iter().any(|path| path == &format!("/block/{ID}")),
+        "GET /block/{ID} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a block open used a query or a fragment: {paths:?}"
+    );
+    assert!(
+        text.contains(&format!("block hash {ID}")),
+        "the parsed block was hidden: {text}"
+    );
+    assert_block_line_once(&text);
+    assert!(
+        !text.contains("Block Header Hex"),
+        "Block Header Hex was painted: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "TXs"),
+        "TXs was dropped: {text}"
+    );
+
+    let genesis_id = "genesisheading";
+    let genesis_body = block_json(genesis_id).replacen("\"height\":800000", "\"height\":0", 1);
+    let (genesis, _) = open_block_paint(genesis_id, genesis_body);
+    assert_eq!(
+        genesis.lines().filter(|line| *line == "Genesis").count(),
+        1,
+        "Genesis is absent: {genesis}"
+    );
+    assert_eq!(
+        genesis.lines().filter(|line| *line == LINE).count(),
+        0,
+        "height 0 painted the whole line Block: {genesis}"
+    );
+
+    let stale_id = "staleheading";
+    let mut stale_body = block_json(stale_id);
+    assert!(stale_body.ends_with('}'));
+    stale_body.pop();
+    stale_body.push_str(r#","stale":true}"#);
+    let (stale, _) = open_block_paint(stale_id, stale_body);
+    assert!(
+        stale.contains(&format!("block hash {stale_id}")),
+        "the stale block was hidden: {stale}"
+    );
+    assert_eq!(
+        stale.lines().filter(|line| *line == "Stale Block").count(),
+        1,
+        "Stale Block is absent: {stale}"
+    );
+    assert_eq!(
+        stale.lines().filter(|line| *line == LINE).count(),
+        0,
+        "a stale block painted the whole line Block: {stale}"
+    );
+}
+
+/// Page heading from no-query `GET /assets/registry` on the liquid dashboard.
+///
+/// Angular `assets-nav.component.html` paints
+/// `<h1 i18n="Assets page header">Assets</h1>`. A line equal to `Assets`
+/// passes. A longer line that contains that word does not. A comment is not
+/// a line. The column headers Name, Ticker, Issuer domain, and Asset ID stay,
+/// and they are not this heading. The issued name and ticker stay. The
+/// request path has no query string and no fragment.
+#[test]
+fn screen_paints_assets_heading() {
+    const LINE: &str = "Assets";
+    let asset = "12".repeat(32);
+    let registry = format!(
+        r#"[{{"asset_id":"{asset}","name":"Test Asset","ticker":"TEST","precision":2,"issuance_txin":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vin":0}},"issuance_prevout":{{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0}},"reissuance_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), registry),
+        ]),
+    );
+    let opened = host.activate(Screen::Dashboard);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry"),
+        "the assets registry was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "the assets registry used a query or a fragment: {paths:?}"
+    );
+    opened.unwrap_or_else(|err| panic!("assets registry did not open: {err}"));
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == "Test Asset"),
+        "the issued name was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "TEST"),
+        "the ticker value was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Name"),
+        "the Name column header was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Ticker"),
+        "the Ticker column header was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Issuer domain"),
+        "the Issuer domain column header was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Asset ID"),
+        "the Asset ID column header was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Assets is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Assets was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Assets was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(text.matches(LINE).count(), 1, "Assets was not once: {text}");
+    assert_ne!(LINE, "Asset ID");
+    assert_ne!(LINE, "Name");
+    let lines: Vec<&str> = text.lines().collect();
+    let heading_at = lines.iter().position(|line| *line == LINE);
+    let name_at = lines.iter().position(|line| *line == "Name");
+    assert!(
+        heading_at.is_some() && name_at.is_some() && heading_at < name_at,
+        "Assets was not before the Name column header: {text}"
+    );
+    assert_paint_is_not_html(&text);
+}
+
+/// Card title from no-query `GET /fee-estimates` on the dashboard.
+///
+/// `dashboard.component.html` paints `Transaction Fees` when the network
+/// is not liquid. A line equal to that title passes. A longer line that
+/// contains those words does not. The fee target line stays. Liquid does
+/// not paint the title. This is not the details row `Transaction fee`.
+#[test]
+fn screen_paints_transaction_fees_heading() {
+    const LINE: &str = "Transaction Fees";
+    const FEE: &str = "fee target 2 rate 1.1";
+
+    fn bodies() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), r#"{"2":1.1}"#.to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/fee-estimates"),
+            "did not GET /fee-estimates: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    let (mut host, rec) = host_with(Network::Mainnet, bodies());
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == FEE),
+        "the fee estimate was hidden: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Transaction Fees is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Transaction Fees was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Transaction Fees was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Transaction Fees was not once: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Transaction fee"),
+        "the details row Transaction fee was painted on the dashboard: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| *line == LINE)
+            .all(|line| !line.contains("sat/vB")),
+        "Transaction Fees gained sat/vB: {text}"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    let title_at = lines.iter().position(|line| *line == LINE);
+    let fee_at = lines.iter().position(|line| *line == FEE);
+    assert!(
+        title_at.is_some() && fee_at.is_some() && title_at < fee_at,
+        "Transaction Fees was not before the fee target: {text}"
+    );
+
+    let (mut host, rec) = host_with(Network::Liquid, bodies());
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("liquid dashboard did not open: {err}"));
+    let liquid = painted(&host);
+    assert!(
+        liquid.lines().any(|line| line == FEE),
+        "the liquid fee estimate was hidden: {liquid}"
+    );
+    assert!(
+        !liquid.lines().any(|line| line == LINE),
+        "liquid painted Transaction Fees: {liquid}"
+    );
+}
+
+/// Details label from no-query `GET /block/:hash`.
+///
+/// `block.component.html` paints `Nonce` beside `decimal2hex` when the
+/// network is not liquid and details are open. The whole line is `Nonce`
+/// plus that hex. A longer line that contains the word does not. The raw
+/// `nonce` line stays. A missing key and JSON null omit the label. Liquid
+/// does not paint it.
+#[test]
+fn screen_paints_nonce() {
+    const LABEL: &str = "Nonce";
+    const RAW: &str = "nonce 9 0x00000009";
+    const LINE: &str = "Nonce 0x00000009";
+
+    fn assert_label_once(text: &str) {
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "Nonce 0x00000009 is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "Nonce was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LABEL))
+                .all(|line| line == LINE),
+            "Nonce was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(text.matches(LABEL).count(), 1, "Nonce was not once: {text}");
+        assert!(
+            text.lines().any(|line| line == RAW),
+            "the raw nonce line was dropped: {text}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let label_at = lines.iter().position(|line| *line == LINE);
+        let raw_at = lines.iter().position(|line| *line == RAW);
+        assert!(
+            label_at.is_some() && raw_at.is_some() && label_at.unwrap() + 1 == raw_at.unwrap(),
+            "Nonce was not immediately before the raw nonce line: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == "Difficulty 1"),
+            "Difficulty was dropped: {text}"
+        );
+        assert!(
+            !text
+                .lines()
+                .any(|line| line == "Nonce 9" || line == "Nonce 9 0x00000009"),
+            "Nonce gained the decimal: {text}"
+        );
+    }
+
+    let id = "noncelabel9";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), block_nonce_json(id, "9")),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/block/{id}")),
+        "GET /block/{id} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a block open used a query or a fragment: {paths:?}"
+    );
+    let closed = painted(&host);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.lines().any(|line| line.starts_with("block hash ")),
+        "the block summary was hidden: {closed}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    assert_label_once(&painted(&host));
+
+    let zero = paint_block_bits("noncelabel0", block_nonce_json("noncelabel0", "0"));
+    assert!(
+        zero.lines().any(|line| line == "Nonce 0x00000000"),
+        "nonce 0 did not paint Nonce 0x00000000: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "nonce 0 0x00000000"),
+        "nonce 0 dropped the raw line: {zero}"
+    );
+
+    let missing = paint_block_bits("noncelabelmiss", missing_nonce_json("noncelabelmiss"));
+    assert!(
+        !missing.lines().any(|line| line.starts_with(LABEL)),
+        "missing nonce painted Nonce: {missing}"
+    );
+    assert!(
+        !missing.contains(LABEL),
+        "missing nonce painted Nonce: {missing}"
+    );
+
+    let null = paint_block_bits("noncelabelnull", block_nonce_json("noncelabelnull", "null"));
+    assert!(
+        !null.lines().any(|line| line.starts_with(LABEL)),
+        "null nonce painted Nonce: {null}"
+    );
+
+    let liquid_id = "noncelabelliq";
+    let (mut host, rec) = host_with(
+        Network::Liquid,
+        BTreeMap::from([
+            (
+                format!("/block/{liquid_id}"),
+                block_nonce_json(liquid_id, "9"),
+            ),
+            (format!("/block/{liquid_id}/txs"), "[]".to_string()),
+            (format!("/block/{liquid_id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = liquid_id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("liquid block {liquid_id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/block/{liquid_id}")),
+        "GET /block/{liquid_id} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("liquid block details did not open: {err}"));
+    let liquid = painted(&host);
+    assert!(
+        liquid.lines().any(|line| line == RAW),
+        "liquid dropped the raw nonce line: {liquid}"
+    );
+    assert!(
+        !liquid
+            .lines()
+            .any(|line| line == LINE || line.starts_with(LABEL)),
+        "liquid painted Nonce: {liquid}"
+    );
+}
+
+/// Details label from no-query `GET /block/:hash`.
+///
+/// `block.component.html` paints `Weight` as its own cell beside the weight
+/// units. The whole line is `Weight`. A longer line that contains the word
+/// does not. Closed details do not paint it.
+#[test]
+fn screen_paints_weight() {
+    const LINE: &str = "Weight";
+    let id = "weightlabel1";
+    let body = format!(
+        r#"{{"id":"{id}","height":800000,"version":1,"timestamp":1700000000,"tx_count":2,"size":200,"weight":800,"merkle_root":"mm","previousblockhash":"pp","mediantime":1700000000,"nonce":1,"bits":2,"difficulty":3.0}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{id}"), body),
+            (format!("/block/{id}/txs"), "[]".to_string()),
+            (format!("/block/{id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.block.query = id.to_string();
+    host.activate(Screen::Block)
+        .unwrap_or_else(|err| panic!("block {id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/block/{id}")),
+        "GET /block/{id} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a block open used a query or a fragment: {paths:?}"
+    );
+    let closed = painted(&host);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    host.open_row("row block details")
+        .unwrap_or_else(|err| panic!("block details did not open: {err}"));
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Weight is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Weight was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Weight was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(text.matches(LINE).count(), 1, "Weight was not once: {text}");
+}
+
+/// Page heading from no-query `GET /blocks`.
+///
+/// `blocks-list.component.html` paints
+/// `<h1 i18n="master-page.blocks">Blocks</h1>` when the list is not a widget.
+/// A line equal to `Blocks` passes. A longer line that contains that word
+/// does not. This is not the block page heading `Block`. `TXs` stays. The
+/// request path has no query string and no fragment.
+#[test]
+fn screen_paints_blocks_heading() {
+    const LINE: &str = "Blocks";
+    const ID: &str = "listhead1";
+    let body = format!(
+        r#"[{{"id":"{ID}","height":2,"version":1,"timestamp":9,"tx_count":17,"size":20,"weight":80,"merkle_root":"mm","mediantime":8,"difficulty":1.0}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), body)]),
+    );
+    let opened = host.activate(Screen::Blocks);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "the blocks list was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "the blocks list used a query or a fragment: {paths:?}"
+    );
+    opened.unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let text = painted(&host);
+    assert!(
+        text.contains(&format!("block hash {ID}")),
+        "the block row was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "TXs"),
+        "TXs was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Blocks is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Blocks was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Blocks was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(text.matches(LINE).count(), 1, "Blocks was not once: {text}");
+    assert_ne!(LINE, "Block");
+    let lines: Vec<&str> = text.lines().collect();
+    let heading_at = lines.iter().position(|line| *line == LINE);
+    let txs_at = lines.iter().position(|line| *line == "TXs");
+    assert!(
+        heading_at.is_some() && txs_at.is_some() && heading_at < txs_at,
+        "Blocks was not before TXs: {text}"
+    );
+    assert_paint_is_not_html(&text);
+}
+
+/// Blocks list column header from no-query `GET /blocks`.
+///
+/// `blocks-list.component.html` paints `Transactions` when the list is not
+/// the mempool module. A line equal to `Transactions` passes. A longer line
+/// that contains that word does not. This is not the transaction page title
+/// `Transaction`. `Blocks` and `TXs` stay. The request path has no query
+/// string and no fragment.
+#[test]
+fn screen_paints_blocks_transactions_header() {
+    const LINE: &str = "Transactions";
+    const ID: &str = "txcolhdr1";
+    let body = format!(
+        r#"[{{"id":"{ID}","height":2,"version":1,"timestamp":9,"tx_count":17,"size":20,"weight":80,"merkle_root":"mm","mediantime":8,"difficulty":1.0}}]"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), body)]),
+    );
+    let opened = host.activate(Screen::Blocks);
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "the blocks list was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "the blocks list used a query or a fragment: {paths:?}"
+    );
+    opened.unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let text = painted(&host);
+    assert!(
+        text.contains(&format!("block hash {ID}")),
+        "the block row was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "TXs"),
+        "TXs was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Blocks"),
+        "Blocks was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Transactions is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Transactions was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Transactions was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Transactions was not once: {text}"
+    );
+    assert_ne!(LINE, "Transaction");
+    let lines: Vec<&str> = text.lines().collect();
+    let header_at = lines.iter().position(|line| *line == LINE);
+    let txs_at = lines.iter().position(|line| *line == "TXs");
+    assert!(
+        header_at.is_some() && txs_at.is_some() && header_at < txs_at,
+        "Transactions was not before TXs: {text}"
+    );
+    assert_paint_is_not_html(&text);
+}
+
+/// Column header from no-query `POST /txs/test`.
+///
+/// `test-transactions.component.html` paints `Rejection reason` on the
+/// result table. A line equal to `Rejection reason` passes. A longer line
+/// that contains those words does not. The data token `reject-reason` stays
+/// on its own row. `Allowed?` stays. The request path has no query string
+/// and no fragment.
+#[test]
+fn screen_paints_rejection_reason() {
+    const LINE: &str = "Rejection reason";
+    const DATA: &str = "test txid rejectedtxid888 allowed false reject-reason dust";
+    let body = r#"[{"txid":"rejectedtxid888","wtxid":"rejectedwtxid888","allowed":false,"reject-reason":"dust"}]"#.to_string();
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/txs/test".to_string(), body)]),
+    );
+    host.activate(Screen::TestTransactions)
+        .expect("test transactions");
+    host.test_txs.input = "abcd".to_string();
+    host.submit().expect("post test transactions");
+    let posts = rec.posts();
+    assert!(
+        posts.iter().any(|(path, _)| path == "/txs/test"),
+        "POST /txs/test was not requested: {posts:?}"
+    );
+    assert!(
+        posts
+            .iter()
+            .all(|(path, _)| !path.contains('?') && !path.contains('#')),
+        "the test post used a query or a fragment: {posts:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == DATA),
+        "the reject-reason row was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Allowed?"),
+        "Allowed? was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Rejection reason is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Rejection reason was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Rejection reason was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Rejection reason was not once: {text}"
+    );
+    assert_ne!(LINE, "reject-reason");
+    let lines: Vec<&str> = text.lines().collect();
+    let header_at = lines.iter().position(|line| *line == LINE);
+    let data_at = lines.iter().position(|line| *line == DATA);
+    assert!(
+        header_at.is_some() && data_at.is_some() && header_at < data_at,
+        "Rejection reason was not before the reject-reason row: {text}"
+    );
+    assert_paint_is_not_html(&text);
+}
+
+/// Column header from no-query `POST /txs/test`.
+///
+/// The result table paints `Effective fee rate` on its own line. A longer
+/// line that contains those words does not. The data token stays
+/// `effective_feerate` plus the value from `effective-feerate`. That token
+/// is not the header. `Allowed?` and `Rejection reason` stay. The request
+/// path has no query string and no fragment.
+#[test]
+fn screen_paints_effective_fee_rate() {
+    const LINE: &str = "Effective fee rate";
+    const DATA: &str = "test txid test-tx-1 allowed false reject-reason min relay fee not met fee 0.00001 effective_feerate 1";
+    let body = r#"[{"txid":"test-tx-1","wtxid":"test-wtxid-1","allowed":false,"vsize":141,"fees":{"base":0.00001,"effective-feerate":1.0,"effective-includes":["test-tx-1"]},"reject-reason":"min relay fee not met"}]"#.to_string();
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/txs/test".to_string(), body)]),
+    );
+    host.activate(Screen::TestTransactions)
+        .expect("test transactions");
+    host.test_txs.input = "abcd".to_string();
+    host.submit().expect("post test transactions");
+    let posts = rec.posts();
+    assert!(
+        posts.iter().any(|(path, _)| path == "/txs/test"),
+        "POST /txs/test was not requested: {posts:?}"
+    );
+    assert!(
+        posts
+            .iter()
+            .all(|(path, _)| !path.contains('?') && !path.contains('#')),
+        "the test post used a query or a fragment: {posts:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == DATA),
+        "the effective_feerate row was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Allowed?"),
+        "Allowed? was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Effective fee rate is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Effective fee rate was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Effective fee rate was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Effective fee rate was not once: {text}"
+    );
+    assert_ne!(LINE, "effective_feerate");
+    assert_ne!(LINE, "effective-feerate");
+    let lines: Vec<&str> = text.lines().collect();
+    let header_at = lines.iter().position(|line| *line == LINE);
+    let data_at = lines.iter().position(|line| *line == DATA);
+    assert!(
+        header_at.is_some() && data_at.is_some() && header_at < data_at,
+        "Effective fee rate was not before the effective_feerate row: {text}"
+    );
+    assert_paint_is_not_html(&text);
+}
+
+/// Address-cell label from no-query `GET /tx/:txid`.
+///
+/// `transactions-list.component.html` paints `Coinbase` when `is_coinbase`
+/// is true. A line equal to `Coinbase` passes. A longer line that contains
+/// that word does not. The data row stays `input coinbase`.
+/// `(Newly Generated Coins)` stays. False does not paint the label.
+/// The request path has no query string and no fragment.
+#[test]
+fn screen_paints_coinbase() {
+    const LINE: &str = "Coinbase";
+    const DATA: &str = "input coinbase";
+    const TX: &str = "coinbasetxlabel";
+    let body = format!(
+        r#"{{
+        "txid":"{TX}",
+        "version":2,
+        "locktime":1,
+        "vin":[{{
+            "txid":"prev",
+            "vout":1,
+            "prevout":null,
+            "scriptsig":"deadbeef",
+            "scriptsig_asm":"OP_CHECKSIG",
+            "is_coinbase":true,
+            "sequence":0
+        }}],
+        "vout":[{{
+            "scriptpubkey":"51",
+            "scriptpubkey_asm":"OP_TRUE",
+            "scriptpubkey_type":"op_return",
+            "value":9
+        }}],
+        "size":10,
+        "weight":40,
+        "sigops":1,
+        "fee":1,
+        "status":{{"confirmed":false}}
+    }}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{TX}"), body)]),
+    );
+    host.open_transaction(TX).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{TX}")),
+        "GET /tx/{TX} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "the transaction get used a query or a fragment: {paths:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == DATA),
+        "the input coinbase row was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "(Newly Generated Coins)"),
+        "(Newly Generated Coins) was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Coinbase is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Coinbase was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Coinbase was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(
+        text.matches(LINE).count(),
+        1,
+        "Coinbase was not once: {text}"
+    );
+    assert_ne!(LINE, "is_coinbase");
+    assert_ne!(LINE, "input coinbase");
+    let lines: Vec<&str> = text.lines().collect();
+    let header_at = lines.iter().position(|line| *line == LINE);
+    let data_at = lines.iter().position(|line| *line == DATA);
+    assert!(
+        header_at.is_some() && data_at.is_some() && header_at < data_at,
+        "Coinbase was not before the input coinbase row: {text}"
+    );
+    assert_paint_is_not_html(&text);
+
+    let ordinary = paint_tx_input("coinbaseoff", r#","is_coinbase":false,"sequence":7"#);
+    assert!(
+        !ordinary.lines().any(|line| line == LINE),
+        "false coinbase painted Coinbase: {ordinary}"
+    );
+    assert!(
+        !ordinary.contains(LINE),
+        "false coinbase painted Coinbase: {ordinary}"
+    );
+}
+
+/// Address-cell caption from `GET /tx/:txid` when an output has `pegout`.
+///
+/// The template prints the exact line `Peg-out to` when the output has no
+/// address and the type is not `p2pk`. An address, JSON null `pegout`, and a
+/// `p2pk` output do not gain that line. `Liquid Peg Out` stays the separate
+/// badge. The path has no query and no fragment. Script hex and script asm
+/// stay off this line.
+#[test]
+fn transaction_screen_paints_peg_out_to_label() {
+    const LABEL: &str = "Peg-out to";
+    const PEGOUT: &str =
+        r#"{"genesis_hash":"aa","scriptpubkey":"bb","scriptpubkey_asm":"OP_TRUE"}"#;
+
+    fn vin() -> String {
+        r#"{"txid":"prev","vout":0,"prevout":{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qin","value":8},"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}"#.to_string()
+    }
+
+    fn vout(extra: &str) -> String {
+        format!(
+            r#"{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","value":1{extra}}}"#
+        )
+    }
+
+    fn paint(txid: &str, vout_json: &str) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let body = format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vin}],"vout":[{vout_json}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#,
+            vin = vin(),
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), body)]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    let ordinary = r#"{"scriptpubkey":"0014bb","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qordinary","value":9}"#;
+    let pegged = paint(
+        "pegoutto",
+        &format!("{},{ordinary}", vout(&format!(r#","pegout":{PEGOUT}"#))),
+    );
+    assert_eq!(
+        pegged.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "{LABEL} was not one exact line: {pegged}"
+    );
+    assert!(
+        pegged.lines().any(|line| line == "Liquid Peg Out"),
+        "Liquid Peg Out was dropped: {pegged}"
+    );
+    let rows: Vec<&str> = pegged.lines().collect();
+    let address = rows
+        .iter()
+        .position(|line| *line == "output address  value 1");
+    let script_type = rows
+        .iter()
+        .position(|line| *line == "output script type v0_p2wpkh");
+    let type_line = rows.iter().position(|line| *line == "Type V0_P2WPKH");
+    let label_at = rows.iter().position(|line| *line == LABEL);
+    let ordinary_at = rows
+        .iter()
+        .position(|line| *line == "output address bc1qordinary value 9");
+    assert!(
+        address.is_some()
+            && script_type.is_some()
+            && type_line.is_some()
+            && label_at.is_some()
+            && ordinary_at.is_some(),
+        "the peg-out output lines or the ordinary output were dropped: {pegged}"
+    );
+    assert!(
+        address.unwrap() < script_type.unwrap()
+            && script_type.unwrap() < type_line.unwrap()
+            && type_line.unwrap() < label_at.unwrap()
+            && label_at.unwrap() < ordinary_at.unwrap(),
+        "{LABEL} was not on the peg-out output after Type V0_P2WPKH and before the ordinary output: {pegged}"
+    );
+    assert!(!pegged.contains("0014aa"), "{pegged}");
+    assert!(!pegged.contains("OP_TRUE"), "{pegged}");
+    assert!(!pegged.contains("OP_0"), "{pegged}");
+    assert_paint_is_not_html(&pegged);
+
+    let addressed = paint(
+        "pegoutaddr",
+        &vout(&format!(
+            r#","scriptpubkey_address":"bc1qpeg","pegout":{PEGOUT}"#
+        )),
+    );
+    assert_eq!(
+        addressed.lines().filter(|line| *line == LABEL).count(),
+        0,
+        "an addressed peg-out painted {LABEL}: {addressed}"
+    );
+    assert!(
+        addressed
+            .lines()
+            .any(|line| line == "output address bc1qpeg value 1"),
+        "the addressed peg-out output was dropped: {addressed}"
+    );
+    assert!(
+        addressed.lines().any(|line| line == "Liquid Peg Out"),
+        "Liquid Peg Out was dropped on an addressed peg-out: {addressed}"
+    );
+
+    let null_peg = paint("pegoutnull", &vout(r#","pegout":null"#));
+    assert!(
+        !null_peg.lines().any(|line| line == LABEL),
+        "JSON null pegout painted {LABEL}: {null_peg}"
+    );
+    assert!(
+        !null_peg.lines().any(|line| line == "Liquid Peg Out"),
+        "JSON null pegout painted Liquid Peg Out: {null_peg}"
+    );
+
+    let p2pk = paint(
+        "pegoutp2pk",
+        &format!(
+            r#"{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":1,"pegout":{PEGOUT}}}"#
+        ),
+    );
+    assert_eq!(
+        p2pk.lines().filter(|line| *line == LABEL).count(),
+        0,
+        "a p2pk peg-out painted {LABEL}: {p2pk}"
+    );
+    assert_eq!(
+        p2pk.lines().filter(|line| *line == "P2PK").count(),
+        1,
+        "P2PK was dropped on a p2pk peg-out: {p2pk}"
+    );
+    assert!(
+        p2pk.lines().any(|line| line == "Liquid Peg Out"),
+        "Liquid Peg Out was dropped on a p2pk peg-out: {p2pk}"
+    );
+}
+
+/// Column header from no-query `GET /blocks` on the dashboard.
+///
+/// `dashboard.component.html` paints `Size` on the recent blocks table.
+/// A line equal to `Size` passes. A longer line that contains that word does
+/// not. The block summary keeps lowercase `size` and the bytes text. Liquid
+/// does not paint the header. An empty list does not. The blocks list does
+/// not. The request path has no query string and no fragment.
+#[test]
+fn screen_paints_size_column() {
+    const LINE: &str = "Size";
+    const ID: &str = "sizedash1";
+    const SUMMARY: &str = "size 20 B";
+
+    fn bodies(blocks: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/blocks".to_string(), blocks.to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/blocks"),
+            "did not GET /blocks: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    let blocks = format!("[{}]", block_json(ID));
+    assert!(
+        blocks.contains("\"size\":20"),
+        "the block fixture dropped size: {blocks}"
+    );
+    let (mut host, rec) = host_with(Network::Mainnet, bodies(&blocks));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    let text = painted(&host);
+    let summary = text
+        .lines()
+        .find(|line| line.starts_with("block hash ") && line.contains(ID))
+        .unwrap_or_else(|| panic!("the block summary was dropped: {text}"));
+    assert!(
+        summary.contains(SUMMARY),
+        "the size field was dropped: {summary}"
+    );
+    assert!(
+        !summary.contains("Size "),
+        "title-case Size leaked into the summary line: {summary}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Size is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Size was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Size was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(text.matches(LINE).count(), 1, "Size was not once: {text}");
+    assert!(
+        !text.lines().any(|line| line.starts_with("Size ")),
+        "the details row Size was painted on the dashboard: {text}"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    let header_at = lines.iter().position(|line| *line == LINE);
+    let summary_at = lines.iter().position(|line| line.contains(SUMMARY));
+    assert!(
+        header_at.is_some() && summary_at.is_some() && header_at < summary_at,
+        "Size was not before the block summary: {text}"
+    );
+
+    let (mut host, rec) = host_with(Network::Liquid, bodies(&blocks));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("liquid dashboard did not open: {err}"));
+    let liquid = painted(&host);
+    assert!(
+        liquid.contains(SUMMARY),
+        "the liquid size field was hidden: {liquid}"
+    );
+    assert!(
+        !liquid.lines().any(|line| line == LINE),
+        "liquid painted Size: {liquid}"
+    );
+
+    let (mut host, rec) = host_with(Network::Mainnet, bodies("[]"));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("empty dashboard did not open: {err}"));
+    let empty = painted(&host);
+    assert!(
+        empty.contains("blocks:"),
+        "empty list dropped the blocks marker: {empty}"
+    );
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty block list painted Size: {empty}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(!list.contains(LINE), "blocks list painted Size: {list}");
+}
+
+/// Features label from a no-query `GET /tx/:txid`.
+///
+/// `transaction-details.component.html` paints the word Features when the
+/// network is not liquid and feature activation is on. Unconfirmed
+/// `status.confirmed` is on. A confirmed mainnet height is on at rbf
+/// activation, 399701. A confirmed height below that, a missing status,
+/// an empty body, invalid JSON, and the block list omit the label. The
+/// whole line is Features. Script hex, script asm, witness, and RBF stay
+/// off that line.
+#[test]
+fn transaction_screen_paints_features_label() {
+    const LINE: &str = "Features";
+    const SCRIPT_HEX: &str = "FEATPUBHEXDEAD";
+    const SCRIPT_SIG_HEX: &str = "FEATSIGHEXDEAD";
+    const SCRIPT_SIG_ASM: &str = "FEATSIGASMDEAD";
+    const SCRIPT_ASM: &str = "FEATASMDEAD";
+    const WITNESS: &str = "FEATWITDEAD";
+
+    let tx_body = |txid: &str, status: &str| -> String {
+        let status_field = if status.is_empty() {
+            String::new()
+        } else {
+            format!(r#","status":{status}"#)
+        };
+        format!(
+            r#"{{"txid":"{txid}","version":2,"locktime":0,"vin":[{{"txid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","vout":0,"prevout":null,"scriptsig":"{SCRIPT_SIG_HEX}","scriptsig_asm":"{SCRIPT_SIG_ASM}","witness":["{WITNESS}"],"is_coinbase":false,"sequence":4294967295}}],"vout":[{{"scriptpubkey":"{SCRIPT_HEX}","scriptpubkey_asm":"{SCRIPT_ASM}","scriptpubkey_type":"p2pkh","value":1}}],"size":10,"weight":40,"sigops":0,"fee":1{status_field}}}"#
+        )
+    };
+
+    let paint = |txid: &str, status: &str| -> String {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, status))]),
+        );
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    };
+
+    let assert_scripts_stay_off = |text: &str| {
+        for needle in [
+            SCRIPT_HEX,
+            SCRIPT_SIG_HEX,
+            SCRIPT_SIG_ASM,
+            SCRIPT_ASM,
+            WITNESS,
+            "RBF",
+            "Replace-By-Fee",
+            "replace-by-fee",
+        ] {
+            assert!(!text.contains(needle), "{needle} was painted: {text}");
+        }
+    };
+
+    let assert_features_once = |text: &str, txid: &str| {
+        assert!(
+            text.contains(&format!("tx txid {txid}")),
+            "the transaction row was dropped: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "Features is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "Features was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "Features was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(
+            text.matches(LINE).count(),
+            1,
+            "Features was not once: {text}"
+        );
+        assert_scripts_stay_off(text);
+        assert_paint_is_not_html(text);
+    };
+
+    let assert_features_absent = |text: &str| {
+        assert!(
+            !text.lines().any(|line| line == LINE),
+            "Features was painted: {text}"
+        );
+        assert!(!text.contains(LINE), "Features leaked: {text}");
+        assert_scripts_stay_off(text);
+    };
+
+    let pending = paint("featuresunconf", r#"{"confirmed":false}"#);
+    assert_features_once(&pending, "featuresunconf");
+
+    let on = paint(
+        "features399701",
+        r#"{"confirmed":true,"block_height":399701,"block_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","block_time":1600000000}"#,
+    );
+    assert_features_once(&on, "features399701");
+    assert!(
+        on.lines().any(|line| line == "Timestamp"),
+        "the block time line was dropped: {on}"
+    );
+
+    let below = paint(
+        "features399700",
+        r#"{"confirmed":true,"block_height":399700,"block_hash":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}"#,
+    );
+    assert!(
+        below.contains("tx txid features399700"),
+        "a lower height hid the transaction: {below}"
+    );
+    assert_features_absent(&below);
+
+    let missing = paint("featuresnostatus", "");
+    assert!(
+        missing.contains("tx txid featuresnostatus"),
+        "a missing status hid the transaction: {missing}"
+    );
+    assert_features_absent(&missing);
+
+    for (txid, body) in [
+        ("featuresblank", ""),
+        ("featuresbad", "not-json"),
+        ("featuresarr", "[]"),
+    ] {
+        let (mut host, _) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{txid}"), body.to_string())]),
+        );
+        let _opened = host.open_transaction(txid);
+        let painted = painted(&host);
+        assert!(
+            painted.contains(txid),
+            "the unparsed body hid the transaction screen: {painted}"
+        );
+        assert!(
+            !painted.contains(&format!("tx txid {txid}")),
+            "an unparsed body painted a transaction row: {painted}"
+        );
+        assert_features_absent(&painted);
+    }
+
+    let block_id = "featblock1";
+    let txid = "featuresblocktx";
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{block_id}"), block_json(block_id)),
+            (
+                format!("/block/{block_id}/txs"),
+                format!("[{}]", tx_body(txid, r#"{"confirmed":false}"#)),
+            ),
+            (format!("/block/{block_id}/txids"), "[]".to_string()),
+        ]),
+    );
+    host.open_block(block_id)
+        .unwrap_or_else(|err| panic!("block {block_id} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/block/{block_id}/txs")),
+        "the block list did not GET txs: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "the block list used a query or a fragment: {paths:?}"
+    );
+    let blocks = painted(&host);
+    assert!(
+        blocks.contains(&format!("tx txid {txid}")),
+        "the block list hid the transaction row: {blocks}"
+    );
+    assert_features_absent(&blocks);
+}
+
+/// Address transaction list column header from `GET /address/:addr/txs`.
+///
+/// Angular `address-transactions-widget.component.html` paints the word Date
+/// as that column header. One exact line `Date` when the list has rows. The
+/// `block_time` cell stays the raw integer. An empty list omits the word.
+/// This is not a formatted clock and not a relative duration.
+#[test]
+fn address_transactions_paint_date_header() {
+    const LABEL: &str = "Date";
+    const TIME: u64 = 1_700_000_000;
+
+    fn one_tx(txid: &str, fee: u64) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[],"vout":[],"size":10,"weight":40,"sigops":0,"fee":{fee},"status":{{"confirmed":true,"block_height":1,"block_time":{TIME}}}}}"#
+        )
+    }
+
+    fn txs(rows: &[(&str, u64)]) -> String {
+        let body = rows
+            .iter()
+            .map(|(txid, fee)| one_tx(txid, *fee))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("[{body}]")
+    }
+
+    fn assert_header_once_before(paint: &str, txid: &str) {
+        assert_eq!(
+            paint.lines().filter(|line| *line == LABEL).count(),
+            1,
+            "{LABEL} was not one exact line: {paint}"
+        );
+        assert_eq!(
+            paint.matches(LABEL).count(),
+            1,
+            "{LABEL} was not once: {paint}"
+        );
+        let header_at = paint
+            .lines()
+            .position(|line| line == LABEL)
+            .unwrap_or_else(|| panic!("{LABEL} missing\n{paint}"));
+        let row_at = paint
+            .lines()
+            .position(|line| line.starts_with(&format!("address tx txid {txid} ")))
+            .unwrap_or_else(|| panic!("address tx row missing\n{paint}"));
+        assert!(
+            header_at < row_at,
+            "{LABEL} was not before the address transaction row\n{paint}"
+        );
+    }
+
+    fn assert_raw_time(paint: &str, txid: &str, fee: u64) {
+        let row = paint
+            .lines()
+            .find(|line| line.starts_with(&format!("address tx txid {txid} ")))
+            .unwrap_or_else(|| panic!("missing address tx row {txid}: {paint}"));
+        let marker = format!("block_time {TIME}");
+        assert!(
+            row.contains(&marker) && row.contains(&format!("fee {fee}")),
+            "the cell did not stay the raw integer: {row}"
+        );
+        assert!(
+            !row.contains("ago")
+                && !row.contains("UTC")
+                && !row.contains(&format!("{TIME}.00"))
+                && !row.contains("2023-"),
+            "the cell gained a clock or a formatted date: {row}"
+        );
+    }
+
+    fn assert_header_absent(paint: &str, why: &str) {
+        assert!(
+            !paint.lines().any(|line| line == LABEL),
+            "{why} painted {LABEL}: {paint}"
+        );
+        assert!(!paint.contains(LABEL), "{why} contains {LABEL}: {paint}");
+    }
+
+    let one = paint_address_loaded("bc1qhdrone", 1, 0, &txs(&[("hdrtxone", 4)]));
+    assert_header_once_before(&one, "hdrtxone");
+    assert_raw_time(&one, "hdrtxone", 4);
+
+    let two = paint_address_loaded("bc1qhdrtwo", 2, 0, &txs(&[("hdrtxa", 1), ("hdrtxb", 2)]));
+    assert_header_once_before(&two, "hdrtxa");
+    assert_raw_time(&two, "hdrtxa", 1);
+    assert_raw_time(&two, "hdrtxb", 2);
+
+    let hash = "ab".repeat(32);
+    let script = paint_scripthash_loaded(&hash, 1, 0, &txs(&[("hdrscript", 9)]));
+    assert_header_once_before(&script, "hdrscript");
+    assert_raw_time(&script, "hdrscript", 9);
+
+    let empty = paint_address_loaded("bc1qhdrempty", 1, 0, "[]");
+    assert_header_absent(&empty, "empty list");
+    assert!(
+        empty
+            .lines()
+            .any(|line| line == "The address transaction list is empty."),
+        "empty list dropped the empty sentence: {empty}"
+    );
+
+    let hash_empty = "cd".repeat(32);
+    let script_empty = paint_scripthash_loaded(&hash_empty, 1, 0, "[]");
+    assert_header_absent(&script_empty, "empty scripthash list");
+    assert!(
+        script_empty
+            .lines()
+            .any(|line| line == "The address transaction list is empty."),
+        "empty scripthash list dropped the empty sentence: {script_empty}"
+    );
+}
+
+/// Mempool summary from no-query `GET /mempool`.
+///
+/// The summary paints count, vsize, and total_fee, and the sentence that the
+/// virtual-byte rate is not in the payload. It does not paint
+/// `Incoming Transactions`. The virtual-byte rate is not in this payload, so
+/// `vB/s` and `WU/s` stay off. The blocks list does not paint the label.
+/// The request path has no query string and no fragment.
+#[test]
+fn screen_paints_incoming_transactions() {
+    const LINE: &str = "Incoming Transactions";
+    const COUNT: &str = "mempool count 4 vsize 500 total_fee 90";
+    const RATE: &str = "The incoming virtual-bytes-per-second rate is not in the payload.";
+
+    fn mempool_bodies() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                "/mempool".to_string(),
+                r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[2,100]]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/mempool"),
+            "did not GET /mempool: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    fn assert_label_once(text: &str) {
+        assert!(
+            text.lines().any(|line| line == COUNT),
+            "the mempool count line was dropped: {text}"
+        );
+        assert!(
+            text.lines().any(|line| line == RATE),
+            "the missing-rate sentence was dropped: {text}"
+        );
+        assert!(
+            !text.contains(LINE),
+            "Incoming Transactions is still painted: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            0,
+            "Incoming Transactions is still its own line: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "Incoming Transactions was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(
+            text.matches(LINE).count(),
+            0,
+            "Incoming Transactions is still in the summary: {text}"
+        );
+        assert!(!text.contains("vB/s"), "vB/s was painted: {text}");
+        assert!(!text.contains("WU/s"), "WU/s was painted: {text}");
+        assert_paint_is_not_html(text);
+    }
+
+    let (mut host, rec) = host_with(Network::Mainnet, mempool_bodies());
+    let opened = host.activate(Screen::Mempool);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("mempool did not open: {err}"));
+    assert_label_once(&painted(&host));
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[2,100]]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ]),
+    );
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    assert_label_once(&painted(&host));
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            "/blocks".to_string(),
+            format!("[{}]", block_json("noblockfooter")),
+        )]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(
+        !list.lines().any(|line| line == LINE),
+        "blocks list painted Incoming Transactions: {list}"
+    );
+}
+
+/// Search dropdown title from `GET /assets/registry/search`.
+///
+/// Angular `search-results.component.html` paints the card title
+/// `Liquid Asset` when `results.liquidAssets` is non-empty. One exact line,
+/// before the asset name. The name and the ticker stay their own lines.
+/// An empty hit list omits the title. The path has no query string and no fragment.
+#[test]
+fn liquid_search_paints_liquid_asset_heading() {
+    const LABEL: &str = "Liquid Asset";
+    const NAME: &str = "Liquid Bitcoin";
+    const TICKER: &str = "L-BTC";
+
+    fn liquid_shell(search_body: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "liqtip".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/assets/registry".to_string(), "[]".to_string()),
+            (
+                "/assets/registry/search".to_string(),
+                search_body.to_string(),
+            ),
+        ])
+    }
+
+    let asset_id = "bb".repeat(32);
+    let hits = format!(r#"[{{"asset_id":"{asset_id}","name":"{NAME}","ticker":"{TICKER}"}}]"#);
+    let (mut host, rec) = host_with(Network::Liquid, liquid_shell(&hits));
+    host.activate(Screen::Dashboard).expect("dashboard");
+    host.set_query("USDt");
+    host.reload().expect("registry search");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/assets/registry/search"),
+        "liquid search was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let paint = painted(&host);
+    let title_at = paint.lines().position(|line| line == LABEL);
+    let name_at = paint.lines().position(|line| line == NAME);
+    assert!(
+        title_at.is_some(),
+        "the liquid asset heading was not painted\n{paint}"
+    );
+    assert_eq!(
+        paint.lines().filter(|line| *line == LABEL).count(),
+        1,
+        "{LABEL} was not one exact line: {paint}"
+    );
+    assert_eq!(
+        paint.matches(LABEL).count(),
+        1,
+        "{LABEL} was painted inside a longer sentence: {paint}"
+    );
+    assert!(name_at.is_some(), "the asset name was dropped\n{paint}");
+    assert!(
+        title_at.unwrap() < name_at.unwrap(),
+        "{LABEL} was not before {NAME}\n{paint}"
+    );
+    assert!(
+        paint.lines().any(|line| line == TICKER),
+        "the ticker was dropped\n{paint}"
+    );
+
+    let (mut empty_host, empty_rec) = host_with(Network::Liquid, liquid_shell("[]"));
+    empty_host
+        .activate(Screen::Dashboard)
+        .expect("empty dashboard");
+    empty_host.set_query("USDt");
+    empty_host.reload().expect("empty registry search");
+    assert!(
+        empty_rec
+            .gets()
+            .iter()
+            .any(|path| path == "/assets/registry/search"),
+        "empty liquid search was not requested: {:?}",
+        empty_rec.gets()
+    );
+    assert!(
+        empty_rec
+            .gets()
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{:?}",
+        empty_rec.gets()
+    );
+    let empty_paint = painted(&empty_host);
+    assert!(
+        !empty_paint.lines().any(|line| line == LABEL),
+        "an empty hit list painted {LABEL}: {empty_paint}"
+    );
+}
+
+const SCRIPTSIG_ASM_LABEL: &str = "ScriptSig (ASM)";
+const SSA_SIG: &str = "SSAHEXDEAD";
+const SSA_ASM: &str = "SSAASMDEAD";
+
+fn scriptsig_asm_vin(sig: &str, asm: &str) -> String {
+    format!(
+        r#"{{"txid":"prevssa","vout":0,"prevout":{{"scriptpubkey":"SSAPREVHEX","scriptpubkey_asm":"SSAPREVASM","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qssa","value":5}},"scriptsig":"{sig}","scriptsig_asm":"{asm}","is_coinbase":false,"sequence":1}}"#
+    )
+}
+
+fn paint_scriptsig_asm(txid: &str, vins: &str) -> String {
+    assert!(
+        !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+        "{txid}"
+    );
+    let body = format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{vins}],"vout":[{{"scriptpubkey":"SSAOUTHEX","scriptpubkey_asm":"SSAOUTASM","scriptpubkey_type":"op_return","value":0}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not registered: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    painted(&host)
+}
+
+fn assert_scriptsig_asm_bytes_stay_off(painted: &str) {
+    for needle in [
+        SSA_SIG,
+        SSA_ASM,
+        "SSAPREVHEX",
+        "SSAPREVASM",
+        "SSAOUTHEX",
+        "SSAOUTASM",
+    ] {
+        assert!(
+            !painted.contains(needle),
+            "{needle} leaked into the screen: {painted}"
+        );
+    }
+}
+
+/// `ScriptSig (ASM)` stays off the transaction screen from `GET /tx/:txid`.
+///
+/// A non-empty `scriptsig`, an empty `scriptsig`, and a non-empty `scriptsig`
+/// with an empty asm all omit the caption. Two such inputs omit it too. The
+/// hex and the asm stay off the screen. The path has no query string and no
+/// fragment.
+#[test]
+fn transaction_screen_paints_scriptsig_asm_label() {
+    let present = paint_scriptsig_asm("ssapresent", &scriptsig_asm_vin(SSA_SIG, SSA_ASM));
+    assert!(
+        present.contains("input outpoint"),
+        "a scriptsig input dropped the input outpoint: {present}"
+    );
+    assert!(
+        !present.contains("ScriptSig (ASM)"),
+        "ScriptSig (ASM) is still painted: {present}"
+    );
+    assert_eq!(
+        present
+            .lines()
+            .filter(|line| *line == SCRIPTSIG_ASM_LABEL)
+            .count(),
+        0,
+        "ScriptSig (ASM) was painted as a whole line: {present}"
+    );
+    assert_eq!(
+        present.matches(SCRIPTSIG_ASM_LABEL).count(),
+        0,
+        "ScriptSig (ASM) was painted inside a longer sentence: {present}"
+    );
+    assert!(
+        present.lines().any(|line| line == "Previous output script"),
+        "Previous output script was dropped: {present}"
+    );
+    assert_scriptsig_asm_bytes_stay_off(&present);
+
+    let empty_hex = paint_scriptsig_asm("ssaempty", &scriptsig_asm_vin("", SSA_ASM));
+    assert!(
+        empty_hex.contains("input outpoint"),
+        "an empty scriptsig dropped the input outpoint: {empty_hex}"
+    );
+    assert!(
+        !empty_hex.lines().any(|line| line == SCRIPTSIG_ASM_LABEL),
+        "an empty scriptsig painted ScriptSig (ASM): {empty_hex}"
+    );
+    assert_scriptsig_asm_bytes_stay_off(&empty_hex);
+
+    let empty_asm = paint_scriptsig_asm("ssaasmoff", &scriptsig_asm_vin(SSA_SIG, ""));
+    assert!(
+        !empty_asm.contains("ScriptSig (ASM)"),
+        "a non-empty scriptsig with an empty asm painted ScriptSig (ASM): {empty_asm}"
+    );
+    assert_scriptsig_asm_bytes_stay_off(&empty_asm);
+
+    let two = paint_scriptsig_asm(
+        "ssatwo",
+        &format!(
+            "{},{}",
+            scriptsig_asm_vin(SSA_SIG, SSA_ASM),
+            scriptsig_asm_vin(SSA_SIG, SSA_ASM)
+        ),
+    );
+    assert!(
+        !two.contains("ScriptSig (ASM)"),
+        "two scriptsig inputs painted ScriptSig (ASM): {two}"
+    );
+    assert_scriptsig_asm_bytes_stay_off(&two);
+}
+
+/// Block height caption from a no-query `GET /tx/:txid`.
+///
+/// `tracker.component.html` line 96 is the exact line `Block height` when the
+/// transaction is confirmed and `status.block_height` is present. The line
+/// sits next to `confirmations 1`. A missing height, an unconfirmed status,
+/// and a height on an unconfirmed status omit the caption. The height number
+/// stays on the existing transaction row. It is not a second caption. Sent,
+/// Pending, Soon, Next Block, Sign In, and Liquid Asset stay off.
+#[test]
+fn transaction_screen_paints_block_height_label() {
+    const LINE: &str = "Block height";
+
+    fn tx_body(txid: &str, status: &str) -> String {
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{{"txid":"prev","vout":0,"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}}],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"op_return","value":9}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{status}}}"#
+        )
+    }
+
+    fn paint(txid: &str, status: &str, tip: Option<&str>) -> String {
+        assert!(
+            !txid.is_empty() && !txid.contains('/') && !txid.contains('?') && !txid.contains('#'),
+            "{txid}"
+        );
+        let mut bodies = BTreeMap::from([(format!("/tx/{txid}"), tx_body(txid, status))]);
+        if let Some(tip) = tip {
+            bodies.insert("/blocks/tip/height".to_string(), tip.to_string());
+        }
+        let (mut host, rec) = host_with(Network::Mainnet, bodies);
+        host.open_transaction(txid)
+            .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{txid}")),
+            "GET /tx/{txid} was not requested: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "a transaction open used a query or a fragment: {paths:?}"
+        );
+        painted(&host)
+    }
+
+    let assert_caption_off = |text: &str| {
+        assert!(
+            !text.lines().any(|line| line == LINE),
+            "{LINE} was painted: {text}"
+        );
+        assert!(!text.contains(LINE), "{LINE} leaked: {text}");
+    };
+    let assert_stage_captions_off = |text: &str| {
+        for caption in [
+            "Sent",
+            "Pending",
+            "Soon",
+            "Next Block",
+            "Sign In",
+            "Liquid Asset",
+        ] {
+            assert!(
+                !text.lines().any(|line| line == caption),
+                "{caption} was painted: {text}"
+            );
+        }
+    };
+
+    let confirmed = paint(
+        "blockheighton",
+        r#"{"confirmed":true,"block_height":4}"#,
+        Some("4"),
+    );
+    assert!(
+        confirmed.lines().any(|line| line == LINE),
+        "Block height is absent: {confirmed}"
+    );
+    assert_eq!(
+        confirmed.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Block height was not painted once: {confirmed}"
+    );
+    assert!(
+        confirmed
+            .lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "Block height was painted inside a longer sentence: {confirmed}"
+    );
+    assert_eq!(
+        confirmed.matches(LINE).count(),
+        1,
+        "Block height was not once: {confirmed}"
+    );
+    let lines: Vec<&str> = confirmed.lines().collect();
+    let confirmations_at = lines.iter().position(|line| *line == "confirmations 1");
+    let caption_at = lines.iter().position(|line| *line == LINE);
+    assert!(
+        confirmations_at.is_some() && caption_at == confirmations_at.map(|index| index + 1),
+        "Block height was not the line after confirmations 1: {confirmed}"
+    );
+    assert!(
+        !confirmed.lines().any(|line| line == "Confirmations 1"),
+        "the confirmation line changed letter case: {confirmed}"
+    );
+    assert!(
+        confirmed.contains("block_height 4"),
+        "the existing height value left the transaction row: {confirmed}"
+    );
+    assert!(
+        !confirmed
+            .lines()
+            .any(|line| line == "Block height 4" || line.starts_with("Block height ")),
+        "the height was painted as a second caption: {confirmed}"
+    );
+    assert_stage_captions_off(&confirmed);
+    assert_paint_is_not_html(&confirmed);
+
+    let unconfirmed = paint("blockheightoff", r#"{"confirmed":false}"#, Some("4"));
+    assert!(
+        unconfirmed.contains("tx txid blockheightoff"),
+        "an unconfirmed transaction was hidden: {unconfirmed}"
+    );
+    assert_caption_off(&unconfirmed);
+    assert!(
+        unconfirmed.lines().any(|line| line == "Unconfirmed"),
+        "Unconfirmed left the screen: {unconfirmed}"
+    );
+
+    let no_height = paint("blockheightnone", r#"{"confirmed":true}"#, Some("4"));
+    assert!(
+        no_height.contains("tx txid blockheightnone"),
+        "a confirmed transaction without a height was hidden: {no_height}"
+    );
+    assert_caption_off(&no_height);
+
+    let height_unconfirmed = paint(
+        "blockheightfalse",
+        r#"{"confirmed":false,"block_height":4}"#,
+        Some("4"),
+    );
+    assert!(
+        height_unconfirmed
+            .lines()
+            .any(|line| line == "confirmations 1"),
+        "a height on an unconfirmed status dropped confirmations 1: {height_unconfirmed}"
+    );
+    assert_caption_off(&height_unconfirmed);
+
+    let no_tip = paint(
+        "blockheightnotip",
+        r#"{"confirmed":true,"block_height":4}"#,
+        None,
+    );
+    assert!(
+        no_tip.lines().any(|line| line == "Confirmed"),
+        "a missing tip dropped Confirmed: {no_tip}"
+    );
+    assert!(
+        no_tip.lines().any(|line| line == LINE),
+        "Block height is absent beside Confirmed: {no_tip}"
+    );
+    let no_tip_lines: Vec<&str> = no_tip.lines().collect();
+    let confirmed_word_at = no_tip_lines.iter().position(|line| *line == "Confirmed");
+    let no_tip_caption = no_tip_lines.iter().position(|line| *line == LINE);
+    assert!(
+        confirmed_word_at.is_some() && no_tip_caption == confirmed_word_at.map(|index| index + 1),
+        "Block height was not the line after Confirmed: {no_tip}"
+    );
+    assert_stage_captions_off(&no_tip);
+}
+
+/// Status footer label from no-query `GET /mempool`.
+///
+/// `footer.component.html` paints the exact line `Unconfirmed:` beside the
+/// unconfirmed count (`BacklogStats.count`). The count stays on the existing
+/// `mempool count` line. A zero count still paints the label. A body with no
+/// count does not. `Incoming Transactions`, `vB/s`, and `WU/s` stay
+/// off. The confirmation word `Unconfirmed` stays off this screen. The path
+/// has no query string and no fragment.
+#[test]
+fn status_footer_paints_unconfirmed_label() {
+    const LINE: &str = "Unconfirmed:";
+    const COUNT: &str = "mempool count 4 vsize 500 total_fee 90";
+    const ZERO: &str = "mempool count 0 vsize 0 total_fee 0";
+
+    fn summary_bodies(body: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/mempool".to_string(), body.to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/mempool"),
+            "did not GET /mempool: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    fn assert_label_once(text: &str, count_line: &str) {
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "{LINE} is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "{LINE} was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "{LINE} was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(
+            text.matches(LINE).count(),
+            1,
+            "{LINE} was not once in the summary: {text}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let label_at = lines.iter().position(|line| *line == LINE);
+        let count_at = lines.iter().position(|line| *line == count_line);
+        assert!(
+            label_at.is_some() && count_at == label_at.map(|index| index + 1),
+            "{LINE} was not the line before {count_line}: {text}"
+        );
+        assert!(
+            !text.lines().any(|line| line == "Unconfirmed"),
+            "the confirmation word was painted on the mempool summary: {text}"
+        );
+        assert!(
+            !text.contains("Incoming Transactions"),
+            "Incoming Transactions was painted: {text}"
+        );
+        assert!(!text.contains("vB/s"), "vB/s was painted: {text}");
+        assert!(!text.contains("WU/s"), "WU/s was painted: {text}");
+        assert_paint_is_not_html(text);
+    }
+
+    let counted = r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[2,100]]}"#;
+    let (mut host, rec) = host_with(Network::Mainnet, summary_bodies(counted));
+    let opened = host.activate(Screen::Mempool);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("mempool did not open: {err}"));
+    assert_label_once(&painted(&host), COUNT);
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            ("/mempool".to_string(), counted.to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ]),
+    );
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    assert_label_once(&painted(&host), COUNT);
+
+    let zero = r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#;
+    let (mut host, rec) = host_with(Network::Mainnet, summary_bodies(zero));
+    host.activate(Screen::Mempool)
+        .unwrap_or_else(|err| panic!("zero mempool did not open: {err}"));
+    assert_no_query(&rec.gets());
+    assert_label_once(&painted(&host), ZERO);
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        summary_bodies(r#"{"vsize":1,"total_fee":0,"fee_histogram":[]}"#),
+    );
+    let err = host
+        .activate(Screen::Mempool)
+        .expect_err("a mempool body with no count must fail");
+    assert!(
+        err.to_string().contains("count"),
+        "missing count was not a parse error: {err}"
+    );
+    assert_no_query(&rec.gets());
+    let missing = painted(&host);
+    assert!(
+        !missing.lines().any(|line| line == LINE),
+        "a body with no count painted {LINE}: {missing}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            "/blocks".to_string(),
+            format!("[{}]", block_json("nostatusfooter")),
+        )]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(
+        !list.lines().any(|line| line == LINE),
+        "blocks list painted {LINE}: {list}"
+    );
+}
+
+/// Status footer label from no-query `GET /mempool`.
+///
+/// `footer.component.html` paints `Mempool size:` and the raw virtual-byte
+/// count (`BacklogStats.vsize`). The digits are not kB or MB, and they are
+/// not a projected block count. A zero vsize still paints the label. A body
+/// with no vsize does not. `Unconfirmed:` stays the one count caption. The
+/// path has no query string and no fragment.
+#[test]
+fn status_footer_paints_mempool_size_from_vsize() {
+    const LINE: &str = "Mempool size:";
+    const COUNT: &str = "mempool count 4 vsize 500 total_fee 90";
+    const ZERO_COUNT: &str = "mempool count 0 vsize 0 total_fee 0";
+    const WIDE_COUNT: &str = "mempool count 2 vsize 1000000 total_fee 1500";
+
+    fn summary_bodies(body: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/mempool".to_string(), body.to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/mempool"),
+            "did not GET /mempool: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    fn assert_size_once(text: &str, digits: &str, count_line: &str) {
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "{LINE} is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "{LINE} was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "{LINE} was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(
+            text.matches(LINE).count(),
+            1,
+            "{LINE} was not once in the summary: {text}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let label_at = lines.iter().position(|line| *line == LINE);
+        let value_at = label_at.map(|index| index + 1);
+        assert_eq!(
+            value_at.and_then(|index| lines.get(index).copied()),
+            Some(digits),
+            "{LINE} was not followed by the raw vsize {digits}: {text}"
+        );
+        assert!(
+            digits.chars().all(|ch| ch.is_ascii_digit()),
+            "the vsize was not raw digits: {digits}"
+        );
+        assert!(
+            !digits.contains(','),
+            "the vsize gained a separator: {digits}"
+        );
+        assert!(
+            text.lines().any(|line| line == count_line),
+            "the mempool count line was dropped: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == "Unconfirmed:").count(),
+            1,
+            "Unconfirmed: was painted again: {text}"
+        );
+        assert!(
+            !text.lines().any(|line| line == "Unconfirmed"),
+            "the confirmation word was painted on the mempool summary: {text}"
+        );
+        assert!(
+            !text.contains("Incoming Transactions"),
+            "Incoming Transactions was painted: {text}"
+        );
+        assert!(!text.contains("kB"), "kB was painted: {text}");
+        assert!(!text.contains("MB"), "MB was painted: {text}");
+        assert!(
+            !text.contains("1,000,000"),
+            "the vsize gained a thousands separator: {text}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("block")),
+            "a projected block count was painted: {text}"
+        );
+        assert_paint_is_not_html(text);
+    }
+
+    let counted = r#"{"count":4,"vsize":500,"total_fee":90,"fee_histogram":[[2,100]]}"#;
+    let (mut host, rec) = host_with(Network::Mainnet, summary_bodies(counted));
+    let opened = host.activate(Screen::Mempool);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("mempool did not open: {err}"));
+    assert_size_once(&painted(&host), "500", COUNT);
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            ("/blocks".to_string(), "[]".to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            ("/mempool".to_string(), counted.to_string()),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ]),
+    );
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    let dashboard = painted(&host);
+    assert!(
+        dashboard.lines().any(|line| line == LINE),
+        "{LINE} is absent on the dashboard: {dashboard}"
+    );
+    assert_eq!(
+        dashboard.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once on the dashboard: {dashboard}"
+    );
+    let dashboard_lines: Vec<&str> = dashboard.lines().collect();
+    let dashboard_label = dashboard_lines.iter().position(|line| *line == LINE);
+    assert_eq!(
+        dashboard_label.and_then(|index| dashboard_lines.get(index + 1).copied()),
+        Some("500"),
+        "{LINE} was not followed by the raw vsize on the dashboard: {dashboard}"
+    );
+    assert!(
+        dashboard.lines().any(|line| line == COUNT),
+        "the dashboard dropped the mempool count line: {dashboard}"
+    );
+    assert!(!dashboard.contains("kB"), "kB was painted: {dashboard}");
+    assert!(!dashboard.contains("MB"), "MB was painted: {dashboard}");
+    assert_paint_is_not_html(&dashboard);
+
+    let zero = r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#;
+    let (mut host, rec) = host_with(Network::Mainnet, summary_bodies(zero));
+    host.activate(Screen::Mempool)
+        .unwrap_or_else(|err| panic!("zero mempool did not open: {err}"));
+    assert_no_query(&rec.gets());
+    assert_size_once(&painted(&host), "0", ZERO_COUNT);
+
+    let wide = r#"{"count":2,"vsize":1000000,"total_fee":1500,"fee_histogram":[]}"#;
+    let (mut host, rec) = host_with(Network::Mainnet, summary_bodies(wide));
+    host.activate(Screen::Mempool)
+        .unwrap_or_else(|err| panic!("wide mempool did not open: {err}"));
+    assert_no_query(&rec.gets());
+    assert_size_once(&painted(&host), "1000000", WIDE_COUNT);
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        summary_bodies(r#"{"count":4,"total_fee":90,"fee_histogram":[]}"#),
+    );
+    let err = host
+        .activate(Screen::Mempool)
+        .expect_err("a mempool body with no vsize must fail");
+    assert!(
+        err.to_string().contains("vsize"),
+        "missing vsize was not a parse error: {err}"
+    );
+    assert_no_query(&rec.gets());
+    let missing = painted(&host);
+    assert!(
+        !missing.lines().any(|line| line == LINE),
+        "a body with no vsize painted {LINE}: {missing}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(
+            "/blocks".to_string(),
+            format!("[{}]", block_json("nomempoolsize")),
+        )]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(
+        !list.lines().any(|line| line == LINE),
+        "blocks list painted {LINE}: {list}"
+    );
+}
+
+/// Address heading when `GET /address/:addr/utxo` has more than two rows.
+///
+/// `address.component.html` paints the exact line `Unspent Outputs` above
+/// those rows. Two rows, an empty list, or a body that does not parse leaves
+/// the rows without that heading. This is not `Unspent TXOs`. The path has
+/// no query string and no fragment.
+#[test]
+fn address_screen_paints_unspent_outputs() {
+    const LINE: &str = "Unspent Outputs";
+    const ADDRESS: &str = "bc1qunspent";
+    const TXID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn one_utxo(vout: u32, value: u64) -> String {
+        format!(
+            r#"{{"txid":"{TXID}","vout":{vout},"status":{{"confirmed":true,"block_height":1}},"value":{value}}}"#
+        )
+    }
+
+    fn utxos_json(count: usize) -> String {
+        let rows: Vec<String> = (0..count)
+            .map(|index| one_utxo(index as u32, 1000 + index as u64))
+            .collect();
+        format!("[{}]", rows.join(","))
+    }
+
+    fn open(utxo_body: &str) -> (ScreenHost<Rec>, Rec) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{ADDRESS}"), address_stats(ADDRESS)),
+                (format!("/address/{ADDRESS}/txs"), "[]".to_string()),
+                (format!("/address/{ADDRESS}/utxo"), utxo_body.to_string()),
+            ]),
+        );
+        host.open_address(ADDRESS)
+            .unwrap_or_else(|err| panic!("address did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/address/{ADDRESS}/utxo")),
+            "did not GET /address/:addr/utxo: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (host, rec)
+    }
+
+    let (host, _) = open(&utxos_json(3));
+    let three = painted(&host);
+    assert!(
+        three.lines().any(|line| line == LINE),
+        "{LINE} is absent: {three}"
+    );
+    assert_eq!(
+        three.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {three}"
+    );
+    let lines: Vec<&str> = three.lines().collect();
+    let heading_at = lines
+        .iter()
+        .position(|line| *line == LINE)
+        .expect("heading");
+    let first_utxo = lines
+        .iter()
+        .position(|line| line.contains("value 1000"))
+        .expect("the first raw value was dropped");
+    assert!(
+        heading_at < first_utxo,
+        "{LINE} was not above the utxo rows: {three}"
+    );
+    assert!(
+        three.contains("value 1002"),
+        "the third raw value was dropped: {three}"
+    );
+
+    let (host, _) = open(&utxos_json(2));
+    let two = painted(&host);
+    assert!(
+        !two.lines().any(|line| line == LINE),
+        "two utxos painted {LINE}: {two}"
+    );
+    assert!(
+        two.contains("value 1001"),
+        "the two-row value was dropped: {two}"
+    );
+
+    let (host, _) = open("[]");
+    let empty = painted(&host);
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty utxo list painted {LINE}: {empty}"
+    );
+    assert!(
+        empty.contains("The utxo list is empty."),
+        "the empty utxo list was dropped: {empty}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/address/{ADDRESS}"), address_stats(ADDRESS)),
+            (format!("/address/{ADDRESS}/txs"), "[]".to_string()),
+            (format!("/address/{ADDRESS}/utxo"), "not-json".to_string()),
+        ]),
+    );
+    let err = host
+        .open_address(ADDRESS)
+        .expect_err("an unparsed utxo body must fail");
+    assert!(
+        !err.to_string().contains(LINE),
+        "the parse error invented {LINE}: {err}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{ADDRESS}/utxo")),
+        "did not GET /address/:addr/utxo: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let unparsed = painted(&host);
+    assert!(
+        !unparsed.lines().any(|line| line == LINE),
+        "an unparsed body painted {LINE}: {unparsed}"
+    );
+}
+
+/// Heading from no-query `GET /blocks` on the dashboard.
+///
+/// `dashboard.component.html` paints `Recent Blocks` above the latest blocks.
+/// A line equal to `Recent Blocks` passes. A longer line that contains those
+/// words does not. An empty list does not paint the heading. A body that
+/// does not parse does not. The blocks list screen does not. Liquid still
+/// paints the heading. The request path has no query string and no fragment.
+/// This is not a clock and not the blocks-list heading `Blocks`.
+#[test]
+fn dashboard_screen_paints_recent_blocks() {
+    const LINE: &str = "Recent Blocks";
+    const ID: &str = "recentblk1";
+
+    fn bodies(blocks: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/blocks".to_string(), blocks.to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/blocks"),
+            "did not GET /blocks: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    let blocks = format!("[{}]", block_json(ID));
+    let (mut host, rec) = host_with(Network::Mainnet, bodies(&blocks));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    let text = painted(&host);
+    let summary = format!("block hash {ID}");
+    assert!(
+        text.contains(&summary),
+        "the block summary was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "{LINE} was painted inside a longer sentence: {text}"
+    );
+    assert_eq!(text.matches(LINE).count(), 1, "{LINE} was not once: {text}");
+    assert!(
+        !text.contains("Recent Blocks 1700000000"),
+        "{LINE} became a clock: {text}"
+    );
+    assert!(!text.contains("ago"), "{LINE} became a clock: {text}");
+    assert_ne!(LINE, "Blocks");
+    let lines: Vec<&str> = text.lines().collect();
+    let heading_at = lines.iter().position(|line| *line == LINE);
+    let summary_at = lines.iter().position(|line| line.contains(&summary));
+    assert!(
+        heading_at.is_some() && summary_at.is_some() && heading_at < summary_at,
+        "{LINE} was not above the block rows: {text}"
+    );
+    assert_paint_is_not_html(&text);
+
+    let (mut host, rec) = host_with(Network::Liquid, bodies(&blocks));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("liquid dashboard did not open: {err}"));
+    let liquid = painted(&host);
+    assert!(
+        liquid.contains(&summary),
+        "the liquid block summary was hidden: {liquid}"
+    );
+    assert!(
+        liquid.lines().any(|line| line == LINE),
+        "liquid omitted {LINE}: {liquid}"
+    );
+    assert_eq!(
+        liquid.lines().filter(|line| *line == LINE).count(),
+        1,
+        "liquid painted {LINE} more than once: {liquid}"
+    );
+
+    let (mut host, rec) = host_with(Network::Mainnet, bodies("[]"));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("empty dashboard did not open: {err}"));
+    let empty = painted(&host);
+    assert!(
+        empty.contains("blocks:"),
+        "empty list dropped the blocks marker: {empty}"
+    );
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty block list painted {LINE}: {empty}"
+    );
+
+    let (mut host, rec) = host_with(Network::Mainnet, bodies("not-json"));
+    let err = host
+        .activate(Screen::Dashboard)
+        .expect_err("an unparsed block list must fail");
+    assert!(
+        !err.to_string().contains(LINE),
+        "the parse error invented {LINE}: {err}"
+    );
+    assert_no_query(&rec.gets());
+    let unparsed = painted(&host);
+    assert!(
+        !unparsed.lines().any(|line| line == LINE),
+        "an unparsed body painted {LINE}: {unparsed}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(
+        !list.lines().any(|line| line == LINE),
+        "blocks list painted {LINE}: {list}"
+    );
+    assert!(
+        list.lines().any(|line| line == "Blocks"),
+        "blocks list dropped Blocks: {list}"
+    );
+}
+
+/// Column from no-query `GET /blocks` on the dashboard.
+///
+/// `dashboard.component.html` paints `Mined` beside `block.timestamp`.
+/// A line equal to `Mined` passes. A longer line that contains that word
+/// does not. An empty list does not paint it. A body that does not parse
+/// does not. The blocks list screen does not. Liquid still paints it.
+/// The request path has no query string and no fragment. This is not a
+/// clock and not the blocks-list label `Timestamp`. The raw timestamp stays.
+#[test]
+fn dashboard_screen_paints_mined() {
+    const LINE: &str = "Mined";
+    const ID: &str = "minedblk1";
+    const SECOND: &str = "minedblk2";
+    const TIMESTAMP: &str = "1700000000";
+    const LATER: &str = "1699990000";
+
+    fn bodies(blocks: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("/blocks".to_string(), blocks.to_string()),
+            ("/blocks/tip/height".to_string(), "1".to_string()),
+            ("/blocks/tip/hash".to_string(), "abc".to_string()),
+            ("/fee-estimates".to_string(), "{}".to_string()),
+            (
+                "/mempool".to_string(),
+                r#"{"count":1,"vsize":9,"total_fee":1,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ])
+    }
+
+    fn assert_no_query(paths: &[String]) {
+        assert!(
+            paths.iter().any(|path| path == "/blocks"),
+            "did not GET /blocks: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+    }
+
+    fn assert_mined_beside_timestamp(text: &str, id: &str) {
+        assert!(
+            text.lines().any(|line| line == LINE),
+            "{LINE} is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == LINE).count(),
+            1,
+            "{LINE} was not painted once: {text}"
+        );
+        assert!(
+            text.lines()
+                .filter(|line| line.contains(LINE))
+                .all(|line| line == LINE),
+            "{LINE} was painted inside a longer sentence: {text}"
+        );
+        assert_eq!(text.matches(LINE).count(), 1, "{LINE} was not once: {text}");
+        assert!(
+            !text.contains(&format!("{LINE} {TIMESTAMP}"))
+                && !text.contains(&format!("{LINE} {LATER}"))
+                && !text.contains("ago"),
+            "{LINE} became a clock: {text}"
+        );
+        assert!(
+            text.contains(&format!("timestamp {TIMESTAMP}")),
+            "the raw timestamp was dropped: {text}"
+        );
+        assert!(
+            text.contains(&format!("timestamp {LATER}")),
+            "the second raw timestamp was dropped: {text}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let mined_at = lines.iter().position(|line| *line == LINE);
+        let stamp_at = lines.iter().position(|line| {
+            line.contains(&format!("block hash {id}"))
+                && line.contains(&format!("timestamp {TIMESTAMP}"))
+        });
+        assert!(
+            mined_at.is_some() && stamp_at.is_some() && mined_at.unwrap() + 1 == stamp_at.unwrap(),
+            "{LINE} was not beside the raw timestamp: {text}"
+        );
+        assert_paint_is_not_html(text);
+    }
+
+    let second = block_json(SECOND).replacen(
+        &format!("\"timestamp\":{TIMESTAMP}"),
+        &format!("\"timestamp\":{LATER}"),
+        1,
+    );
+    let blocks = format!("[{},{}]", block_json(ID), second);
+    let (mut host, rec) = host_with(Network::Mainnet, bodies(&blocks));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("dashboard did not open: {err}"));
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == "Recent Blocks"),
+        "Recent Blocks was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Size"),
+        "Size was dropped: {text}"
+    );
+    assert_mined_beside_timestamp(&text, ID);
+    let lines: Vec<&str> = text.lines().collect();
+    let recent_at = lines.iter().position(|line| *line == "Recent Blocks");
+    let size_at = lines.iter().position(|line| *line == "Size");
+    let mined_at = lines.iter().position(|line| *line == LINE);
+    assert!(
+        recent_at.is_some()
+            && size_at.is_some()
+            && mined_at.is_some()
+            && recent_at < size_at
+            && size_at < mined_at,
+        "Mined was not after Recent Blocks and Size: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Timestamp"),
+        "Mined became the Timestamp label: {text}"
+    );
+
+    let (mut host, rec) = host_with(Network::Liquid, bodies(&blocks));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("liquid dashboard did not open: {err}"));
+    let liquid = painted(&host);
+    assert_mined_beside_timestamp(&liquid, ID);
+    assert!(
+        liquid.lines().any(|line| line == "Recent Blocks"),
+        "liquid dropped Recent Blocks: {liquid}"
+    );
+
+    let (mut host, rec) = host_with(Network::Mainnet, bodies("[]"));
+    let opened = host.activate(Screen::Dashboard);
+    assert_no_query(&rec.gets());
+    opened.unwrap_or_else(|err| panic!("empty dashboard did not open: {err}"));
+    let empty = painted(&host);
+    assert!(
+        empty.contains("blocks:"),
+        "empty list dropped the blocks marker: {empty}"
+    );
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty block list painted {LINE}: {empty}"
+    );
+
+    let (mut host, rec) = host_with(Network::Mainnet, bodies("not-json"));
+    let err = host
+        .activate(Screen::Dashboard)
+        .expect_err("an unparsed block list must fail");
+    assert!(
+        !err.to_string().contains(LINE),
+        "the parse error invented {LINE}: {err}"
+    );
+    assert_no_query(&rec.gets());
+    let unparsed = painted(&host);
+    assert!(
+        !unparsed.lines().any(|line| line == LINE),
+        "an unparsed body painted {LINE}: {unparsed}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([("/blocks".to_string(), blocks)]),
+    );
+    host.activate(Screen::Blocks)
+        .unwrap_or_else(|err| panic!("blocks list did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == "/blocks"),
+        "list did not GET /blocks: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let list = painted(&host);
+    assert!(
+        list.contains(&format!("block hash {ID}")),
+        "blocks list dropped the row: {list}"
+    );
+    assert!(
+        list.contains(&format!("timestamp {TIMESTAMP}")),
+        "blocks list dropped the raw timestamp: {list}"
+    );
+    assert!(
+        !list.lines().any(|line| line == LINE),
+        "blocks list painted {LINE}: {list}"
+    );
+    assert!(!list.contains(LINE), "blocks list gained {LINE}: {list}");
+}
+
+/// Details word from a no-query `GET /tx/:txid`.
+///
+/// Angular paints the exact word `data` on an `op_return` output.
+/// A non-`op_return` output does not. An input prevout does not.
+/// A script that starts with `6a5d` still paints `data` and keeps `Runestone`.
+/// Script hex and script asm stay off. This is not `OP_RETURN`.
+#[test]
+fn transaction_screen_paints_op_return_data() {
+    const LINE: &str = "data";
+    const SCRIPT: &str = "ZZPAYLOADHEXZZ";
+    const ASM: &str = "ZZPAYLOADASMZZ";
+    const STONE: &str = "6a5d0614c0a2331441ee";
+    const TXID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PREV: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn vout(script: &str, asm: &str, kind: &str) -> String {
+        format!(
+            r#"{{"scriptpubkey":"{script}","scriptpubkey_asm":"{asm}","scriptpubkey_type":"{kind}","value":0}}"#
+        )
+    }
+
+    fn paint(vin_json: &str, vout_json: &str) -> String {
+        let body = format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{vin_json}],"vout":[{vout_json}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{TXID}"), body)]),
+        );
+        host.open_transaction(TXID)
+            .unwrap_or_else(|err| panic!("tx did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{TXID}")),
+            "did not GET /tx/:txid: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn empty_vin() -> String {
+        format!(
+            r#"{{"txid":"{PREV}","vout":0,"prevout":null,"scriptsig":"SIGHEXZZ","scriptsig_asm":"SIGASMZZ","is_coinbase":false,"sequence":1}}"#
+        )
+    }
+
+    let text = paint(&empty_vin(), &vout(SCRIPT, ASM, "op_return"));
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    let op_at = lines.iter().position(|line| *line == "OP_RETURN");
+    let data_at = lines.iter().position(|line| *line == LINE);
+    assert!(
+        op_at.is_some() && data_at.is_some() && op_at < data_at,
+        "{LINE} was not after OP_RETURN: {text}"
+    );
+    assert!(!text.contains(SCRIPT), "script hex was painted: {text}");
+    assert!(!text.contains(ASM), "script asm was painted: {text}");
+    assert!(
+        !text.contains("SIGHEXZZ"),
+        "scriptsig hex was painted: {text}"
+    );
+    assert!(
+        !text.contains("SIGASMZZ"),
+        "scriptsig asm was painted: {text}"
+    );
+
+    let stone = paint(&empty_vin(), &vout(STONE, ASM, "op_return"));
+    assert_eq!(
+        stone.lines().filter(|line| *line == LINE).count(),
+        1,
+        "a runestone output did not paint {LINE} once: {stone}"
+    );
+    assert!(
+        stone.lines().any(|line| line == "Runestone"),
+        "Runestone was dropped: {stone}"
+    );
+    let stone_lines: Vec<&str> = stone.lines().collect();
+    let rune_at = stone_lines.iter().position(|line| *line == "Runestone");
+    let stone_data = stone_lines.iter().position(|line| *line == LINE);
+    assert!(
+        rune_at.is_some() && stone_data.is_some() && rune_at < stone_data,
+        "{LINE} was not after Runestone: {stone}"
+    );
+    assert!(
+        !stone.contains(STONE),
+        "runestone script hex was painted: {stone}"
+    );
+    assert!(
+        !stone.contains(ASM),
+        "runestone script asm was painted: {stone}"
+    );
+
+    let other = paint(&empty_vin(), &vout(SCRIPT, ASM, "p2pkh"));
+    assert!(
+        !other.lines().any(|line| line == LINE),
+        "a p2pkh output painted {LINE}: {other}"
+    );
+    assert!(
+        other.lines().any(|line| line == "Type P2PKH"),
+        "Type P2PKH was dropped: {other}"
+    );
+    assert!(
+        !other.contains(SCRIPT),
+        "p2pkh script hex was painted: {other}"
+    );
+    assert!(
+        !other.contains(ASM),
+        "p2pkh script asm was painted: {other}"
+    );
+
+    let prevout = vout(SCRIPT, ASM, "op_return");
+    let fee_input = format!(
+        r#"{{"txid":"{PREV}","vout":0,"prevout":{prevout},"scriptsig":"SIGHEXZZ","scriptsig_asm":"SIGASMZZ","is_coinbase":false,"sequence":1}}"#
+    );
+    let input_only = paint(&fee_input, &vout("0014aa", "OUTASMZZ", "p2pkh"));
+    assert!(
+        !input_only.lines().any(|line| line == LINE),
+        "an input prevout painted {LINE}: {input_only}"
+    );
+    assert!(
+        input_only
+            .lines()
+            .any(|line| line == "Previous output type OP_RETURN"),
+        "Previous output type OP_RETURN was dropped: {input_only}"
+    );
+    assert!(
+        !input_only.contains(SCRIPT),
+        "input script hex was painted: {input_only}"
+    );
+    assert!(
+        !input_only.contains("OUTASMZZ"),
+        "output asm was painted: {input_only}"
+    );
+}
+
+/// Empty address transactions and empty mempool recent paint one exact line.
+///
+/// The Leptos page paints `There are no transactions.` when `GET /address/:addr/txs`
+/// or `GET /mempool/recent` is an empty array, including whitespace inside the
+/// brackets. A loaded transaction, a recent row, and an empty block transaction
+/// list do not. `The address transaction list is empty.` stays. The block list
+/// keeps `The transaction list is empty.` and does not gain this sentence.
+#[test]
+fn screen_paints_there_are_no_transactions() {
+    const SENTENCE: &str = "There are no transactions.";
+    const ADDR: &str = "bc1qnotransactions";
+    const ONE: &str = r#"{"txid":"addrconfirmed","version":1,"locktime":0,"vin":[],"vout":[],"size":10,"weight":40,"sigops":0,"fee":1,"status":{"confirmed":true,"block_height":3}}"#;
+    const RECENT: &str = r#"[{"txid":"recent-one","fee":10,"vsize":141,"value":1}]"#;
+
+    fn assert_once(text: &str) {
+        assert!(
+            text.lines().any(|line| line == SENTENCE),
+            "{SENTENCE} is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == SENTENCE).count(),
+            1,
+            "{SENTENCE} was not painted once: {text}"
+        );
+    }
+
+    fn assert_absent(text: &str) {
+        assert!(
+            !text.lines().any(|line| line == SENTENCE),
+            "{SENTENCE} was painted: {text}"
+        );
+    }
+
+    fn open_address_txs(txs: &str) -> (ScreenHost<Rec>, Rec) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{ADDR}"), address_stats(ADDR)),
+                (format!("/address/{ADDR}/txs"), txs.to_string()),
+                (format!("/address/{ADDR}/utxo"), "[]".to_string()),
+            ]),
+        );
+        host.open_address(ADDR)
+            .unwrap_or_else(|err| panic!("address did not open for {txs:?}: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/address/{ADDR}/txs")),
+            "did not GET /address/:addr/txs: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (host, rec)
+    }
+
+    let (empty, _) = open_address_txs("[]");
+    let empty_text = painted(&empty);
+    assert_once(&empty_text);
+    assert!(
+        empty_text
+            .lines()
+            .any(|line| line == "The address transaction list is empty."),
+        "The address transaction list is empty. was dropped: {empty_text}"
+    );
+
+    let (spaced, _) = open_address_txs(" [ ] ");
+    assert_once(&painted(&spaced));
+
+    let (loaded, _) = open_address_txs(&format!("[{ONE}]"));
+    let loaded_text = painted(&loaded);
+    assert_absent(&loaded_text);
+    assert!(
+        loaded_text.contains("addrconfirmed"),
+        "the loaded transaction was dropped: {loaded_text}"
+    );
+
+    let (mut broken, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/address/{ADDR}"), address_stats(ADDR)),
+            (format!("/address/{ADDR}/txs"), "not-json".to_string()),
+            (format!("/address/{ADDR}/utxo"), "[]".to_string()),
+        ]),
+    );
+    assert!(
+        broken.open_address(ADDR).is_err(),
+        "unparsed address transactions opened"
+    );
+    assert_absent(&painted(&broken));
+
+    let (mut recent_empty, recent_rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[]".to_string()),
+        ]),
+    );
+    recent_empty
+        .activate(Screen::Mempool)
+        .expect("empty recent");
+    let recent_paths = recent_rec.gets();
+    assert!(
+        recent_paths.iter().any(|path| path == "/mempool/recent"),
+        "did not GET /mempool/recent: {recent_paths:?}"
+    );
+    assert!(
+        recent_paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{recent_paths:?}"
+    );
+    let recent_text = painted(&recent_empty);
+    assert_once(&recent_text);
+    assert!(
+        recent_text.lines().any(|line| line == "recent:"),
+        "recent: was dropped: {recent_text}"
+    );
+
+    let (mut recent_spaced, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                "/mempool".to_string(),
+                r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), "[\n]".to_string()),
+        ]),
+    );
+    recent_spaced
+        .activate(Screen::Mempool)
+        .expect("spaced recent");
+    assert_once(&painted(&recent_spaced));
+
+    let (mut recent_one, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (
+                "/mempool".to_string(),
+                r#"{"count":1,"vsize":141,"total_fee":10,"fee_histogram":[]}"#.to_string(),
+            ),
+            ("/mempool/recent".to_string(), RECENT.to_string()),
+        ]),
+    );
+    recent_one.activate(Screen::Mempool).expect("one recent");
+    let one_text = painted(&recent_one);
+    assert_absent(&one_text);
+    assert!(
+        one_text.contains("recent txid recent-one"),
+        "the recent row was dropped: {one_text}"
+    );
+
+    let hash = "emptyblocktxs";
+    let (mut block, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{hash}"), block_json(hash)),
+            (format!("/block/{hash}/txs"), "[]".to_string()),
+            (format!("/block/{hash}/txids"), "[]".to_string()),
+        ]),
+    );
+    block.open_block(hash).expect("block");
+    let block_text = painted(&block);
+    assert_absent(&block_text);
+    assert!(
+        block_text
+            .lines()
+            .any(|line| line == "The transaction list is empty."),
+        "The transaction list is empty. was dropped: {block_text}"
+    );
+}
+
+/// Empty address and scripthash utxo lists paint one exact line.
+///
+/// The Leptos page paints `There are no unspent outputs.` when
+/// `GET /address/:addr/utxo` or `GET /scripthash/:hash/utxo` is an empty
+/// array, including whitespace inside the brackets. A loaded utxo, a blank
+/// body, and invalid JSON do not. `The utxo list is empty.` stays on the
+/// next line. `Unspent Outputs` stays off an empty list.
+#[test]
+fn address_screen_paints_there_are_no_unspent_outputs() {
+    const SENTENCE: &str = "There are no unspent outputs.";
+    const NEXT: &str = "The utxo list is empty.";
+    const ADDR: &str = "bc1qnounspent";
+    const HASH: &str = "abababababababababababababababababababababababababababababababab";
+    const ONE: &str = r#"[{"txid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vout":0,"value":1,"status":{"confirmed":true,"block_height":1}}]"#;
+
+    fn assert_once(text: &str) {
+        assert!(
+            text.lines().any(|line| line == SENTENCE),
+            "{SENTENCE} is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == SENTENCE).count(),
+            1,
+            "{SENTENCE} was not painted once: {text}"
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let sentence_at = lines
+            .iter()
+            .position(|line| *line == SENTENCE)
+            .expect("sentence");
+        let next_at = lines
+            .iter()
+            .position(|line| *line == NEXT)
+            .unwrap_or_else(|| panic!("{NEXT} was dropped: {text}"));
+        assert_eq!(
+            sentence_at + 1,
+            next_at,
+            "{SENTENCE} does not come immediately before {NEXT}: {text}"
+        );
+        assert!(
+            !lines.iter().any(|line| *line == "Unspent Outputs"),
+            "an empty utxo list painted Unspent Outputs: {text}"
+        );
+    }
+
+    fn assert_absent(text: &str) {
+        assert!(
+            !text.lines().any(|line| line == SENTENCE),
+            "{SENTENCE} was painted: {text}"
+        );
+    }
+
+    fn open_utxo(script: &str, stats: String, utxo: &str) -> String {
+        let prefix = if script.len() == 64 {
+            "scripthash"
+        } else {
+            "address"
+        };
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/{prefix}/{script}"), stats),
+                (format!("/{prefix}/{script}/txs"), "[]".to_string()),
+                (format!("/{prefix}/{script}/utxo"), utxo.to_string()),
+            ]),
+        );
+        host.open_address(script)
+            .unwrap_or_else(|err| panic!("{prefix} did not open for {utxo:?}: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/{prefix}/{script}/utxo")),
+            "did not GET /{prefix}/:script/utxo: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        painted(&host)
+    }
+
+    assert_once(&open_utxo(ADDR, address_stats(ADDR), "[]"));
+    assert_once(&open_utxo(ADDR, address_stats(ADDR), " [ ] "));
+    assert_once(&open_utxo(HASH, loaded_scripthash_stats(HASH, 1, 0), "[]"));
+
+    let loaded = open_utxo(ADDR, address_stats(ADDR), ONE);
+    assert_absent(&loaded);
+    assert!(
+        loaded.contains("value 1"),
+        "the loaded utxo was dropped: {loaded}"
+    );
+    assert_absent(&open_utxo(HASH, loaded_scripthash_stats(HASH, 1, 0), ONE));
+
+    let (mut broken, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/address/{ADDR}"), address_stats(ADDR)),
+            (format!("/address/{ADDR}/txs"), "[]".to_string()),
+            (format!("/address/{ADDR}/utxo"), "not-json".to_string()),
+        ]),
+    );
+    assert!(broken.open_address(ADDR).is_err(), "unparsed utxos opened");
+    assert_absent(&painted(&broken));
+
+    let (mut blank, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/address/{ADDR}"), address_stats(ADDR)),
+            (format!("/address/{ADDR}/txs"), "[]".to_string()),
+            (format!("/address/{ADDR}/utxo"), String::new()),
+        ]),
+    );
+    assert!(
+        blank.open_address(ADDR).is_err(),
+        "a blank utxo body opened"
+    );
+    assert_absent(&painted(&blank));
+
+    let hash = "emptyblockutxo";
+    let (mut block, _) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/block/{hash}"), block_json(hash)),
+            (format!("/block/{hash}/txs"), "[]".to_string()),
+            (format!("/block/{hash}/txids"), "[]".to_string()),
+        ]),
+    );
+    block.open_block(hash).expect("block");
+    assert_absent(&painted(&block));
+}
+
+/// Empty address-prefix lists paint one exact line.
+///
+/// The Leptos page paints `There are no addresses.` when
+/// `GET /address-prefix/:prefix` is an empty JSON array, including
+/// whitespace inside the brackets. A listed address, an array of blank
+/// strings, a disabled search, and a body that does not parse do not.
+#[test]
+fn dashboard_search_paints_there_are_no_addresses() {
+    const SENTENCE: &str = "There are no addresses.";
+    const PREFIX: &str = "xyz";
+    const PATH: &str = "/address-prefix/xyz";
+    const MATCH: &str = "bc1qexample";
+
+    fn assert_once(text: &str) {
+        assert!(
+            text.lines().any(|line| line == SENTENCE),
+            "{SENTENCE} is absent: {text}"
+        );
+        assert_eq!(
+            text.lines().filter(|line| *line == SENTENCE).count(),
+            1,
+            "{SENTENCE} was not painted once: {text}"
+        );
+    }
+
+    fn assert_absent(text: &str) {
+        assert!(
+            !text.lines().any(|line| line == SENTENCE),
+            "{SENTENCE} was painted: {text}"
+        );
+    }
+
+    fn search_prefix(body: &str) -> (Result<(), ClientError>, String, Vec<String>) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(PATH.to_string(), body.to_string())]),
+        );
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.set_query(PREFIX);
+        let opened = host.reload();
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == PATH),
+            "did not GET /address-prefix/:prefix: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (opened, painted(&host), paths)
+    }
+
+    let (opened, empty, _) = search_prefix("[]");
+    opened.expect("empty address list");
+    assert_once(&empty);
+    assert!(
+        empty.lines().all(|line| line != MATCH),
+        "an empty list painted an address: {empty}"
+    );
+
+    let (opened, spaced, _) = search_prefix(" [ ] ");
+    opened.expect("whitespace inside empty brackets");
+    assert_once(&spaced);
+
+    let (opened, listed, _) = search_prefix(&format!(r#"["{MATCH}"]"#));
+    opened.expect("one address");
+    assert_absent(&listed);
+    assert!(
+        listed.contains(MATCH),
+        "the listed address was dropped: {listed}"
+    );
+
+    let (opened, blanks, _) = search_prefix(r#"["", ""]"#);
+    opened.expect("blank address strings");
+    assert_absent(&blanks);
+
+    let (opened, disabled, _) = search_prefix("address search disabled");
+    opened.expect("disabled address search");
+    assert_absent(&disabled);
+    assert!(
+        disabled.contains("address search disabled"),
+        "the disabled sentence was dropped: {disabled}"
+    );
+
+    let (opened, broken, _) = search_prefix("not-json");
+    assert!(opened.is_err(), "unparsed prefix JSON opened");
+    assert_absent(&broken);
+}
+
+/// Blinded asset supply paints the indexer sentence.
+///
+/// The Leptos page paints `Asset supply is blinded` when
+/// `GET /asset/:asset/supply` is that sentence. A plain integer supply
+/// does not. The route has no query string.
+#[test]
+fn asset_screen_paints_asset_supply_is_blinded() {
+    const SENTENCE: &str = "Asset supply is blinded";
+    let asset = "ab".repeat(32);
+    let document = format!(
+        r#"{{"asset_id":"{asset}","name":"Tether USD","ticker":"USDt","precision":8,"status":{{"confirmed":true}}}}"#
+    );
+
+    fn open_asset(
+        asset: &str,
+        document: &str,
+        supply: Option<&str>,
+    ) -> (Result<(), ClientError>, String, Vec<String>) {
+        let mut bodies = BTreeMap::from([
+            (format!("/tx/{asset}"), "Transaction not found".to_string()),
+            (format!("/block/{asset}"), "Block not found".to_string()),
+            (format!("/asset/{asset}"), document.to_string()),
+            (format!("/asset/{asset}/txs"), "[]".to_string()),
+            (format!("/asset/{asset}/txs/chain"), "[]".to_string()),
+            (format!("/asset/{asset}/txs/mempool"), "[]".to_string()),
+        ]);
+        if let Some(supply) = supply {
+            bodies.insert(format!("/asset/{asset}/supply"), supply.to_string());
+        }
+        let (mut host, rec) = host_with(Network::Liquid, bodies);
+        host.activate(Screen::Dashboard).expect("dashboard");
+        host.set_query(asset);
+        let opened = host.reload();
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/asset/{asset}/supply")),
+            "did not GET /asset/:asset/supply: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (opened, painted(&host), paths)
+    }
+
+    let (opened, blinded, paths) = open_asset(&asset, &document, Some(SENTENCE));
+    opened.expect("blinded supply");
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/asset/{asset}/supply")),
+        "did not GET /asset/:asset/supply: {paths:?}"
+    );
+    assert!(
+        blinded.lines().any(|line| line == SENTENCE),
+        "{SENTENCE} is absent: {blinded}"
+    );
+    assert_eq!(
+        blinded.lines().filter(|line| *line == SENTENCE).count(),
+        1,
+        "{SENTENCE} was not painted once: {blinded}"
+    );
+
+    let (opened, integer, _) = open_asset(&asset, &document, Some("21000000"));
+    opened.expect("integer supply");
+    assert!(
+        integer.lines().any(|line| line == "21000000"),
+        "the integer supply was dropped: {integer}"
+    );
+    assert!(
+        !integer.lines().any(|line| line == SENTENCE),
+        "{SENTENCE} was painted for an integer supply: {integer}"
+    );
+
+    let (opened, missing, _) = open_asset(&asset, &document, None);
+    opened.expect("missing supply");
+    assert!(
+        !missing.lines().any(|line| line == SENTENCE),
+        "{SENTENCE} was painted when supply was missing: {missing}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/asset/{asset}/supply"), SENTENCE.to_string())]),
+    );
+    host.activate(Screen::Dashboard).expect("mainnet dashboard");
+    host.set_query(&asset);
+    let _ = host.reload();
+    let main_paths = rec.gets();
+    assert!(
+        main_paths.iter().all(|path| !path.contains("/asset/")),
+        "mainnet requested the asset supply route: {main_paths:?}"
+    );
+    assert!(
+        !painted(&host).lines().any(|line| line == SENTENCE),
+        "{SENTENCE} was painted on mainnet: {}",
+        painted(&host)
+    );
+}
+
+/// Spent outspend paints `spent true` from `GET /tx/:txid/outspends`.
+///
+/// The Leptos page paints that exact text when `spent` is true. An unspent
+/// output stays `spent false` and does not paint this line. The path has no
+/// query string.
+#[test]
+fn transaction_screen_paints_spent_true() {
+    const LINE: &str = "spent true";
+    const TXID: &str = "spenttrue";
+    const SPEND: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    fn open_spends(spends: &str) -> (String, Vec<String>) {
+        let tx = format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qout","value":9}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":true}}}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/tx/{TXID}"), tx),
+                (format!("/tx/{TXID}/outspends"), spends.to_string()),
+            ]),
+        );
+        host.open_transaction(TXID).expect("tx");
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/tx/{TXID}/outspends")),
+            "did not GET /tx/:txid/outspends: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (painted(&host), paths)
+    }
+
+    let spent =
+        format!(r#"[{{"spent":true,"txid":"{SPEND}","vin":1,"status":{{"confirmed":true}}}}]"#);
+    let (text, _) = open_spends(&spent);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line == format!("spend txid {SPEND}")),
+        "the spending txid was dropped: {text}"
+    );
+
+    let (unspent, _) = open_spends(r#"[{"spent":false}]"#);
+    assert!(
+        unspent.lines().any(|line| line == "spent false"),
+        "spent false is absent: {unspent}"
+    );
+    assert!(
+        !unspent.lines().any(|line| line == LINE),
+        "{LINE} was painted for an unspent output: {unspent}"
+    );
+}
+
+/// Address heading when `GET /address/:addr/txs` has more than two rows.
+///
+/// `address.component.html` paints the exact line `Balance History` above
+/// those rows. Two rows, an empty list, or a body that does not parse leaves
+/// the rows without that heading. The path has no query string and no fragment.
+#[test]
+fn address_screen_paints_balance_history() {
+    const LINE: &str = "Balance History";
+    const ADDRESS: &str = "bc1qbalancehistory";
+
+    fn one_tx(index: u64) -> String {
+        let txid = format!("{:064x}", index + 1);
+        let fee = index + 1;
+        format!(
+            r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[],"vout":[],"size":10,"weight":40,"sigops":0,"fee":{fee},"status":{{"confirmed":true,"block_height":2}}}}"#
+        )
+    }
+
+    fn txs_json(count: usize) -> String {
+        let rows: Vec<String> = (0..count as u64).map(one_tx).collect();
+        format!("[{}]", rows.join(","))
+    }
+
+    fn open(txs_body: &str) -> (ScreenHost<Rec>, Rec) {
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/address/{ADDRESS}"), address_stats(ADDRESS)),
+                (format!("/address/{ADDRESS}/txs"), txs_body.to_string()),
+                (format!("/address/{ADDRESS}/utxo"), "[]".to_string()),
+            ]),
+        );
+        host.open_address(ADDRESS)
+            .unwrap_or_else(|err| panic!("address did not open: {err}"));
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/address/{ADDRESS}/txs")),
+            "did not GET /address/:addr/txs: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        (host, rec)
+    }
+
+    let (host, _) = open(&txs_json(3));
+    let three = painted(&host);
+    assert!(
+        three.lines().any(|line| line == LINE),
+        "{LINE} is absent: {three}"
+    );
+    assert_eq!(
+        three.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {three}"
+    );
+    let lines: Vec<&str> = three.lines().collect();
+    let heading_at = lines
+        .iter()
+        .position(|line| *line == LINE)
+        .expect("heading");
+    let first_fee = lines
+        .iter()
+        .position(|line| line.contains("fee 1"))
+        .expect("the first raw fee was dropped");
+    assert!(
+        heading_at < first_fee,
+        "{LINE} was not above the transaction rows: {three}"
+    );
+    assert!(
+        three.contains("fee 3"),
+        "the third raw fee was dropped: {three}"
+    );
+
+    let (host, _) = open(&txs_json(2));
+    let two = painted(&host);
+    assert!(
+        !two.lines().any(|line| line == LINE),
+        "two transactions painted {LINE}: {two}"
+    );
+    assert!(two.contains("fee 2"), "the two-row fee was dropped: {two}");
+
+    let (host, _) = open("[]");
+    let empty = painted(&host);
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty transaction list painted {LINE}: {empty}"
+    );
+
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([
+            (format!("/address/{ADDRESS}"), address_stats(ADDRESS)),
+            (format!("/address/{ADDRESS}/txs"), "not-json".to_string()),
+            (format!("/address/{ADDRESS}/utxo"), "[]".to_string()),
+        ]),
+    );
+    let err = host
+        .open_address(ADDRESS)
+        .expect_err("an unparsed transaction body must fail");
+    assert!(
+        !err.to_string().contains(LINE),
+        "the parse error invented {LINE}: {err}"
+    );
+    let paths = rec.gets();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path == &format!("/address/{ADDRESS}/txs")),
+        "did not GET /address/:addr/txs: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let unparsed = painted(&host);
+    assert!(
+        !unparsed.lines().any(|line| line == LINE),
+        "an unparsed body painted {LINE}: {unparsed}"
+    );
+}
+
+/// Spend input index from a no-query `GET /tx/:txid/outspends`.
+///
+/// The Leptos page paints `vin 1` when the spend includes `vin`. A spend
+/// with no `vin` does not invent `vin 0`. `spent true` and `spend txid` stay.
+#[test]
+fn transaction_screen_paints_vin() {
+    const LINE: &str = "vin 1";
+    const TXID: &str = "vinindex";
+    const SPEND: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    fn open_spends(spends: &str) -> String {
+        let tx = format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qout","value":9}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":true}}}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/tx/{TXID}"), tx),
+                (format!("/tx/{TXID}/outspends"), spends.to_string()),
+            ]),
+        );
+        host.open_transaction(TXID).expect("tx");
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/tx/{TXID}/outspends")),
+            "did not GET /tx/:txid/outspends: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        painted(&host)
+    }
+
+    let spent =
+        format!(r#"[{{"spent":true,"txid":"{SPEND}","vin":1,"status":{{"confirmed":true}}}}]"#);
+    let text = open_spends(&spent);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "spent true"),
+        "spent true was dropped: {text}"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line == format!("spend txid {SPEND}")),
+        "the spending txid was dropped: {text}"
+    );
+
+    let unspent = open_spends(r#"[{"spent":false}]"#);
+    assert!(
+        unspent.lines().any(|line| line == "spent false"),
+        "spent false is absent: {unspent}"
+    );
+    assert!(
+        !unspent.lines().any(|line| line.starts_with("vin ")),
+        "a spend with no vin invented a vin line: {unspent}"
+    );
+}
+
+/// `P2WSH witness script` from a no-query `GET /tx/:txid`.
+///
+/// The Leptos page paints that exact line when `inner_witnessscript_asm` is
+/// nonempty and the prevout is not `v1_p2tr`. A null prevout still paints it.
+/// A `v1_p2tr` prevout keeps `P2TR tapscript` and omits this line. A missing
+/// inner script omits it. An output whose type is `v0_p2wsh` does not paint
+/// it. The witness script asm, script hex, script asm, scriptsig, and witness
+/// stay off the line.
+#[test]
+fn transaction_screen_paints_p2wsh_witness_script() {
+    const LINE: &str = "P2WSH witness script";
+    const TXID: &str = "p2wshwitness";
+    const INNER: &str = "P2WSHWITNESSASMDEAD";
+    const PREV: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn prevout(kind: &str) -> String {
+        format!(
+            r#"{{"scriptpubkey":"P2WSHPUBHEXDEAD","scriptpubkey_asm":"P2WSHPUBASMDEAD","scriptpubkey_type":"{kind}"}}"#
+        )
+    }
+
+    fn open(prevout_json: &str, inner_field: &str, out_kind: &str) -> String {
+        let body = format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{{"txid":"{PREV}","vout":0,"prevout":{prevout_json},"scriptsig":"P2WSHSIGHEXDEAD","scriptsig_asm":"P2WSHSIGASMDEAD","witness":["P2WSHWITDEAD"],"is_coinbase":false,"sequence":1{inner_field}}}],"vout":[{{"scriptpubkey":"P2WSHOUTHEXDEAD","scriptpubkey_asm":"P2WSHOUTASMDEAD","scriptpubkey_type":"{out_kind}","value":1}}],"size":10,"weight":7,"sigops":0,"fee":1}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{TXID}"), body)]),
+        );
+        host.open_transaction(TXID).expect("tx");
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{TXID}")),
+            "did not GET /tx/:txid: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        painted(&host)
+    }
+
+    fn assert_secrets_stay_off(text: &str) {
+        for needle in [
+            INNER,
+            "P2WSHSIGHEXDEAD",
+            "P2WSHSIGASMDEAD",
+            "P2WSHWITDEAD",
+            "P2WSHPUBHEXDEAD",
+            "P2WSHPUBASMDEAD",
+            "P2WSHOUTHEXDEAD",
+            "P2WSHOUTASMDEAD",
+        ] {
+            assert!(!text.contains(needle), "{needle} leaked: {text}");
+        }
+    }
+
+    let present = open(
+        &prevout("v0_p2wsh"),
+        &format!(r#","inner_witnessscript_asm":"{INNER}""#),
+        "p2pkh",
+    );
+    assert!(
+        present.lines().any(|line| line == LINE),
+        "{LINE} is absent: {present}"
+    );
+    assert_eq!(
+        present.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {present}"
+    );
+    assert!(
+        !present.lines().any(|line| line == "P2TR tapscript"),
+        "a v0_p2wsh input painted P2TR tapscript: {present}"
+    );
+    assert_secrets_stay_off(&present);
+
+    let null_prevout = open(
+        "null",
+        &format!(r#","inner_witnessscript_asm":"{INNER}""#),
+        "p2pkh",
+    );
+    assert_eq!(
+        null_prevout.lines().filter(|line| *line == LINE).count(),
+        1,
+        "a null prevout did not paint {LINE} once: {null_prevout}"
+    );
+    assert_secrets_stay_off(&null_prevout);
+
+    let tapscript = open(
+        &prevout("v1_p2tr"),
+        &format!(r#","inner_witnessscript_asm":"{INNER}""#),
+        "p2pkh",
+    );
+    assert!(
+        tapscript.lines().any(|line| line == "P2TR tapscript"),
+        "P2TR tapscript was dropped: {tapscript}"
+    );
+    assert!(
+        !tapscript.lines().any(|line| line == LINE),
+        "a v1_p2tr prevout painted {LINE}: {tapscript}"
+    );
+    assert_secrets_stay_off(&tapscript);
+
+    let missing = open(&prevout("v0_p2wsh"), "", "p2pkh");
+    assert!(
+        !missing.lines().any(|line| line == LINE),
+        "a missing inner script painted {LINE}: {missing}"
+    );
+    assert_secrets_stay_off(&missing);
+
+    let output_only = open(&prevout("p2pkh"), "", "v0_p2wsh");
+    assert!(
+        !output_only.lines().any(|line| line == LINE),
+        "a v0_p2wsh output painted {LINE}: {output_only}"
+    );
+    assert_secrets_stay_off(&output_only);
+}
+
+/// Fee rate label from no-query `GET /tx/:txid`.
+///
+/// The transaction row paints `Fee rate` as its own line. A longer line that
+/// contains those words does not. Fee 584 and weight 572 are the served body.
+#[test]
+fn transaction_screen_paints_fee_rate_label() {
+    const LINE: &str = "Fee rate";
+    let text = paint_tx_fee_rate("feeratelabel", 584, r#""weight":572"#);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Fee rate is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Fee rate was not painted once: {text}"
+    );
+}
+
+/// Locktime label from no-query `GET /tx/:txid`.
+///
+/// The transaction row paints `Locktime` as its own line. A longer line that
+/// contains that word does not. Locktime 0 is the served body. The sentences
+/// `Locktime 0` and `Locktime 500000000` stay.
+#[test]
+fn transaction_screen_paints_locktime_label() {
+    const LINE: &str = "Locktime";
+    let text = paint_tx_locktime("locktimelabel", 0);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Locktime is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Locktime was not painted once: {text}"
+    );
+}
+
+/// Lowercase coinbase word from no-query `GET /tx/:txid`.
+///
+/// `is_coinbase` true paints `coinbase` as its own line. `Coinbase` and
+/// `input coinbase` stay. A longer line that contains the word does not.
+#[test]
+fn transaction_screen_paints_coinbase_word() {
+    const LINE: &str = "coinbase";
+    let text = paint_tx_input("coinbaseword", r#","is_coinbase":true,"sequence":0"#);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "coinbase is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "coinbase was not painted once: {text}"
+    );
+}
+
+/// Capitalized output total from no-query `GET /tx/:txid`.
+///
+/// Output values 100 and 50 paint `Output total 150` as its own line. The
+/// lowercase `output total` sentence stays. A longer line that contains
+/// those words does not.
+#[test]
+fn transaction_screen_paints_output_total_sentence() {
+    const LINE: &str = "Output total 150";
+    let text = paint_tx_outputs(
+        "outtotalsentence",
+        &format!(
+            "{},{}",
+            tx_output_value(Some(100), None),
+            tx_output_value(Some(50), None)
+        ),
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Output total 150 is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Output total 150 was not painted once: {text}"
+    );
+}
+
+/// Output type label from no-query `GET /tx/:txid`.
+///
+/// A nonempty `vout.scriptpubkey_type` paints `Type` as its own line.
+/// `Type V0_P2WPKH` stays. A longer line that contains the word does not.
+#[test]
+fn transaction_screen_paints_output_type_label() {
+    const LINE: &str = "Type";
+    let text = paint_tx_body(
+        "otypelabel",
+        &tx_with_parties("otypelabel", otype_input_null(), &otype_output("v0_p2wpkh")),
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "Type is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Type was not painted once: {text}"
+    );
+}
+
+/// Outspend confirmation from a no-query `GET /tx/:txid/outspends`.
+///
+/// `status.confirmed` true paints `confirmed true` as its own line. A longer
+/// line that contains those words does not. A missing status does not paint
+/// it. Block height, block hash, and block time stay off. `spent true` and
+/// `vin 1` stay.
+#[test]
+fn transaction_screen_paints_outspend_confirmed() {
+    const LINE: &str = "confirmed true";
+    const TXID: &str = "outspendconf";
+    const SPEND: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const BLOCK: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn open_spends(spends: &str) -> String {
+        let tx = format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qout","value":9}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([
+                (format!("/tx/{TXID}"), tx),
+                (format!("/tx/{TXID}/outspends"), spends.to_string()),
+            ]),
+        );
+        host.open_transaction(TXID).expect("tx");
+        let paths = rec.gets();
+        assert!(
+            paths
+                .iter()
+                .any(|path| path == &format!("/tx/{TXID}/outspends")),
+            "did not GET /tx/:txid/outspends: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        painted(&host)
+    }
+
+    let spent = format!(
+        r#"[{{"spent":true,"txid":"{SPEND}","vin":1,"status":{{"confirmed":true,"block_height":842001,"block_hash":"{BLOCK}","block_time":1600000001}}}}]"#
+    );
+    let text = open_spends(&spent);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(!text.contains(BLOCK), "block hash leaked: {text}");
+    assert!(!text.contains("842001"), "block height leaked: {text}");
+    assert!(!text.contains("1600000001"), "block time leaked: {text}");
+    assert!(
+        text.lines().any(|line| line == "spent true"),
+        "spent true was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "vin 1"),
+        "vin 1 was dropped: {text}"
+    );
+
+    let bare = open_spends(r#"[{"spent":false}]"#);
+    assert!(
+        !bare.lines().any(|line| line == LINE),
+        "a missing status painted {LINE}: {bare}"
+    );
+}
+
+/// Poison warning sentence from a no-query `GET /tx/:txid`.
+///
+/// Similar output addresses paint the Angular sentence as its own line.
+/// The shorter warning stays. One output does not paint the sentence.
+/// A longer line that contains part of the sentence does not.
+#[test]
+fn transaction_screen_paints_poison_attack_warning() {
+    const LINE: &str = "Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.";
+    const SHORT: &str = "Warning! This transaction involves deceptively similar addresses.";
+    const TXID: &str = "poisonwarn";
+
+    fn vout(address: &str, value: u64) -> String {
+        format!(
+            r#"{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"{address}","value":{value}}}"#
+        )
+    }
+
+    fn open(vout_json: &str) -> String {
+        let vin = r#"{"txid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","vout":0,"prevout":{"scriptpubkey":"0014bb","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qunrelated","value":8},"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":4294967295}"#;
+        let body = format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{vin}],"vout":[{vout_json}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+        );
+        let (mut host, rec) = host_with(
+            Network::Mainnet,
+            BTreeMap::from([(format!("/tx/{TXID}"), body)]),
+        );
+        host.open_transaction(TXID).expect("tx");
+        let paths = rec.gets();
+        assert!(
+            paths.iter().any(|path| path == &format!("/tx/{TXID}")),
+            "did not GET /tx/:txid: {paths:?}"
+        );
+        assert!(
+            paths
+                .iter()
+                .all(|path| !path.contains('?') && !path.contains('#')),
+            "{paths:?}"
+        );
+        painted(&host)
+    }
+
+    let pair = format!("{},{}", vout("bc1qlookaaa", 3), vout("bc1qlookXY", 4));
+    let text = open(&pair);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == SHORT),
+        "the shorter warning was dropped: {text}"
+    );
+
+    let alone = open(&vout("bc1qonlyone", 3));
+    assert!(
+        !alone.lines().any(|line| line == LINE),
+        "one output painted {LINE}: {alone}"
+    );
+}
+
+/// Combined balance from no-query `GET /address/:address`.
+///
+/// The four sums paint `Balance 4015` as its own line. The same words stay
+/// on the longer address stats line. A missing sum does not paint that line.
+#[test]
+fn address_screen_paints_balance_line() {
+    const LINE: &str = "Balance 4015";
+    let text = paint_address(
+        "bc1qexample",
+        r#"{"address":"bc1qexample","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":5}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.contains("Confirmed balance 4000"),
+        "confirmed balance was dropped: {text}"
+    );
+    assert!(
+        text.contains("Pending 15"),
+        "pending amount was dropped: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qexampleomit",
+        r#"{"address":"bc1qexampleomit","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":20}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing sum painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Balance "),
+        "a missing sum painted a balance: {omitted}"
+    );
+}
+
+/// Confirmed balance from no-query `GET /scripthash/:hash`.
+///
+/// Chain funded minus chain spent paints `Confirmed balance 4000` as its own
+/// line. The same words stay on the longer stats line. A missing chain sum
+/// does not paint that line. Mempool sums are not this difference.
+#[test]
+fn scripthash_screen_paints_confirmed_balance_line() {
+    const LINE: &str = "Confirmed balance 4000";
+    const HASH: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    let text = paint_scripthash(
+        HASH,
+        &format!(
+            r#"{{"scripthash":"{HASH}","chain_stats":{{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000}},"mempool_stats":{{"tx_count":2,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}}}"#
+        ),
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line.contains(LINE) && line != LINE),
+        "the longer stats line dropped {LINE}: {text}"
+    );
+
+    let omitted = paint_scripthash(
+        HASH,
+        &format!(
+            r#"{{"scripthash":"{HASH}","chain_stats":{{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000}},"mempool_stats":{{"tx_count":2,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}}}"#
+        ),
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing sum painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains(LINE),
+        "a missing sum painted confirmed balance: {omitted}"
+    );
+}
+
+/// Sigops label from no-query `GET /tx/:txid`.
+///
+/// Angular paints the label `Sigops` when sigops is present, including 0.
+/// The transaction row paints `Sigops` as its own line. `Sigops 0` stays.
+/// A longer line that contains the word does not. A missing key or JSON
+/// null does not paint the label.
+#[test]
+fn transaction_screen_paints_sigops_label() {
+    const LINE: &str = "Sigops";
+    let text = paint_tx_adjusted("sigopslabel", r#""weight":7"#, r#""sigops":0"#);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "Sigops 0"),
+        "Sigops 0 was dropped: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line.contains(LINE) && line != LINE),
+        "the longer sigops line dropped {LINE}: {text}"
+    );
+
+    let absent = paint_tx_adjusted("sigopslabelabs", r#""weight":7"#, "");
+    assert!(
+        !absent.lines().any(|line| line == LINE),
+        "a missing sigops painted {LINE}: {absent}"
+    );
+    assert!(
+        !absent.contains(LINE),
+        "a missing sigops painted Sigops: {absent}"
+    );
+
+    let null = paint_tx_adjusted("sigopslabelnull", r#""weight":7"#, r#""sigops":null"#);
+    assert!(
+        !null.lines().any(|line| line == LINE),
+        "null sigops painted {LINE}: {null}"
+    );
+    assert!(!null.contains(LINE), "null sigops painted Sigops: {null}");
+}
+
+/// Capitalized virtual size from no-query `GET /tx/:txid`.
+///
+/// Weight 4 paints `Virtual size 1` as its own line. The lowercase
+/// `virtual size 1` stays. Weight 7 does not round up to 2. Weight 0
+/// paints `Virtual size 0`. A missing weight or JSON null does not paint
+/// the capitalized line.
+#[test]
+fn transaction_screen_paints_virtual_size_sentence() {
+    const LINE: &str = "Virtual size 1";
+    let text = paint_tx_weight("vsizeword", r#""weight":4"#);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line == "virtual size 1"),
+        "virtual size 1 was dropped: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Virtual size 2"),
+        "weight 4 rounded up: {text}"
+    );
+
+    let seven = paint_tx_weight("vsizeword7", r#""weight":7"#);
+    assert!(
+        seven.lines().any(|line| line == LINE),
+        "weight 7 did not paint {LINE}: {seven}"
+    );
+    assert!(
+        !seven.lines().any(|line| line == "Virtual size 2"),
+        "weight 7 rounded up: {seven}"
+    );
+    assert!(
+        seven.lines().any(|line| line == "virtual size 1"),
+        "weight 7 dropped virtual size 1: {seven}"
+    );
+
+    let zero = paint_tx_weight("vsizeword0", r#""weight":0"#);
+    assert!(
+        zero.lines().any(|line| line == "Virtual size 0"),
+        "weight 0 omitted Virtual size 0: {zero}"
+    );
+    assert!(
+        zero.lines().any(|line| line == "virtual size 0"),
+        "weight 0 dropped virtual size 0: {zero}"
+    );
+    assert!(
+        !zero.lines().any(|line| line == LINE),
+        "weight 0 painted {LINE}: {zero}"
+    );
+
+    let absent = paint_tx_weight("vsizewordabs", "");
+    assert!(
+        !absent.lines().any(|line| line == LINE),
+        "a missing weight painted {LINE}: {absent}"
+    );
+    assert!(
+        !absent.contains("Virtual size"),
+        "a missing weight painted Virtual size: {absent}"
+    );
+
+    let null = paint_tx_weight("vsizewordnull", r#""weight":null"#);
+    assert!(
+        !null.lines().any(|line| line == LINE),
+        "null weight painted {LINE}: {null}"
+    );
+    assert!(
+        !null.contains("Virtual size"),
+        "null weight painted Virtual size: {null}"
+    );
+}
+
+/// Chain funded sum from no-query `GET /address/:script`.
+///
+/// `funded_txo_sum` 5000 paints `Total received 5000` as its own line.
+/// The same words stay on the address stats line. A missing sum does not
+/// paint the line. The confirmed balance and the mempool funded sum are
+/// not this line.
+#[test]
+fn address_screen_paints_total_received_5000() {
+    const LINE: &str = "Total received 5000";
+    let text = paint_address(
+        "bc1qexample",
+        r#"{"address":"bc1qexample","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line != LINE && line.contains(LINE)),
+        "the stats line dropped {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Total received 4000"),
+        "confirmed balance was painted as total received: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Total received 20"),
+        "mempool funded sum was painted as total received: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnorecv",
+        r#"{"address":"bc1qnorecv","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":0}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing funded sum painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Total received"),
+        "a missing funded sum painted Total received: {omitted}"
+    );
+}
+
+/// Chain spent sum plus mempool spent sum from no-query `GET /address/:script`.
+///
+/// `spent_txo_sum` 1000 plus mempool `spent_txo_sum` 20 paints `Total sent 1020`
+/// as its own line. The same words stay on the address stats line. A missing
+/// sum does not paint the line. The chain spent sum alone is not this line.
+#[test]
+fn address_screen_paints_total_sent_1020() {
+    const LINE: &str = "Total sent 1020";
+    let text = paint_address(
+        "bc1qsent1020",
+        r#"{"address":"bc1qsent1020","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":20,"spent_txo_sum":20}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line != LINE && line.contains(LINE)),
+        "the stats line dropped {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Total sent 1000"),
+        "total sent ignored the mempool spent sum: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Total sent 20"),
+        "the mempool spent sum was painted alone: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnosent1020",
+        r#"{"address":"bc1qnosent1020","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":1,"spent_txo_count":0,"funded_txo_sum":20}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing mempool spent sum painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Total sent"),
+        "a missing mempool spent sum painted Total sent: {omitted}"
+    );
+}
+
+/// Chain tx count plus mempool tx count from no-query `GET /address/:script`.
+///
+/// `tx_count` 4 plus mempool `tx_count` 1 paints `Transactions 5` as its own
+/// line. The same words stay on the address stats line. A missing count does
+/// not paint the line. The chain count alone is not this line.
+#[test]
+fn address_screen_paints_transactions_5() {
+    const LINE: &str = "Transactions 5";
+    let text = paint_address(
+        "bc1qtx5",
+        r#"{"address":"bc1qtx5","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":2,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line != LINE && line.contains(LINE)),
+        "the stats line dropped {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Transactions 4"),
+        "the chain tx count was painted alone: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Transactions 1"),
+        "the mempool tx count was painted alone: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnotx5",
+        r#"{"address":"bc1qnotx5","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"funded_txo_count":2,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":7}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing mempool tx count painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Transactions"),
+        "a missing mempool tx count painted Transactions: {omitted}"
+    );
+}
+
+/// Chain funded count minus chain spent count from no-query `GET /address/:script`.
+///
+/// `funded_txo_count` 4 minus `spent_txo_count` 1 paints `Unspent TXOs 3` as
+/// its own line. Mempool counts are not this line. A missing count does not
+/// paint the line. Confirmed UTXOs is not this line.
+#[test]
+fn address_screen_paints_unspent_txos_3() {
+    const LINE: &str = "Unspent TXOs 3";
+    let text = paint_address(
+        "bc1qunspent3",
+        r#"{"address":"bc1qunspent3","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":0}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Unspent TXOs 8"),
+        "the mempool count difference was painted: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Unspent TXOs 4"),
+        "the chain funded count was painted without subtracting chain spent: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Unspent TXOs 11"),
+        "mempool counts were folded into Unspent TXOs: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Unspent TXOs 5"),
+        "mempool funded count was folded into Unspent TXOs: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnounspent3",
+        r#"{"address":"bc1qnounspent3","chain_stats":{"tx_count":4,"funded_txo_count":4,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":0}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing chain spent count painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Unspent TXOs"),
+        "a missing chain spent count painted Unspent TXOs: {omitted}"
+    );
+}
+
+/// Chain funded count minus chain spent count from no-query `GET /address/:script`.
+///
+/// `funded_txo_count` 4 minus `spent_txo_count` 1 paints `Confirmed UTXOs 3`
+/// as its own line. The same words stay on the address stats line. Mempool
+/// counts are not this line. A missing count does not paint the line.
+/// Unspent TXOs is not this line.
+#[test]
+fn address_screen_paints_confirmed_utxos_3() {
+    const LINE: &str = "Confirmed UTXOs 3";
+    let text = paint_address(
+        "bc1qconfirmedutxos3",
+        r#"{"address":"bc1qconfirmedutxos3","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":0}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line != LINE && line.contains(LINE)),
+        "the stats line dropped {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Confirmed UTXOs 8"),
+        "the mempool count difference was painted: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Confirmed UTXOs 4"),
+        "the chain funded count was painted without subtracting chain spent: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Confirmed UTXOs 11"),
+        "mempool counts were folded into Confirmed UTXOs: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Confirmed UTXOs 5"),
+        "mempool funded count was folded into Confirmed UTXOs: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnocount3",
+        r#"{"address":"bc1qnocount3","chain_stats":{"tx_count":4,"funded_txo_count":4,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":9,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":0}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing chain spent count painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Confirmed UTXOs"),
+        "a missing chain spent count painted Confirmed UTXOs: {omitted}"
+    );
+}
+
+/// Mempool funded count minus mempool spent count from no-query `GET /address/:script`.
+///
+/// `funded_txo_count` 5 minus `spent_txo_count` 2 paints `Pending UTXOs 3`
+/// as its own line. The same words stay on the address stats line. Chain
+/// counts are not this line. A missing count does not paint the line.
+/// Confirmed UTXOs is not this line.
+#[test]
+fn address_screen_paints_pending_utxos_3() {
+    const LINE: &str = "Pending UTXOs 3";
+    let text = paint_address(
+        "bc1qpendingutxos3",
+        r#"{"address":"bc1qpendingutxos3","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":5,"spent_txo_count":2,"funded_txo_sum":20,"spent_txo_sum":250}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line != LINE && line.contains(LINE)),
+        "the stats line dropped {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending UTXOs +3"),
+        "a plus was painted on {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending UTXOs 4"),
+        "the chain funded count was painted as Pending UTXOs: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending UTXOs 7"),
+        "chain counts were folded into Pending UTXOs: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnopending3",
+        r#"{"address":"bc1qnopending3","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"spent_txo_count":2,"funded_txo_sum":20,"spent_txo_sum":250}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing mempool funded count painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Pending UTXOs"),
+        "a missing mempool funded count painted Pending UTXOs: {omitted}"
+    );
+}
+
+/// Mempool funded sum minus mempool spent sum from no-query `GET /address/:script`.
+///
+/// `funded_txo_sum` 20 minus `spent_txo_sum` 5 paints `Pending 15` as its own
+/// line. The same words stay on the address stats line. Chain sums are not
+/// this line. A missing sum does not paint the line. Pending UTXOs is not
+/// this line. A plus is not this line.
+#[test]
+fn address_screen_paints_pending_15() {
+    const LINE: &str = "Pending 15";
+    let text = paint_address(
+        "bc1qpending15",
+        r#"{"address":"bc1qpending15","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":5}}"#,
+    );
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "{LINE} is absent: {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {text}"
+    );
+    assert!(
+        text.lines().any(|line| line != LINE && line.contains(LINE)),
+        "the stats line dropped {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending +15"),
+        "a plus was painted on {LINE}: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending 20"),
+        "the mempool funded sum was painted alone: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending 5"),
+        "the mempool spent sum was painted alone: {text}"
+    );
+    assert!(
+        !text.lines().any(|line| line == "Pending -15"),
+        "the mempool sums were swapped: {text}"
+    );
+
+    let omitted = paint_address(
+        "bc1qnopending15",
+        r#"{"address":"bc1qnopending15","chain_stats":{"tx_count":4,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":20}}"#,
+    );
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing mempool spent sum painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Pending 15"),
+        "a missing mempool spent sum painted Pending 15: {omitted}"
+    );
+    assert!(
+        !omitted.lines().any(|line| line == "Pending 0"),
+        "a missing mempool spent sum painted Pending 0: {omitted}"
     );
 }

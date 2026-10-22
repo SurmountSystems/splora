@@ -64,7 +64,7 @@ fn finite_rate_paints_the_label_beside_the_number() {
     let number = rate_cell(584, 572);
     assert_one(&markup, LABEL);
     assert_one(&markup, &number);
-    assert_eq!(markup.matches("Fee rate").count(), 1, "{markup}");
+    assert_eq!(markup.matches("Fee rate").count(), 2, "{markup}");
     assert_absent(&number, "Fee rate");
     assert_scripts_stay_off(&markup);
 }
@@ -74,7 +74,7 @@ fn fee_zero_still_paints_the_label() {
     let markup = transaction_row_markup(&tx(r#","fee":0"#, 4));
     assert_one(&markup, LABEL);
     assert_one(&markup, &rate_cell(0, 4));
-    assert_eq!(markup.matches("Fee rate").count(), 1, "{markup}");
+    assert_eq!(markup.matches("Fee rate").count(), 2, "{markup}");
     assert_scripts_stay_off(&markup);
 }
 
@@ -112,4 +112,22 @@ fn null_fee_omits_the_label() {
     assert_absent(&markup, "fee-rate");
     assert_absent(&markup, "<tr class=\"tx-row\">");
     assert_scripts_stay_off(&markup);
+}
+
+/// Whole line `Fee rate` from no-query `GET /tx/:txid`.
+///
+/// The label cell stays. This line is the label text alone.
+#[test]
+fn fee_rate_paints_fee_rate_as_its_own_line() {
+    const LINE: &str = "Fee rate";
+    let markup = transaction_row_markup(&tx(r#","fee":584"#, 572));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "Fee rate is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Fee rate was not painted once: {markup}"
+    );
 }

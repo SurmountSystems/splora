@@ -9,7 +9,10 @@ use splora_web::{
 const TX: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 const NO_TXS: &str = "<p class=\"empty\">There are no transactions.</p>";
+const ADDRESS_TX_EMPTY: &str =
+    "<p class=\"address-tx-empty\">The address transaction list is empty.</p>";
 const NO_UTXOS: &str = "<p class=\"empty\">There are no unspent outputs.</p>";
+const ADDRESS_UTXO_EMPTY: &str = "<p class=\"address-utxo-empty\">The utxo list is empty.</p>";
 
 fn assert_not_an_empty_sentence(body: &str) {
     let txs = address_rows_markup("", body, "");
@@ -34,22 +37,28 @@ fn whitespace_inside_empty_brackets_is_the_empty_list_sentence() {
     for body in ["[ ]", "[\n]", "[ \n\t ]", " [\n] "] {
         assert_eq!(
             address_rows_markup("", body, ""),
-            NO_TXS,
+            format!("{NO_TXS}{ADDRESS_TX_EMPTY}"),
             "address transactions {body:?}"
         );
         assert_eq!(
             address_rows_markup("", "", body),
-            NO_UTXOS,
+            format!("{NO_UTXOS}{ADDRESS_UTXO_EMPTY}"),
             "address utxos {body:?}"
         );
         assert_eq!(recent_rows_markup(body), NO_TXS, "mempool recent {body:?}");
     }
 
-    assert_eq!(address_rows_markup("", "[]", ""), NO_TXS);
-    assert_eq!(address_rows_markup("", "", "[]"), NO_UTXOS);
+    assert_eq!(
+        address_rows_markup("", "[]", ""),
+        format!("{NO_TXS}{ADDRESS_TX_EMPTY}")
+    );
+    assert_eq!(
+        address_rows_markup("", "", "[]"),
+        format!("{NO_UTXOS}{ADDRESS_UTXO_EMPTY}")
+    );
     assert_eq!(
         address_rows_markup("", "[]", "[]"),
-        format!("{NO_TXS}{NO_UTXOS}")
+        format!("{NO_TXS}{ADDRESS_TX_EMPTY}{NO_UTXOS}{ADDRESS_UTXO_EMPTY}")
     );
     assert_eq!(recent_rows_markup("[]"), NO_TXS);
     assert_eq!(address_rows_markup("", "", ""), "");

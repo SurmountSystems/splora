@@ -56,6 +56,35 @@ fn assert_absent(markup: &str, needle: &str) {
     );
 }
 
+/// The timestamp label cell contains the word once. A whole line is separate.
+fn assert_label_word_once(markup: &str) {
+    const OPEN: &str = "<td class=\"timestamp-label\">";
+    let start = markup
+        .find(OPEN)
+        .unwrap_or_else(|| panic!("timestamp label missing: {markup}"));
+    let rest = &markup[start + OPEN.len()..];
+    let end = rest
+        .find("</td>")
+        .unwrap_or_else(|| panic!("timestamp label unclosed: {markup}"));
+    assert_eq!(
+        rest[..end].matches("Timestamp").count(),
+        1,
+        "the label cell does not contain the word once: {markup}"
+    );
+}
+
+fn assert_timestamp_line(markup: &str) {
+    assert!(
+        markup.lines().any(|line| line == "Timestamp"),
+        "no line equals Timestamp: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == "Timestamp").count(),
+        1,
+        "Timestamp was not one line: {markup}"
+    );
+}
+
 fn assert_scripts_stay_off(markup: &str) {
     assert_absent(markup, SCRIPT_HEX);
     assert_absent(markup, SCRIPT_SIG_HEX);
@@ -82,7 +111,8 @@ fn confirmed_block_time_paints_the_label_beside_the_integer() {
     assert_one(&markup, &pair(1_600_000_000));
     assert_one(&markup, LABEL);
     assert_one(&markup, &raw_cell(1_600_000_000));
-    assert_eq!(markup.matches("Timestamp").count(), 1, "{markup}");
+    assert_label_word_once(&markup);
+    assert_timestamp_line(&markup);
     assert_absent(&raw_cell(1_600_000_000), "Timestamp");
     assert_absent(&markup, "1,600,000,000");
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
@@ -99,7 +129,8 @@ fn block_time_zero_still_paints_the_label() {
     let markup = transaction_row_markup(&tx(r#"{"confirmed":true,"block_time":0}"#));
     assert_one(&markup, &pair(0));
     assert_one(&markup, LABEL);
-    assert_eq!(markup.matches("Timestamp").count(), 1, "{markup}");
+    assert_label_word_once(&markup);
+    assert_timestamp_line(&markup);
     assert_scripts_stay_off(&markup);
 }
 

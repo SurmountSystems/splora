@@ -268,7 +268,10 @@ pub fn parse_address_utxos(body: &str) -> Result<Vec<Utxo>, ParseError> {
         .map(|row| Utxo {
             txid: row.txid,
             vout: row.vout.to_string(),
-            value: row.value.map(|amount| amount.to_string()).unwrap_or_default(),
+            value: row
+                .value
+                .map(|amount| amount.to_string())
+                .unwrap_or_default(),
             confirmed: yes_no(row.status.confirmed),
         })
         .collect())
@@ -690,10 +693,9 @@ mod tests {
         assert_eq!(omitted[0].value, "");
         assert_ne!(omitted[0].value, "0");
 
-        let zero = parse_address_utxos(
-            r#"[{"txid":"z","vout":1,"value":0,"status":{"confirmed":true}}]"#,
-        )
-        .expect("explicit zero");
+        let zero =
+            parse_address_utxos(r#"[{"txid":"z","vout":1,"value":0,"status":{"confirmed":true}}]"#)
+                .expect("explicit zero");
         assert_eq!(zero[0].value, "0");
 
         let present = parse_address_utxos(

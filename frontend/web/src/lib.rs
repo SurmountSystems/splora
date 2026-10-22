@@ -49,15 +49,15 @@ pub use paths::{
 };
 pub use rows::{
     address_highlight_markup, address_rows_markup, asset_markup, batch_outspends_markup,
-    block_details_markup, block_header_hex_markup, block_raw_beside, block_rows_markup,
-    block_status_markup, block_transactions_markup, block_tx_page_path, block_txid_index_markup,
-    block_txid_links_markup, blocks_rows_markup, broadcast_txid_markup, chain_tip_markup,
-    confirmation_markup, dashboard_rows_markup, details_open_after_click, height_body_markup,
-    indexed_bytes_markup, mempool_txids_markup, merkle_proof_markup, multi_address_links_markup,
-    one_outspend_markup, outspends_markup, package_txid_markup, poison_alert_markup,
-    recent_rows_markup, scripthash_markup, summary_rows_markup, summary_rows_with_status,
-    test_txid_markup, tip_links_markup, transaction_hex_markup, transaction_row_markup,
-    tx_raw_beside, tx_status_markup,
+    block_details_markup, block_header_aside_markup, block_header_hex_markup, block_raw_beside,
+    block_rows_markup, block_status_markup, block_transactions_markup, block_tx_page_path,
+    block_txid_index_markup, block_txid_links_markup, blocks_rows_markup, broadcast_txid_markup,
+    chain_tip_markup, confirmation_markup, dashboard_rows_markup, details_open_after_click,
+    height_body_markup, indexed_bytes_markup, mempool_txids_markup, merkle_proof_markup,
+    multi_address_links_markup, one_outspend_markup, outspends_markup, package_txid_markup,
+    poison_alert_markup, recent_rows_markup, scripthash_markup, summary_rows_markup,
+    summary_rows_with_status, test_txid_markup, tip_links_markup, transaction_hex_markup,
+    transaction_row_markup, tx_raw_beside, tx_status_markup,
 };
 pub use screens::{
     BatchPost, address_chain_request, address_fields_text, address_mempool_txs_request,
@@ -80,7 +80,9 @@ pub use search::{
 };
 pub use splora_frontend_shared::{assets_registry_path, assets_registry_search_path};
 pub use theme::{ACCENT, BACKGROUND, TEXT};
-pub use views::{App, asset_page_markup, looks_like_block_hash, submission_links};
+pub use views::{
+    App, asset_page_markup, looks_like_block_hash, mempool_size_markup, submission_links,
+};
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(start)]

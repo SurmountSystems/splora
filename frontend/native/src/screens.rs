@@ -322,7 +322,17 @@ impl Dashboard {
             summary_route,
             r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#,
         )?;
-        let block_lines = render_block_list(&blocks_body)?;
+        let parsed_blocks = render_block_list(&blocks_body)?;
+        // dashboard.component.html recent-blocks heading when the list is not empty.
+        // Size is the recent-blocks column. Liquid keeps the rows and skips Size.
+        // Mined is the timestamp column. The raw timestamp stays on the block line.
+        let block_lines = if parsed_blocks == "blocks:" {
+            parsed_blocks
+        } else if client.network() != Network::Liquid {
+            format!("Recent Blocks\nSize\nMined\n{parsed_blocks}")
+        } else {
+            format!("Recent Blocks\nMined\n{parsed_blocks}")
+        };
         let recent_lines = render_recent(&recent_body)?;
         let fee_lines = render_fee_estimates(&fees_body)?;
         let summary_lines = render_mempool_summary(&summary_body)?;
@@ -332,12 +342,21 @@ impl Dashboard {
             rows.push(format!("row tip hash {}", self.tip_hash));
         }
         self.rows = rows;
+        // dashboard.component.html line 6. Liquid uses the other dashboard.
+        let fee_lines = if client.network() == Network::Liquid {
+            fee_lines
+        } else {
+            format!("Transaction Fees\n{fee_lines}")
+        };
         self.lines = format!("{block_lines}\n{recent_lines}\n{fee_lines}\n{summary_lines}");
         if client.network() == Network::Liquid {
             if let Some(body) = read_optional(client, assets_registry_path())? {
                 let names = registry_issued_lines(&body);
                 if !names.is_empty() {
+                    // Assets page header. One whole line from this registry load.
+                    // Not a column title.
                     self.lines.push('\n');
+                    self.lines.push_str("Assets\n");
                     self.lines.push_str(&names);
                 }
                 let cards = registry_featured_card_lines(&body);
@@ -415,7 +434,13 @@ impl BlockScreen {
                 Ok(height) => block_height_path(height),
                 Err(_) => format!("/block-height/{}", self.query),
             };
-            let body = read_required(client, &path)?;
+            let body = match read_required(client, &path) {
+                Ok(body) => body,
+                Err(err) => {
+                    self.paint_load_error();
+                    return Err(err);
+                }
+            };
             let hash = parse_block_height(&body).map_err(http_parse)?;
             lines.push(format!("block-height {} hash {hash}", self.query));
             if hash.is_empty() || hash.contains('/') || hash.contains('?') || hash.contains(' ') {
@@ -429,12 +454,29 @@ impl BlockScreen {
         } else {
             self.query.clone()
         };
-        let block_body = read_required(client, &block_path(&hash))?;
+        let block_body = match read_required(client, &block_path(&hash)) {
+            Ok(body) => body,
+            Err(err) => {
+                self.paint_load_error();
+                return Err(err);
+            }
+        };
         let block = serde_json::from_str::<splora_frontend_shared::wire::Block>(&block_body)
             .map_err(http_parse)?;
         // Body lines only. A row would paint each sentence a second time.
-        if block.height == 0 {
+        // Angular h1: `Stale Block` when `stale` is true, `Genesis` when
+        // height is present and not greater than 0, otherwise the whole
+        // line `Block`. A missing `stale` key is not stale.
+        let stale = serde_json::from_str::<serde_json::Value>(&block_body)
+            .ok()
+            .and_then(|value| value.get("stale").and_then(|flag| flag.as_bool()))
+            == Some(true);
+        if stale {
+            lines.push("Stale Block".to_string());
+        } else if block.height == 0 {
             lines.push("Genesis".to_string());
+        } else if block.height > 0 {
+            lines.push("Block".to_string());
         }
         if block.height > 100_000 && block.tx_count <= 1 {
             lines.push("Why is this block empty?".to_string());
@@ -454,7 +496,7 @@ impl BlockScreen {
             rows.push(format!("row previous_hash {prev}"));
         }
         rows.push("row block details".to_string());
-        self.details = block_details_text(&block);
+        self.details = block_details_text(&block, client.network());
         let txs_body = read_required(client, &block_txs_path(&hash))?;
         lines.push(render_tx_list(&txs_body)?);
         rows.extend(transaction_row_lines(&txs_body)?);
@@ -518,6 +560,12 @@ impl BlockScreen {
         self.rows = rows;
         self.body = lines.join("\n");
         Ok(())
+    }
+
+    /// Angular `block.error.loading-block-data`. The indexer body stays in the notice.
+    fn paint_load_error(&mut self) {
+        self.body = "Error loading block data.".to_string();
+        self.rows.clear();
     }
 
     /// Show or hide the fields already stored from `GET /block/:hash`.
@@ -615,7 +663,7 @@ impl BlocksScreen {
             self.rows.clear();
             return Ok(());
         }
-        self.body = kept
+        let listed = kept
             .iter()
             .map(|block| {
                 let line = render_block_line(block);
@@ -627,6 +675,11 @@ impl BlocksScreen {
             })
             .collect::<Vec<_>>()
             .join("\n");
+        // blocks-list.component.html line 5. Page heading from this list load.
+        // Not the block page title, and not a column title.
+        // blocks-list.component.html line 27. Column header, its own line.
+        // Not the transaction page title.
+        self.body = format!("Blocks\nTransactions\n{listed}");
         self.rows = kept
             .iter()
             .map(|block| paint_block_row(&BlockRow::from(block)))
@@ -671,8 +724,18 @@ impl TxScreen {
         ))?;
         let vin_json = vin_objects(&document);
         // Angular subtitle, once, before the parties. Empty vin and vout still show it.
-        let row = render_tx_row(&tx, &vin_json, json_u64_at(&document, "weight"));
-        let mut lines = vec!["Inputs & Outputs".to_string()];
+        let row = render_tx_row(
+            &tx,
+            &vin_json,
+            json_u64_at(&document, "weight"),
+            Some(client.network()),
+        );
+        // transaction.component.html line 10. The h1 is its own line.
+        let mut lines = vec!["Transaction".to_string()];
+        lines.push("Inputs & Outputs".to_string());
+        // transaction.component.html line 208. The button toggles script rows.
+        // Show diagram stays off. Script hex stays off.
+        lines.push("Details".to_string());
         // The raw block_time line stays. Timestamp is the line before it.
         // Some(0) still paints. A missing key or JSON null is None and stays off.
         if tx
@@ -693,7 +756,8 @@ impl TxScreen {
         {
             rows.push(format!("row confirming {hash}"));
         }
-        for input in &tx.vin {
+        let vin_shown = transactions_list_limit(tx.vin.len(), INPUT_ROW_LIMIT, false);
+        for input in tx.vin.iter().take(vin_shown) {
             if let Some(address) = input
                 .prevout
                 .as_ref()
@@ -703,7 +767,8 @@ impl TxScreen {
                 rows.push(format!("row input address {address}"));
             }
         }
-        for output in &tx.vout {
+        let vout_shown = transactions_list_limit(tx.vout.len(), OUTPUT_ROW_LIMIT, false);
+        for output in tx.vout.iter().take(vout_shown) {
             if let Some(address) = output
                 .script_pubkey_address
                 .as_deref()
@@ -715,7 +780,14 @@ impl TxScreen {
         if let Some(spends_body) = read_optional(client, &tx_outspends_path(&self.txid))? {
             if let Ok(spends) = parse_outspends(&spends_body) {
                 for spend in spends {
-                    push_spend(&mut lines, &mut rows, spend.spent, spend.txid.as_deref());
+                    push_spend(
+                        &mut lines,
+                        &mut rows,
+                        spend.spent,
+                        spend.txid.as_deref(),
+                        spend.vin,
+                        spend.status.as_ref().map(|status| status.confirmed),
+                    );
                 }
             }
         }
@@ -723,7 +795,14 @@ impl TxScreen {
             let path = tx_outspend_path(&self.txid, index as u64);
             if let Some(body) = read_optional(client, &path)? {
                 if let Ok(spend) = parse_outspend(&body) {
-                    push_spend(&mut lines, &mut rows, spend.spent, spend.txid.as_deref());
+                    push_spend(
+                        &mut lines,
+                        &mut rows,
+                        spend.spent,
+                        spend.txid.as_deref(),
+                        spend.vin,
+                        spend.status.as_ref().map(|status| status.confirmed),
+                    );
                 }
             }
         }
@@ -766,31 +845,63 @@ impl TxScreen {
             poison_network_name(client.network()),
         ));
         if let Some(words) = output_total_words(&tx) {
-            lines.push(words);
+            lines.push(words.clone());
+            // The capitalized sentence is its own line. The lowercase total stays.
+            if let Some(sum) = words.strip_prefix("output total ") {
+                lines.push(format!("Output total {sum}"));
+            }
         }
         lines.push(fee_words(tx.fee));
+        // The label is its own line. The rate sentence stays.
         if let Some(words) = fee_rate_words(tx.fee, &document) {
+            lines.push("Fee rate".to_string());
             lines.push(words);
         }
         lines.push(version_words(tx.version));
+        // The label is its own line. The locktime sentence stays.
+        lines.push("Locktime".to_string());
         lines.push(locktime_words(tx.lock_time));
         lines.push(size_words(tx.size));
         if let Some(words) = virtual_size_words(&document) {
-            lines.push(words);
+            lines.push(words.clone());
+            // The capitalized sentence is its own line. The lowercase size stays.
+            if let Some(size) = words.strip_prefix("virtual size ") {
+                lines.push(format!("Virtual size {size}"));
+            }
         }
         if let Some(words) = adjusted_vsize_words(&document) {
             lines.push(words);
         }
+        // The label is its own line. The grouped count stays.
         if let Some(words) = sigops_words(&document) {
+            lines.push("Sigops".to_string());
             lines.push(words);
         }
         if let Some(words) = weight_words(&document) {
             lines.push(words);
         }
         let tip_height = tip_height_for_confirmations(client)?;
-        let block_height = tx.status.as_ref().and_then(|status| status.block_height);
+        let status = tx.status.as_ref();
+        let confirmed = status.is_some_and(|status| status.confirmed);
+        let block_height = status.and_then(|status| status.block_height);
         if let Some(words) = confirmation_words(block_height, tip_height) {
             lines.push(words);
+        }
+        // tracker.component.html line 96. Confirmed with a block height only.
+        if confirmed && block_height.is_some() {
+            lines.push("Block height".to_string());
+        }
+        // transaction-details.component.html features row. The word is its own line.
+        if let Some(label) = features_label_line(&tx, client.network()) {
+            lines.push(label.to_string());
+        }
+        // tx-features.component.html line 2. The tooltip and the RBF badge stay off.
+        if let Some(badge) = segwit_badge_line(&tx, client.network()) {
+            lines.push(badge.to_string());
+        }
+        // tx-features.component.html lines 11-25. The tooltip and the RBF badge stay off.
+        if let Some(badge) = taproot_badge_line(&tx, client.network()) {
+            lines.push(badge.to_string());
         }
         self.body = lines.join("\n");
         self.rows = rows;
@@ -873,24 +984,132 @@ impl AddressScreen {
         } else {
             address_txs_chain_page_path(script, &self.last_seen)
         };
-        let stats_body = read_required(client, &stats_path)?;
+        let stats_body = match read_required(client, &stats_path) {
+            Ok(body) => body,
+            Err(err) => {
+                // A scripthash uses `/scripthash/`, not this no-query address GET.
+                if !self.use_scripthash {
+                    self.paint_load_error();
+                }
+                return Err(err);
+            }
+        };
         let txs_body = read_required(client, &txs_path)?;
         let utxo_body = read_required(client, &utxo_path)?;
         let mempool_body = read_optional(client, &mempool_route)?;
-        let mut stats_line = render_address_stats(&stats_body)?;
-        if !self.use_scripthash {
-            if let Some(words) = unspent_txo_words(&stats_body) {
-                stats_line.push(' ');
-                stats_line.push_str(&words);
+        let stats_line = render_address_stats(&stats_body)?;
+        let mut lines = vec![stats_line];
+        if let (Some(chain), Some(mempool)) = (chain_side(&stats_body), mempool_side(&stats_body)) {
+            if let Some(words) = confirmed_balance_words(
+                json_u64_at(&chain, "funded_txo_sum"),
+                json_u64_at(&chain, "spent_txo_sum"),
+            ) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. The same words stay on the stats line.
+            if let Some(words) = confirmed_utxo_words(&stats_body) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. The same words stay on the stats line.
+            if let Some(words) = total_received_words(json_u64_at(&chain, "funded_txo_sum")) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. The same words stay on the stats line.
+            if let Some(words) = total_sent_words(
+                json_u64_at(&chain, "spent_txo_sum"),
+                json_u64_at(&mempool, "spent_txo_sum"),
+            ) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. The same words stay on the stats line.
+            if let Some(words) = pending_utxo_words(&stats_body) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. The same words stay on the stats line.
+            if let Some(words) = pending_amount_words(
+                json_u64_at(&mempool, "funded_txo_sum"),
+                json_u64_at(&mempool, "spent_txo_sum"),
+            ) {
+                lines.push(words);
+            }
+            if let Some(words) = combined_balance_words(
+                json_u64_at(&chain, "funded_txo_sum"),
+                json_u64_at(&mempool, "funded_txo_sum"),
+                json_u64_at(&chain, "spent_txo_sum"),
+                json_u64_at(&mempool, "spent_txo_sum"),
+            ) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. The same words stay on the stats line.
+            if let Some(words) = transaction_count_words(&stats_body) {
+                lines.push(words);
+            }
+            // The paragraph is its own line. A scripthash summary does not paint it.
+            // The phrase stays once, so it does not also stay on the stats line.
+            if !self.use_scripthash {
+                if let Some(words) = unspent_txo_words(&stats_body) {
+                    lines.push(words);
+                }
             }
         }
-        let mut lines = vec![stats_line];
+        if !self.use_scripthash {
+            // address.component.html line 3. The h1 is its own line.
+            lines.insert(0, "Address".to_string());
+            if let Some(badge) = p2wpkh_address_badge(client.network(), script)
+                .or_else(|| p2wsh_address_badge(client.network(), script))
+                .or_else(|| p2tr_address_badge(client.network(), script))
+                .or_else(|| p2pkh_address_badge(client.network(), script))
+                .or_else(|| {
+                    if self.last_seen.is_empty() {
+                        p2sh_p2wpkh_address_badge(client.network(), script, &txs_body)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    if self.last_seen.is_empty() {
+                        p2sh_p2wsh_address_badge(client.network(), script, &txs_body)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    if self.last_seen.is_empty() {
+                        p2sh_address_badge(client.network(), script, &txs_body)
+                    } else {
+                        None
+                    }
+                })
+            {
+                lines.push(format!("Type {badge}"));
+            }
+            if self.last_seen.is_empty() {
+                if let Some(warning) = address_multisig_warning(client.network(), script, &txs_body)
+                {
+                    lines.push(warning);
+                }
+            }
+        }
         let mut rows = vec![address_funded_row(&stats_body)?];
         rows.push(format!("row script {script}"));
+        if self.last_seen.is_empty() {
+            if let Some(heading) = loaded_transactions_of_line(&stats_body, &txs_body) {
+                lines.push(heading);
+            }
+        }
+        // The address page heading is only for a transaction list longer than two rows.
+        if !self.use_scripthash && self.last_seen.is_empty() && address_txs_exceed_two(&txs_body) {
+            lines.push("Balance History".to_string());
+        }
         if let Some(last) = paint_address_tx_page(&txs_body, &mut lines, &mut rows)? {
             rows.push(format!("row chain {last}"));
         }
-        lines.push(render_utxos(&utxo_body)?);
+        let utxo_text = render_utxos(&utxo_body)?;
+        // The address page heading is only for a list longer than two rows.
+        if !self.use_scripthash && utxo_rows_exceed_two(&utxo_body) {
+            lines.push("Unspent Outputs".to_string());
+        }
+        lines.push(utxo_text);
         rows.extend(utxo_value_rows(&utxo_body)?);
         if let Some(body) = mempool_body {
             if body.trim() != "[]" {
@@ -918,6 +1137,12 @@ impl AddressScreen {
         self.rows = rows;
         self.body = lines.join("\n");
         Ok(())
+    }
+
+    /// Angular `address.error.loading-address-data`. The indexer body stays in the notice.
+    fn paint_load_error(&mut self) {
+        self.body = "Error loading address data.".to_string();
+        self.rows.clear();
     }
 
     pub fn rendered(&self) -> String {
@@ -1019,6 +1244,603 @@ pub fn split_addresses(input: &str) -> Vec<&str> {
         .split([',', '\n', '\r', '\t', ' '])
         .filter(|part| !part.is_empty())
         .collect()
+}
+
+/// Visible address-page badge for mainnet `v0_p2wpkh`.
+/// The address JSON has no type field. This reads the address string.
+/// `bc1` plus `q` and 38 bech32 characters (`ac-hj-np-z02-9`) is `P2WPKH`.
+/// Other shapes paint nothing. This is not the output line `Type V0_P2WPKH`.
+fn p2wpkh_address_badge(network: Network, address: &str) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let suffix = address.strip_prefix("bc1")?;
+    if v0_p2wpkh_suffix(suffix) {
+        Some("P2WPKH")
+    } else {
+        None
+    }
+}
+
+fn v0_p2wpkh_suffix(suffix: &str) -> bool {
+    let mut chars = suffix.chars();
+    if chars.next() != Some('q') {
+        return false;
+    }
+    let rest = chars.as_str();
+    rest.len() == 38 && rest.bytes().all(is_bech32_lw)
+}
+
+/// Visible address-page badge for mainnet `v0_p2wsh`.
+/// The address JSON has no type field. This reads the address string.
+/// `bc1` plus `q` and 58 bech32 characters (`ac-hj-np-z02-9`) is `P2WSH`.
+/// Other shapes paint nothing. This is not the output line `Type V0_P2WSH`.
+fn p2wsh_address_badge(network: Network, address: &str) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let suffix = address.strip_prefix("bc1")?;
+    if v0_p2wsh_suffix(suffix) {
+        Some("P2WSH")
+    } else {
+        None
+    }
+}
+
+fn v0_p2wsh_suffix(suffix: &str) -> bool {
+    let mut chars = suffix.chars();
+    if chars.next() != Some('q') {
+        return false;
+    }
+    let rest = chars.as_str();
+    rest.len() == 58 && rest.bytes().all(is_bech32_lw)
+}
+
+/// Visible address-page badge for mainnet `v1_p2tr`.
+/// The address JSON has no type field. This reads the address string.
+/// `bc1` plus `p` and 58 bech32 characters (`ac-hj-np-z02-9`) is `P2TR`.
+/// Other shapes paint nothing. This is not the label `P2TR tapscript`.
+fn p2tr_address_badge(network: Network, address: &str) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let suffix = address.strip_prefix("bc1")?;
+    if v1_p2tr_suffix(suffix) {
+        Some("P2TR")
+    } else {
+        None
+    }
+}
+
+fn v1_p2tr_suffix(suffix: &str) -> bool {
+    let mut chars = suffix.chars();
+    if chars.next() != Some('p') {
+        return false;
+    }
+    let rest = chars.as_str();
+    rest.len() == 58 && rest.bytes().all(is_bech32_lw)
+}
+
+/// Visible address-page badge for mainnet `p2pkh`.
+/// The address JSON has no type field. This reads the address string.
+/// A leading `1` plus 26 to 34 base58 characters (`a-km-zA-HJ-NP-Z1-9`) is `P2PKH`.
+/// Angular has no dedicated p2pkh case. The default arm uppercases the type.
+/// Other shapes paint nothing. This is not the output line `Type P2PKH`.
+fn p2pkh_address_badge(network: Network, address: &str) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let rest = address.strip_prefix('1')?;
+    if p2pkh_base58_rest(rest) {
+        Some("P2PKH")
+    } else {
+        None
+    }
+}
+
+fn p2pkh_base58_rest(rest: &str) -> bool {
+    (26..=34).contains(&rest.len()) && rest.bytes().all(is_base58)
+}
+
+/// Visible address-page badge for mainnet wrapped `p2sh-p2wpkh`.
+/// The address JSON has no type field. A leading `3` plus 26 to 34 base58
+/// characters starts as `p2sh` (`detectAddressType`). A spend of this address
+/// whose witness array is non-empty and whose scriptsig hex starts with
+/// `160014` changes the type to `p2sh-p2wpkh`. Angular has no dedicated case.
+/// The default arm uppercases the type, so the visible text is `P2SH-P2WPKH`.
+/// Called only when the four address-string badges return nothing. This reads
+/// the scriptsig and the witness to choose the badge. It does not print them
+/// and it does not decode the witness. `220020` is
+/// `p2sh_p2wsh_address_badge`, not this badge.
+fn p2sh_p2wpkh_address_badge(
+    network: Network,
+    address: &str,
+    txs_body: &str,
+) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let rest = address.strip_prefix('3')?;
+    if !p2pkh_base58_rest(rest) {
+        return None;
+    }
+    let txs =
+        serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(txs_body).ok()?;
+    let matched = txs.iter().flat_map(|tx| tx.vin.iter()).any(|input| {
+        let spends_this = input
+            .prevout
+            .as_ref()
+            .and_then(|prevout| prevout.script_pubkey_address.as_deref())
+            == Some(address);
+        let witness = input
+            .witness
+            .as_ref()
+            .is_some_and(|items| !items.is_empty());
+        spends_this && witness && input.script_sig.starts_with("160014")
+    });
+    if matched { Some("P2SH-P2WPKH") } else { None }
+}
+
+/// Visible address-page badge for mainnet wrapped `p2sh-p2wsh`.
+/// The address JSON has no type field. A leading `3` plus 26 to 34 base58
+/// characters starts as `p2sh` (`detectAddressType`). A spend of this address
+/// whose witness array is non-empty and whose scriptsig hex starts with
+/// `220020` changes the type to `p2sh-p2wsh`. Angular has no dedicated case.
+/// The default arm uppercases the type, so the visible text is `P2SH-P2WSH`.
+/// Called only when the four address-string badges and the `160014` badge
+/// return nothing. This reads the scriptsig and the witness to choose the
+/// badge. It does not print them and it does not decode the witness.
+/// `160014` is not this badge.
+fn p2sh_p2wsh_address_badge(
+    network: Network,
+    address: &str,
+    txs_body: &str,
+) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let rest = address.strip_prefix('3')?;
+    if !p2pkh_base58_rest(rest) {
+        return None;
+    }
+    let txs =
+        serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(txs_body).ok()?;
+    let matched = txs.iter().flat_map(|tx| tx.vin.iter()).any(|input| {
+        let spends_this = input
+            .prevout
+            .as_ref()
+            .and_then(|prevout| prevout.script_pubkey_address.as_deref())
+            == Some(address);
+        let witness = input
+            .witness
+            .as_ref()
+            .is_some_and(|items| !items.is_empty());
+        spends_this && witness && input.script_sig.starts_with("220020")
+    });
+    if matched { Some("P2SH-P2WSH") } else { None }
+}
+
+/// Visible address-page badge for mainnet `p2sh` when no spend rewrote it.
+/// The address JSON has no type field. A leading `3` plus 26 to 34 base58
+/// characters is `p2sh` (`detectAddressType`). Angular has no dedicated case.
+/// The default arm uppercases the type, so the visible text is `P2SH`.
+/// Called only when the address-string badges and the wrapped spend badges
+/// return nothing. A non-empty witness and a scriptsig that starts with
+/// `160014` or `220020` rewrote the type, so this line stays off. This reads
+/// the scriptsig and the witness to choose the badge. It does not print them.
+/// This is not the output line `Type P2SH`.
+fn p2sh_address_badge(network: Network, address: &str, txs_body: &str) -> Option<&'static str> {
+    if network != Network::Mainnet {
+        return None;
+    }
+    let rest = address.strip_prefix('3')?;
+    if !p2pkh_base58_rest(rest) {
+        return None;
+    }
+    let txs =
+        serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(txs_body).ok()?;
+    let rewritten = txs.iter().flat_map(|tx| tx.vin.iter()).any(|input| {
+        let spends_this = input
+            .prevout
+            .as_ref()
+            .and_then(|prevout| prevout.script_pubkey_address.as_deref())
+            == Some(address);
+        let witness = input
+            .witness
+            .as_ref()
+            .is_some_and(|items| !items.is_empty());
+        spends_this
+            && witness
+            && (input.script_sig.starts_with("160014") || input.script_sig.starts_with("220020"))
+    });
+    if rewritten { None } else { Some("P2SH") }
+}
+
+/// Warning line from the first spend of this address on the no-query txs list.
+/// A tapscript address stays off this line. A `p2sh` or `v0_p2wsh` address
+/// keeps the inner script unless a non-empty witness and a scriptsig that
+/// starts with `160014` changed the type to `p2sh-p2wpkh`. `220020` still
+/// keeps the script. The line is `Multisig`, the required signature count,
+/// `of`, and the key count. It is not an output type line.
+fn address_multisig_warning(network: Network, address: &str, txs_body: &str) -> Option<String> {
+    if network != Network::Mainnet || p2tr_address_badge(network, address).is_some() {
+        return None;
+    }
+    let p2sh = address.strip_prefix('3').is_some_and(p2pkh_base58_rest);
+    let p2wsh = p2wsh_address_badge(network, address).is_some();
+    if !p2sh && !p2wsh {
+        return None;
+    }
+    let txs =
+        serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(txs_body).ok()?;
+    let input = txs.iter().flat_map(|tx| tx.vin.iter()).find(|input| {
+        input
+            .prevout
+            .as_ref()
+            .and_then(|prevout| prevout.script_pubkey_address.as_deref())
+            == Some(address)
+    })?;
+    let asm = kept_inner_asm(input, p2sh)?;
+    multisig_label(asm)
+}
+
+/// `parseMultisigScript` on the inner script `handleVin` keeps.
+/// `v1_p2tr` and `v0_p2wpkh` stay off this line. A non-empty witness plus
+/// scriptsig `160014` drops the script. The asm stays off the line.
+fn input_multisig_warning(input: &splora_frontend_shared::wire::TxInput) -> Option<String> {
+    let kind = input.prevout.as_ref()?.script_pubkey_type.as_str();
+    if kind != "p2sh" && kind != "v0_p2wsh" {
+        return None;
+    }
+    let asm = kept_inner_asm(input, kind == "p2sh")?;
+    multisig_label(asm)
+}
+
+fn kept_inner_asm<'a>(
+    input: &'a splora_frontend_shared::wire::TxInput,
+    drop_wrapped_pubkey: bool,
+) -> Option<&'a str> {
+    if drop_wrapped_pubkey {
+        let witness = input
+            .witness
+            .as_ref()
+            .is_some_and(|items| !items.is_empty());
+        if witness && input.script_sig.starts_with("160014") {
+            return None;
+        }
+    }
+    non_empty(input.inner_witness_script_asm.as_deref())
+        .or_else(|| non_empty(input.inner_redeem_script_asm.as_deref()))
+}
+
+fn non_empty(text: Option<&str>) -> Option<&str> {
+    text.filter(|value| !value.is_empty())
+}
+
+/// `detectScriptTemplate` commitment output on a `v0_p2wsh` witness script.
+/// The item under the last witness item is the branch selector. `01` is the
+/// revocation path. That label stays off this line. Any other selector,
+/// including an empty delayed to_local item, paints `Lightning Force Close`.
+/// The asm and the witness stay off the line.
+fn lightning_force_close_line(input: &splora_frontend_shared::wire::TxInput) -> Option<String> {
+    let kind = input.prevout.as_ref()?.script_pubkey_type.as_str();
+    if kind != "v0_p2wsh" {
+        return None;
+    }
+    let asm = non_empty(input.inner_witness_script_asm.as_deref())?;
+    if !commitment_output_asm(asm) {
+        return None;
+    }
+    let witness = input.witness.as_ref().filter(|items| !items.is_empty())?;
+    let under_last = witness
+        .len()
+        .checked_sub(2)
+        .and_then(|index| witness.get(index));
+    if under_last.is_some_and(|item| item == "01") {
+        return None;
+    }
+    Some("Lightning Force Close".to_string())
+}
+
+/// `detectScriptTemplate` offered or received HTLC on a `v0_p2wsh` witness
+/// script. The item under the last witness item is the branch selector.
+/// Length 66 is the revocation pubkey. An empty item is the expiry path.
+/// Those labels stay off this line. Any other non-empty selector paints
+/// `Lightning HTLC`. The asm and the witness stay off the line.
+fn lightning_htlc_line(input: &splora_frontend_shared::wire::TxInput) -> Option<String> {
+    let kind = input.prevout.as_ref()?.script_pubkey_type.as_str();
+    if kind != "v0_p2wsh" {
+        return None;
+    }
+    let asm = non_empty(input.inner_witness_script_asm.as_deref())?;
+    if !offered_htlc_asm(asm) && !received_htlc_asm(asm) {
+        return None;
+    }
+    let witness = input.witness.as_ref().filter(|items| items.len() >= 2)?;
+    let under_last = witness.get(witness.len() - 2)?;
+    if under_last.is_empty() || under_last.len() == 66 {
+        return None;
+    }
+    Some("Lightning HTLC".to_string())
+}
+
+/// Ordinals envelope marker: `OP_0 OP_IF OP_PUSHBYTES_3` then `ord`.
+const INSCRIPTION_MARK: &str = "0063036f7264";
+
+/// `parseTaproot` script-path script. A last witness item that starts with
+/// `50` is an annex. The script is the item before the control block.
+/// A key-path spend has no script. The bytes stay off the painted line.
+fn taproot_script_path_script(witness: &[String]) -> Option<&str> {
+    if witness.is_empty() {
+        return None;
+    }
+    let has_annex = witness.len() > 1 && witness.last().is_some_and(|item| item.starts_with("50"));
+    let key_path_len = if has_annex { 2 } else { 1 };
+    if witness.len() <= key_path_len {
+        return None;
+    }
+    let from_end = if has_annex { 3 } else { 2 };
+    witness.get(witness.len() - from_end).map(String::as_str)
+}
+
+/// `transactions-list` inscription button. A `v1_p2tr` input paints
+/// `Inscription` when the network is not Liquid and the script-path script
+/// includes `0063036f7264`. Liquid stays off. The script and the witness stay off.
+fn inscription_line(
+    input: &splora_frontend_shared::wire::TxInput,
+    network: Network,
+) -> Option<&'static str> {
+    if network == Network::Liquid {
+        return None;
+    }
+    let kind = input.prevout.as_ref()?.script_pubkey_type.as_str();
+    if kind != "v1_p2tr" {
+        return None;
+    }
+    let script = taproot_script_path_script(input.witness.as_deref()?)?;
+    if script.contains(INSCRIPTION_MARK) {
+        Some("Inscription")
+    } else {
+        None
+    }
+}
+
+/// Shared offered and received prefix through `OP_SIZE 32 OP_EQUAL`.
+fn htlc_prefix(asm: &str) -> Option<&str> {
+    let rest = asm.strip_prefix("OP_DUP OP_HASH160 OP_PUSHBYTES_20 ")?;
+    let rest = take_asm_word(rest, 40)?;
+    let rest = rest.strip_prefix(" OP_EQUAL OP_IF OP_CHECKSIG OP_ELSE OP_PUSHBYTES_33 ")?;
+    let rest = take_asm_word(rest, 66)?;
+    rest.strip_prefix(" OP_SWAP OP_SIZE OP_PUSHBYTES_1 20 OP_EQUAL ")
+}
+
+/// Offered HTLC. The optional anchor tail is `OP_PUSHNUM_1 OP_CSV OP_DROP`.
+fn offered_htlc_asm(asm: &str) -> bool {
+    let Some(rest) = htlc_prefix(asm) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix("OP_NOTIF OP_DROP OP_PUSHNUM_2 OP_SWAP OP_PUSHBYTES_33 ")
+    else {
+        return false;
+    };
+    let Some(rest) = take_asm_word(rest, 66) else {
+        return false;
+    };
+    let Some(rest) =
+        rest.strip_prefix(" OP_PUSHNUM_2 OP_CHECKMULTISIG OP_ELSE OP_HASH160 OP_PUSHBYTES_20 ")
+    else {
+        return false;
+    };
+    let Some(rest) = take_asm_word(rest, 40) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(" OP_EQUALVERIFY OP_CHECKSIG OP_ENDIF") else {
+        return false;
+    };
+    htlc_anchor_tail(rest)
+}
+
+/// Received HTLC. The optional anchor tail is `OP_PUSHNUM_1 OP_CSV OP_DROP`.
+fn received_htlc_asm(asm: &str) -> bool {
+    let Some(rest) = htlc_prefix(asm) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix("OP_IF OP_HASH160 OP_PUSHBYTES_20 ") else {
+        return false;
+    };
+    let Some(rest) = take_asm_word(rest, 40) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(" OP_EQUALVERIFY OP_PUSHNUM_2 OP_SWAP OP_PUSHBYTES_33 ")
+    else {
+        return false;
+    };
+    let Some(rest) = take_asm_word(rest, 66) else {
+        return false;
+    };
+    let Some(rest) =
+        rest.strip_prefix(" OP_PUSHNUM_2 OP_CHECKMULTISIG OP_ELSE OP_DROP OP_PUSHBYTES_3 ")
+    else {
+        return false;
+    };
+    let Some(rest) = take_asm_word(rest, 6) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(" OP_CLTV OP_DROP OP_CHECKSIG OP_ENDIF") else {
+        return false;
+    };
+    htlc_anchor_tail(rest)
+}
+
+/// `(OP_PUSHNUM_1 OP_CSV OP_DROP |)OP_ENDIF`
+fn htlc_anchor_tail(rest: &str) -> bool {
+    rest == " OP_ENDIF" || rest == " OP_PUSHNUM_1 OP_CSV OP_DROP OP_ENDIF"
+}
+
+fn take_asm_word(text: &str, len: usize) -> Option<&str> {
+    let (token, rest) = split_asm_token(text)?;
+    if asm_word(token, len) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+/// `^OP_IF OP_PUSHBYTES_33 \w{66} OP_ELSE OP_PUSH(NUM_\d+|BYTES_(1 \w{2}|2 \w{4})) OP_CSV OP_DROP OP_PUSHBYTES_33 \w{66} OP_ENDIF OP_CHECKSIG$`
+fn commitment_output_asm(asm: &str) -> bool {
+    let Some(rest) = asm.strip_prefix("OP_IF OP_PUSHBYTES_33 ") else {
+        return false;
+    };
+    let Some((first_key, rest)) = split_asm_token(rest) else {
+        return false;
+    };
+    if !asm_word(first_key, 66) {
+        return false;
+    }
+    let Some(rest) = rest.strip_prefix(" OP_ELSE OP_PUSH") else {
+        return false;
+    };
+    let Some(rest) = commitment_delay(rest) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(" OP_CSV OP_DROP OP_PUSHBYTES_33 ") else {
+        return false;
+    };
+    let Some((second_key, rest)) = split_asm_token(rest) else {
+        return false;
+    };
+    asm_word(second_key, 66) && rest == " OP_ENDIF OP_CHECKSIG"
+}
+
+fn commitment_delay(text: &str) -> Option<&str> {
+    if let Some(rest) = text.strip_prefix("NUM_") {
+        let digits = rest
+            .bytes()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digits == 0 {
+            return None;
+        }
+        return Some(&rest[digits..]);
+    }
+    if let Some(rest) = text.strip_prefix("BYTES_1 ") {
+        let (token, rest) = split_asm_token(rest)?;
+        if asm_word(token, 2) {
+            return Some(rest);
+        }
+        return None;
+    }
+    if let Some(rest) = text.strip_prefix("BYTES_2 ") {
+        let (token, rest) = split_asm_token(rest)?;
+        if asm_word(token, 4) {
+            return Some(rest);
+        }
+        return None;
+    }
+    None
+}
+
+fn split_asm_token(text: &str) -> Option<(&str, &str)> {
+    let end = text.find(' ').unwrap_or(text.len());
+    if end == 0 {
+        return None;
+    }
+    Some((&text[..end], &text[end..]))
+}
+
+fn asm_word(token: &str, len: usize) -> bool {
+    token.len() == len && token.bytes().all(asm_word_byte)
+}
+
+fn asm_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn multisig_label(asm: &str) -> Option<String> {
+    let (required, keys) = multisig_counts(asm)?;
+    Some(format!("Multisig {required} of {keys}"))
+}
+
+/// `parseMultisigScript`. Counts come from the asm. Leftover ops are not multisig.
+fn multisig_counts(script: &str) -> Option<(usize, usize)> {
+    if script.is_empty() {
+        return None;
+    }
+    let mut ops: Vec<&str> = script.split(' ').collect();
+    if ops.len() < 3 || ops.pop() != Some("OP_CHECKMULTISIG") {
+        return None;
+    }
+    let keys = pop_script_number(&mut ops)?;
+    let need = keys.checked_mul(2)?.checked_add(1)?;
+    if ops.len() < need {
+        return None;
+    }
+    for _ in 0..keys {
+        if !multisig_key(ops.pop()?) || !multisig_push(ops.pop()?) {
+            return None;
+        }
+    }
+    let required = pop_script_number(&mut ops)?;
+    if !ops.is_empty() {
+        return None;
+    }
+    Some((required, keys))
+}
+
+/// `popScriptNumberOperand`. `OP_0`, `OP_PUSHNUM_`, or a little-endian push.
+fn pop_script_number(ops: &mut Vec<&str>) -> Option<usize> {
+    let token = ops.pop()?;
+    if token == "OP_0" {
+        return Some(0);
+    }
+    if token.starts_with("OP_PUSHNUM_") {
+        let bytes = token.as_bytes();
+        let start = bytes.iter().position(|byte| byte.is_ascii_digit())?;
+        let end = bytes[start..]
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .map(|index| start + index)
+            .unwrap_or(bytes.len());
+        return std::str::from_utf8(&bytes[start..end]).ok()?.parse().ok();
+    }
+    if token.starts_with("OP_") {
+        return None;
+    }
+    let push_op = ops.pop()?;
+    let byte_count: usize = push_op.strip_prefix("OP_PUSHBYTES_")?.parse().ok()?;
+    if byte_count == 0 || token.len() != byte_count.checked_mul(2)? {
+        return None;
+    }
+    if !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut value = 0_usize;
+    for index in 0..byte_count {
+        let start = index * 2;
+        let byte = usize::from_str_radix(&token[start..start + 2], 16).ok()?;
+        let shift = u32::try_from(8 * index).ok()?;
+        value = value.checked_add(byte.checked_shl(shift)?)?;
+    }
+    Some(value)
+}
+
+fn is_base58(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'1'..=b'9'
+            | b'A'..=b'H'
+            | b'J'..=b'N'
+            | b'P'..=b'Z'
+            | b'a'..=b'k'
+            | b'm'..=b'z'
+    )
+}
+
+fn is_bech32_lw(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'a' | b'c'..=b'h' | b'j'..=b'n' | b'p'..=b'z' | b'0' | b'2'..=b'9'
+    )
 }
 
 /// One `GET /address/:script` and one `GET /address/:script/utxo` per entered address.
@@ -1558,6 +2380,7 @@ const INDEXER_SENTENCES: &[&str] = &[
     "Transaction not found",
     "Block not found",
     "address search disabled",
+    "Invalid Bitcoin address",
     "Asset id not found",
     "endpoint does not exist",
 ];
@@ -1744,12 +2567,18 @@ fn classify_hex<G: ExplorerGet>(
                 // may have a name. Either document is this route.
                 if named.is_some() || one_registry_asset(&body).is_some() {
                     let (name, ticker) = named.unwrap_or_else(|| (String::new(), String::new()));
-                    let (stats, issuance_txid) = asset_stats_lines(&body);
+                    let (mut stats, issuance_txid) = asset_stats_lines(&body);
                     let txs_path = asset_txs_path(token);
                     let txs = match read_probe(client, &txs_path)? {
                         ProbeBody::Hit(txs) if indexer_sentence(&txs).is_none() => txs,
                         _ => String::new(),
                     };
+                    if let Some(of_line) = asset_loaded_of_line(&body, &txs) {
+                        if !stats.is_empty() {
+                            stats.push('\n');
+                        }
+                        stats.push_str(&of_line);
+                    }
                     let asset_id = asset_document_id(&body).unwrap_or_else(|| token.to_string());
                     return Ok(HexHit::Asset {
                         name,
@@ -2251,6 +3080,28 @@ fn transaction_count_words(body: &str) -> Option<String> {
     Some(format!("Transactions {sum}"))
 }
 
+/// Loaded list length, the word of, and chain tx_count plus mempool tx_count.
+/// One row uses `transaction`. More than one uses `transactions`.
+/// An empty list is a non-breaking space, not a count.
+/// A missing tx_count is not zero and does not get the count line.
+fn loaded_transactions_of_line(stats_body: &str, txs_body: &str) -> Option<String> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(txs_body).ok()?;
+    if rows.is_empty() {
+        return Some("\u{00A0}".to_string());
+    }
+    let chain = chain_side(stats_body)?;
+    let mempool = mempool_side(stats_body)?;
+    let chain_count = json_u64_at(&chain, "tx_count")?;
+    let mempool_count = json_u64_at(&mempool, "tx_count")?;
+    let sum = chain_count as i128 + mempool_count as i128;
+    let noun = if rows.len() == 1 {
+        "transaction"
+    } else {
+        "transactions"
+    };
+    Some(format!("{} of {sum} {noun}", rows.len()))
+}
+
 /// Mempool funded sum minus mempool spent sum. A missing sum is not zero.
 /// The difference is signed so two `u64` values do not wrap.
 /// This is not Pending UTXOs and not the confirmed balance.
@@ -2386,9 +3237,11 @@ fn render_recent(body: &str) -> Result<String, ClientError> {
         .map_err(http_parse)?;
     let rows = splora_frontend_shared::cap_recent_transactions(&rows);
     if rows.is_empty() {
-        return Ok("recent:".to_string());
+        return Ok("recent:\nThere are no transactions.".to_string());
     }
-    let mut lines = Vec::with_capacity(rows.len() + 4);
+    let mut lines = Vec::with_capacity(rows.len() + 5);
+    // Same letters as the dashboard card title and the recent-transactions page h1.
+    lines.push("Recent Transactions".to_string());
     lines.push("TXID".to_string());
     lines.push("Amount".to_string());
     lines.push("vSize".to_string());
@@ -2423,16 +3276,23 @@ fn render_fee_estimates(body: &str) -> Result<String, ClientError> {
 fn render_mempool_summary(body: &str) -> Result<String, ClientError> {
     let stats = serde_json::from_str::<splora_frontend_shared::wire::MempoolSummary>(body)
         .map_err(http_parse)?;
-    let mut lines = vec![format!(
-        "mempool count {} vsize {} total_fee {}",
-        stats.count, stats.vsize, stats.total_fee
-    )];
+    // Unconfirmed: is the count caption. Mempool size: is the raw vsize integer.
+    let mut lines = vec![
+        "Unconfirmed:".to_string(),
+        format!(
+            "mempool count {} vsize {} total_fee {}",
+            stats.count, stats.vsize, stats.total_fee
+        ),
+        "Mempool size:".to_string(),
+        stats.vsize.to_string(),
+    ];
     for (rate, vsize) in stats.fee_histogram {
         lines.push(format!(
             "fee_histogram {} {vsize}",
             plain_number(f64::from(rate))
         ));
     }
+    // The virtual-byte rate is not in this payload, so vB/s stays off.
     lines.push("The incoming virtual-bytes-per-second rate is not in the payload.".to_string());
     Ok(lines.join("\n"))
 }
@@ -2489,12 +3349,48 @@ fn tx_extra_fields(tx: &splora_frontend_shared::wire::Transaction) -> String {
     )
 }
 
+/// `transactions-list` `inputRowLimit`. `rowLimit` is 12.
+const INPUT_ROW_LIMIT: usize = 12;
+/// `transactions-list` `outputRowLimit`.
+const OUTPUT_ROW_LIMIT: usize = 12;
+/// `transactions-list` `showMoreIncrement`.
+const SHOW_MORE_INCREMENT: usize = 1000;
+/// A leftover of this many rows, or fewer, expands the limit to the full list.
+const SHOW_MORE_EXPAND_TAIL: usize = 5;
+
+/// Angular `getVinLimit` / `getVoutLimit` on the first paint.
+/// No stored `@vinLimit`, so the cap is the row limit, or `showMoreIncrement` when `next` is set.
+/// `length - limit <= 5` expands to `length` and the button stays off.
+fn transactions_list_limit(len: usize, row_limit: usize, next: bool) -> usize {
+    let cap = if next { SHOW_MORE_INCREMENT } else { row_limit };
+    let mut limit = cap.min(len);
+    if len - limit <= SHOW_MORE_EXPAND_TAIL {
+        limit = len;
+    }
+    limit
+}
+
+/// Button line when `length > getVinLimit(tx)`. Outputs use `getVoutLimit`.
+/// `Show all` when `getVinLimit(tx, true) >= length`. Otherwise `Show more`.
+/// The count is `length - getVinLimit(tx)`, then the word remaining.
+fn transactions_list_more_line(len: usize, row_limit: usize) -> Option<String> {
+    let shown = transactions_list_limit(len, row_limit, false);
+    if len <= shown {
+        return None;
+    }
+    let next = transactions_list_limit(len, row_limit, true);
+    let label = if next >= len { "Show all" } else { "Show more" };
+    Some(format!("{label} ({} remaining)", len - shown))
+}
+
 fn render_tx_parties(
     tx: &splora_frontend_shared::wire::Transaction,
     vin_json: &[serde_json::Value],
+    network: Option<Network>,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    for (index, input) in tx.vin.iter().enumerate() {
+    let vin_shown = transactions_list_limit(tx.vin.len(), INPUT_ROW_LIMIT, false);
+    for (index, input) in tx.vin.iter().enumerate().take(vin_shown) {
         lines.push(format!("input outpoint {}:{}", input.txid, input.vout));
         if let Some(prevout) = &input.prevout {
             let address = prevout.script_pubkey_address.as_deref().unwrap_or("");
@@ -2504,6 +3400,8 @@ fn render_tx_parties(
             ));
             push_script_type(&mut lines, "input", &prevout.script_pubkey_type);
             push_previous_output_type(&mut lines, &prevout.script_pubkey_type);
+            // Exact label when this input has a previous output. The asm stays off this line.
+            lines.push("Previous output script".to_string());
         }
         if input.prevout.is_none()
             && input.issuance.is_none()
@@ -2520,26 +3418,55 @@ fn render_tx_parties(
         push_input_coinbase(&mut lines, raw);
         push_input_sequence(&mut lines, raw);
         // Missing, null, and "" omit this line. Do not trim. The asm stays plaintext.
-        if let Some(asm) = input
-            .inner_redeem_script_asm
-            .as_deref()
-            .filter(|text| !text.is_empty())
-        {
-            lines.push(format!("P2SH redeem script {asm}"));
+        // A warning taken from this redeem script replaces the asm line.
+        let witness_script = non_empty(input.inner_witness_script_asm.as_deref());
+        let redeem_script = non_empty(input.inner_redeem_script_asm.as_deref());
+        let warning = input_multisig_warning(input);
+        if let Some(warning) = warning.as_deref() {
+            lines.push(warning.to_string());
+        }
+        // Commitment output on this input. `01` stays off. The asm stays off.
+        if let Some(label) = lightning_force_close_line(input) {
+            lines.push(label);
+        }
+        // Offered or received HTLC. A 66-character item and an empty item stay off.
+        if let Some(label) = lightning_htlc_line(input) {
+            lines.push(label);
+        }
+        if let Some(asm) = redeem_script {
+            let from_redeem = warning.is_some() && witness_script.is_none();
+            if !from_redeem {
+                lines.push(format!("P2SH redeem script {asm}"));
+            }
         }
         // Exact label when the prevout type is v1_p2tr. The inner script stays off this line.
-        if input
+        // Any other prevout, including a null prevout, paints `P2WSH witness script`
+        // when the inner witness script asm is nonempty. The asm stays off that line.
+        let prevout_is_tapscript = input
             .prevout
             .as_ref()
-            .is_some_and(|prevout| prevout.script_pubkey_type == "v1_p2tr")
-        {
+            .is_some_and(|prevout| prevout.script_pubkey_type == "v1_p2tr");
+        if prevout_is_tapscript {
             lines.push("P2TR tapscript".to_string());
+        } else if witness_script.is_some() {
+            lines.push("P2WSH witness script".to_string());
+        }
+        // Ordinals envelope on this taproot script-path spend. Liquid stays off.
+        // The script and the witness stay off this line.
+        if let Some(network) = network {
+            if let Some(label) = inscription_line(input, network) {
+                lines.push(label.to_string());
+            }
         }
         if let Some(issuance) = &input.issuance {
             lines.extend(issuance_lines(issuance));
         }
     }
-    for output in &tx.vout {
+    if let Some(words) = transactions_list_more_line(tx.vin.len(), INPUT_ROW_LIMIT) {
+        lines.push(words);
+    }
+    let vout_shown = transactions_list_limit(tx.vout.len(), OUTPUT_ROW_LIMIT, false);
+    for output in tx.vout.iter().take(vout_shown) {
         let address = output.script_pubkey_address.as_deref().unwrap_or("");
         lines.push(format!(
             "output address {address} value {}",
@@ -2548,8 +3475,13 @@ fn render_tx_parties(
         push_script_type(&mut lines, "output", &output.script_pubkey_type);
         push_output_type(&mut lines, &output.script_pubkey_type);
         push_transaction_fee_label(&mut lines, output);
+        push_address_type_fee(&mut lines, output);
         push_p2pk_label(&mut lines, output);
         push_op_return_label(&mut lines, output);
+        push_peg_out_to_label(&mut lines, output);
+    }
+    if let Some(words) = transactions_list_more_line(tx.vout.len(), OUTPUT_ROW_LIMIT) {
+        lines.push(words);
     }
     lines
 }
@@ -2569,6 +3501,8 @@ fn push_output_type(lines: &mut Vec<String>, script_type: &str) {
     if script_type.is_empty() {
         return;
     }
+    // The label is its own line. The uppercase type stays.
+    lines.push("Type".to_string());
     lines.push(format!("Type {}", script_type.to_uppercase()));
 }
 
@@ -2591,6 +3525,16 @@ fn push_transaction_fee_label(
         return;
     }
     lines.push("Transaction fee".to_string());
+}
+
+/// Address-type element body when `scriptpubkey_type` is `fee`.
+/// The caption is the word `fee`. `Type FEE` and `Transaction fee` stay.
+/// An input does not call it.
+fn push_address_type_fee(lines: &mut Vec<String>, output: &splora_frontend_shared::wire::TxOutput) {
+    if output.script_pubkey_type != "fee" {
+        return;
+    }
+    lines.push("fee".to_string());
 }
 
 /// Address-cell text from the scriptpubkeyType pipe.
@@ -2618,6 +3562,7 @@ fn push_p2pk_label(lines: &mut Vec<String>, output: &splora_frontend_shared::wir
 /// peg-out. That branch is later than peg-out, so a peg-out object hides the
 /// line. An input does not call it. `Type OP_RETURN` stays the separate
 /// uppercase line. Script asm and script hex stay off this line.
+/// A script hex that starts with `6a5d` also paints the line `Runestone`.
 fn push_op_return_label(lines: &mut Vec<String>, output: &splora_frontend_shared::wire::TxOutput) {
     if output.script_pubkey_type != "op_return" {
         return;
@@ -2630,6 +3575,29 @@ fn push_op_return_label(lines: &mut Vec<String>, output: &splora_frontend_shared
         return;
     }
     lines.push("OP_RETURN".to_string());
+    if output.script_pubkey.starts_with("6a5d") {
+        lines.push("Runestone".to_string());
+    }
+    // Angular details cell. The decoded payload stays off this line.
+    lines.push("data".to_string());
+}
+
+/// Address-cell caption when the output has a peg-out, no address, and the
+/// type is not `p2pk`. The p2pk branch is earlier, so that output keeps `P2PK`.
+/// An address hides this caption. `Liquid Peg Out` stays a separate badge.
+/// Script hex and script asm stay off this line.
+fn push_peg_out_to_label(lines: &mut Vec<String>, output: &splora_frontend_shared::wire::TxOutput) {
+    if output.pegout.is_none() || output.script_pubkey_type == "p2pk" {
+        return;
+    }
+    let has_address = output
+        .script_pubkey_address
+        .as_deref()
+        .is_some_and(|address| !address.is_empty());
+    if has_address {
+        return;
+    }
+    lines.push("Peg-out to".to_string());
 }
 
 /// Uppercase `prevout.scriptpubkey_type` on its own line. An empty string is omitted.
@@ -2646,12 +3614,16 @@ fn push_previous_output_type(lines: &mut Vec<String>, script_type: &str) {
 
 /// Shared `is_coinbase` is a bool, so a missing key is not false.
 /// Only JSON `true` paints. False, null, and a missing key stay off the screen.
-/// The parenthetical is the next plaintext line. There is no HTML class and no liquid switch.
+/// The Angular label is its own line. The lowercase data word is its own line.
+/// `input coinbase` stays the data row.
+/// The parenthetical is the line after that. There is no HTML class and no liquid switch.
 fn push_input_coinbase(lines: &mut Vec<String>, raw: Option<&serde_json::Value>) {
     let Some(raw) = raw else {
         return;
     };
     if raw.get("is_coinbase").and_then(|value| value.as_bool()) == Some(true) {
+        lines.push("Coinbase".to_string());
+        lines.push("coinbase".to_string());
         lines.push("input coinbase".to_string());
         lines.push("(Newly Generated Coins)".to_string());
     }
@@ -3062,6 +4034,277 @@ fn two_decimals_half_away_from_zero(value: f64) -> String {
     if negative { format!("-{text}") } else { text }
 }
 
+/// `transaction-details.component.html` features row. The visible text is
+/// the word Features. Unconfirmed status is on. A confirmed height is on
+/// when rbf, segwit, or taproot is active. Mainnet rbf is 399701. Liquid
+/// hides the row. A missing status does not count as enabled. Badges stay
+/// off this line.
+fn features_label_line(
+    tx: &splora_frontend_shared::wire::Transaction,
+    network: Network,
+) -> Option<&'static str> {
+    if network == Network::Liquid || !features_enabled(tx, network) {
+        None
+    } else {
+        Some("Features")
+    }
+}
+
+/// Unconfirmed, or a confirmed height at or after rbf, segwit, or taproot.
+/// Liquid is not in that table.
+fn features_enabled(tx: &splora_frontend_shared::wire::Transaction, network: Network) -> bool {
+    rbf_feature_enabled(tx, network)
+        || segwit_feature_enabled(tx, network)
+        || taproot_feature_enabled(tx, network)
+}
+
+/// `!status.confirmed` or a confirmed height at or after rbf activation.
+/// Mainnet is 399701. Testnet3 is 720255. Testnet4 and signet are 0.
+/// Liquid is not in that table, so a confirmed liquid transaction stays off.
+fn rbf_feature_enabled(tx: &splora_frontend_shared::wire::Transaction, network: Network) -> bool {
+    let Some(status) = tx.status.as_ref() else {
+        return false;
+    };
+    if !status.confirmed {
+        return true;
+    }
+    let Some(height) = status.block_height else {
+        return false;
+    };
+    let Some(activation) = rbf_activation_height(network) else {
+        return false;
+    };
+    height >= activation
+}
+
+fn rbf_activation_height(network: Network) -> Option<u64> {
+    match network {
+        Network::Mainnet => Some(399_701),
+        Network::Testnet3 => Some(720_255),
+        Network::Testnet4 | Network::Mutinynet => Some(0),
+        Network::Liquid => None,
+    }
+}
+
+/// `tx-features.component.html` line 2, on the transaction details row.
+/// The visible text is the word SegWit. Segwit must be enabled, the realized
+/// weight savings must be nonzero, and the potential savings must be zero.
+/// Liquid hides that row. A missing status does not count as enabled.
+/// The percent, the tooltip, and the RBF badge stay off this line.
+fn segwit_badge_line(
+    tx: &splora_frontend_shared::wire::Transaction,
+    network: Network,
+) -> Option<&'static str> {
+    if network == Network::Liquid || !segwit_feature_enabled(tx, network) {
+        return None;
+    }
+    let (realized, potential) = segwit_weight_savings(tx);
+    if realized != 0 && potential == 0 {
+        Some("SegWit")
+    } else {
+        None
+    }
+}
+
+/// `!status.confirmed` or a confirmed height at or after segwit activation.
+/// Mainnet is 477120. Testnet3 is 872730. Testnet4 and signet are 0.
+/// Liquid is not in that table, so a confirmed liquid transaction stays off.
+fn segwit_feature_enabled(
+    tx: &splora_frontend_shared::wire::Transaction,
+    network: Network,
+) -> bool {
+    let Some(status) = tx.status.as_ref() else {
+        return false;
+    };
+    if !status.confirmed {
+        return true;
+    }
+    let Some(height) = status.block_height else {
+        return false;
+    };
+    let Some(activation) = segwit_activation_height(network) else {
+        return false;
+    };
+    height >= activation
+}
+
+fn segwit_activation_height(network: Network) -> Option<u64> {
+    match network {
+        Network::Mainnet => Some(477_120),
+        Network::Testnet3 => Some(872_730),
+        Network::Testnet4 | Network::Mutinynet => Some(0),
+        Network::Liquid => None,
+    }
+}
+
+/// `tx-features.component.html` lines 11-25, on the transaction details row.
+/// The visible text is the word Taproot. Taproot must be enabled. Liquid hides
+/// that row. A missing status does not count as enabled. The percent, the
+/// tooltip, and the RBF badge stay off this line.
+fn taproot_badge_line(
+    tx: &splora_frontend_shared::wire::Transaction,
+    network: Network,
+) -> Option<&'static str> {
+    if network == Network::Liquid || !taproot_feature_enabled(tx, network) {
+        None
+    } else {
+        Some("Taproot")
+    }
+}
+
+/// `!status.confirmed` or a confirmed height at or after taproot activation.
+/// Mainnet is 709632. Testnet3 is 2032291. Testnet4 and signet are 0.
+/// Liquid is not in that table, so a confirmed liquid transaction stays off.
+fn taproot_feature_enabled(
+    tx: &splora_frontend_shared::wire::Transaction,
+    network: Network,
+) -> bool {
+    let Some(status) = tx.status.as_ref() else {
+        return false;
+    };
+    if !status.confirmed {
+        return true;
+    }
+    let Some(height) = status.block_height else {
+        return false;
+    };
+    let Some(activation) = taproot_activation_height(network) else {
+        return false;
+    };
+    height >= activation
+}
+
+fn taproot_activation_height(network: Network) -> Option<u64> {
+    match network {
+        Network::Mainnet => Some(709_632),
+        Network::Testnet3 => Some(2_032_291),
+        Network::Testnet4 | Network::Mutinynet => Some(0),
+        Network::Liquid => None,
+    }
+}
+
+/// Realized and potential segwit savings from `calcSegwitFeeGains`, in half
+/// weight units, so a half-byte stays exact. Zero matches a falsy percent.
+/// Taproot fee percents are not part of the SegWit line.
+fn segwit_weight_savings(tx: &splora_frontend_shared::wire::Transaction) -> (i64, i64) {
+    const P2SH_P2WPKH_HALF: i64 = 21 * 4 * 2;
+    const P2SH_P2WSH_HALF: i64 = 35 * 4 * 2;
+    let mut realized = 0_i64;
+    let mut potential = 0_i64;
+    for vin in &tx.vin {
+        let Some(prevout) = vin.prevout.as_ref() else {
+            continue;
+        };
+        let kind = prevout.script_pubkey_type.as_str();
+        let is_p2pk = kind == "p2pk";
+        let is_bare = multisig_asm(&prevout.script_pubkey_asm).is_some();
+        let is_p2pkh = kind == "p2pkh";
+        let is_p2sh = kind == "p2sh";
+        let is_p2wsh = kind == "v0_p2wsh";
+        let is_p2wpkh = kind == "v0_p2wpkh";
+        let is_p2tr = kind == "v1_p2tr";
+        let op = if vin.script_sig.is_empty() {
+            None
+        } else {
+            vin.script_sig_asm.split(' ').next()
+        };
+        let witness_here = vin.witness.is_some();
+        let is_p2sh_p2wpkh = is_p2sh && witness_here && op == Some("OP_PUSHBYTES_22");
+        let is_p2sh_p2wsh = is_p2sh && witness_here && op == Some("OP_PUSHBYTES_34");
+        let witness_half = witness_hex_len(vin.witness.as_deref()) * 3;
+        if is_p2wpkh || is_p2wsh || is_p2tr {
+            let extra = if is_p2tr { 42 * 3 * 2 } else { 0 };
+            realized += witness_half + extra;
+        } else if is_p2sh_p2wpkh {
+            realized += witness_half - P2SH_P2WPKH_HALF;
+            potential += P2SH_P2WPKH_HALF;
+        } else if is_p2sh_p2wsh {
+            realized += witness_half - P2SH_P2WSH_HALF;
+            potential += P2SH_P2WSH_HALF;
+        } else if is_p2pkh || is_p2sh || is_p2pk || is_bare {
+            let mut full = hex_chars(&vin.script_sig) * 3;
+            if is_bare {
+                full -= hex_chars(&prevout.script_pubkey);
+            }
+            potential += full;
+        }
+    }
+    (realized, potential)
+}
+
+fn witness_hex_len(witness: Option<&[String]>) -> i64 {
+    witness
+        .unwrap_or(&[])
+        .iter()
+        .map(|item| hex_chars(item))
+        .sum()
+}
+
+fn hex_chars(text: &str) -> i64 {
+    i64::try_from(text.len()).unwrap_or(i64::MAX)
+}
+
+/// `parseMultisigScript`. `Some` means the previous output is bare multisig.
+fn multisig_asm(script: &str) -> Option<()> {
+    if script.is_empty() {
+        return None;
+    }
+    let mut ops: Vec<&str> = script.split(' ').collect();
+    if ops.len() < 3 || ops.pop() != Some("OP_CHECKMULTISIG") {
+        return None;
+    }
+    let n = pushnum(ops.pop()?)?;
+    let need = n.checked_mul(2)?.checked_add(1)?;
+    if ops.len() < need {
+        return None;
+    }
+    for _ in 0..n {
+        if !multisig_key(ops.pop()?) || !multisig_push(ops.pop()?) {
+            return None;
+        }
+    }
+    pushnum(ops.pop()?)?;
+    if !ops.is_empty() {
+        return None;
+    }
+    Some(())
+}
+
+fn pushnum(op: &str) -> Option<usize> {
+    if op != "OP_0" && !op.starts_with("OP_PUSHNUM_") {
+        return None;
+    }
+    let bytes = op.as_bytes();
+    let start = bytes.iter().position(|byte| byte.is_ascii_digit())?;
+    let end = bytes[start..]
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .map(|index| start + index)
+        .unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[start..end]).ok()?.parse().ok()
+}
+
+fn multisig_push(op: &str) -> bool {
+    op == "OP_PUSHBYTES_33" || op == "OP_PUSHBYTES_65"
+}
+
+fn multisig_key(key: &str) -> bool {
+    let bytes = key.as_bytes();
+    if bytes.first() != Some(&b'0') {
+        return false;
+    }
+    let rest = &bytes[1..];
+    match rest.first() {
+        Some(b'2' | b'3') => rest.len() == 65 && rest[1..].iter().all(is_js_word),
+        Some(b'4') => rest.len() == 129 && rest[1..].iter().all(is_js_word),
+        _ => false,
+    }
+}
+
+fn is_js_word(byte: &u8) -> bool {
+    byte.is_ascii_alphanumeric() || *byte == b'_'
+}
+
 /// Tip height minus the transaction block height, plus 1.
 /// Both heights present paint the count. A block height with an unparsed tip
 /// paints Confirmed. A parsed tip with no block height paints Unconfirmed.
@@ -3110,6 +4353,7 @@ fn render_tx_row(
     tx: &splora_frontend_shared::wire::Transaction,
     vin_json: &[serde_json::Value],
     document_weight: Option<u64>,
+    network: Option<Network>,
 ) -> String {
     let (confirmed, block_height) = tx_confirmed_and_height(tx);
     let mut lines = vec![format!(
@@ -3123,7 +4367,7 @@ fn render_tx_row(
         block_hash_and_time(tx.status.as_ref()),
         tx_extra_fields(tx)
     )];
-    lines.extend(render_tx_parties(tx, vin_json));
+    lines.extend(render_tx_parties(tx, vin_json, network));
     lines.join("\n")
 }
 
@@ -3139,7 +4383,7 @@ fn render_tx_list(body: &str) -> Result<String, ClientError> {
         .enumerate()
         .map(|(index, tx)| {
             let vin = values.get(index).map(vin_objects).unwrap_or_default();
-            render_tx_row(tx, &vin, Some(u64::from(tx.weight)))
+            render_tx_row(tx, &vin, Some(u64::from(tx.weight)), None)
         })
         .collect::<Vec<_>>()
         .join("\n"))
@@ -3227,31 +4471,33 @@ fn render_address_txs(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body)
         .map_err(http_parse)?;
     if rows.is_empty() {
-        return Ok("The address transaction list is empty.".to_string());
+        return Ok(
+            "There are no transactions.\nThe address transaction list is empty.".to_string(),
+        );
     }
     let values: Vec<serde_json::Value> = serde_json::from_str(body).map_err(http_parse)?;
-    Ok(rows
-        .iter()
-        .enumerate()
-        .map(|(index, tx)| {
-            let vin = values.get(index).map(vin_objects).unwrap_or_default();
-            let (confirmed, block_height) = tx_confirmed_and_height(tx);
-            let mut lines = vec![format!(
-                "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}{}{}",
-                tx.txid,
-                confirmed,
-                block_height,
-                tx.fee,
-                tx.size,
-                tx.weight,
-                block_hash_and_time(tx.status.as_ref()),
-                tx_extra_fields(tx)
-            )];
-            lines.extend(render_tx_parties(tx, &vin));
-            lines.join("\n")
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    // address-transactions-widget.component.html. The column header is its own line.
+    // The block_time cell stays the raw integer.
+    lines.push("Date".to_string());
+    lines.extend(rows.iter().enumerate().map(|(index, tx)| {
+        let vin = values.get(index).map(vin_objects).unwrap_or_default();
+        let (confirmed, block_height) = tx_confirmed_and_height(tx);
+        let mut row_lines = vec![format!(
+            "address tx txid {} confirmed {} block_height {} fee {} size {} weight {}{}{}",
+            tx.txid,
+            confirmed,
+            block_height,
+            tx.fee,
+            tx.size,
+            tx.weight,
+            block_hash_and_time(tx.status.as_ref()),
+            tx_extra_fields(tx)
+        )];
+        row_lines.extend(render_tx_parties(tx, &vin, None));
+        row_lines.join("\n")
+    }));
+    Ok(lines.join("\n"))
 }
 
 fn paint_address_tx_page(
@@ -3285,11 +4531,29 @@ fn paint_address_tx_page(
     Ok(txs.last().map(|tx| tx.txid.clone()))
 }
 
+/// Parsed `GET /address/:script/txs` rows. An empty list and a body that
+/// does not parse are not longer than two.
+fn address_txs_exceed_two(body: &str) -> bool {
+    match serde_json::from_str::<Vec<splora_frontend_shared::wire::Transaction>>(body) {
+        Ok(rows) => rows.len() > 2,
+        Err(_) => false,
+    }
+}
+
+/// Parsed `GET /address/:script/utxo` rows. An empty list and a body that
+/// does not parse are not longer than two.
+fn utxo_rows_exceed_two(body: &str) -> bool {
+    match serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body) {
+        Ok(rows) => rows.len() > 2,
+        Err(_) => false,
+    }
+}
+
 fn render_utxos(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::Utxo>>(body)
         .map_err(http_parse)?;
     if rows.is_empty() {
-        return Ok("The utxo list is empty.".to_string());
+        return Ok("There are no unspent outputs.\nThe utxo list is empty.".to_string());
     }
     Ok(rows
         .iter()
@@ -3308,14 +4572,30 @@ fn render_utxos(body: &str) -> Result<String, ClientError> {
         .join("\n"))
 }
 
-fn push_spend(lines: &mut Vec<String>, rows: &mut Vec<String>, spent: bool, txid: Option<&str>) {
+fn push_spend(
+    lines: &mut Vec<String>,
+    rows: &mut Vec<String>,
+    spent: bool,
+    txid: Option<&str>,
+    vin: Option<u32>,
+    confirmed: Option<bool>,
+) {
     if !spent {
         lines.push("spent false".to_string());
-        return;
+    } else {
+        lines.push("spent true".to_string());
+        if let Some(txid) = txid.filter(|txid| !txid.is_empty()) {
+            lines.push(format!("spend txid {txid}"));
+            rows.push(format!("row spend txid {txid}"));
+        }
     }
-    if let Some(txid) = txid.filter(|txid| !txid.is_empty()) {
-        lines.push(format!("spend txid {txid}"));
-        rows.push(format!("row spend txid {txid}"));
+    if let Some(vin) = vin {
+        lines.push(format!("vin {vin}"));
+    }
+    // Outspend status.confirmed true is its own line. false and a missing
+    // status stay off. Block height, block hash, and block time stay off.
+    if confirmed == Some(true) {
+        lines.push("confirmed true".to_string());
     }
 }
 
@@ -3352,14 +4632,15 @@ fn shorten_string(value: &str, length: usize) -> String {
     format!("{head}...{tail}")
 }
 
-fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
+fn block_details_text(block: &splora_frontend_shared::wire::Block, network: Network) -> String {
     // A missing key is None. Some(0) still prints. Do not substitute zero.
     // Details version, bits, and nonce are the decimal beside 8 lowercase hex digits.
     // The summary line stays decimal.
     let version_hex = format!("0x{value:08x}", value = block.version);
     // Angular `i18n="block.merkle-root"` is the full string. The raw line stays.
+    // Angular `i18n="block.weight"` is the full string. The raw weight line stays.
     let mut text = format!(
-        "block details\nid {}\nHash {}\nheight {}\nversion {} {version_hex}\ntimestamp {}\nTXs\ntx_count {}\nsize {}\nweight {}\nmerkle_root {}\nMerkle root {}\npreviousblockhash {}\nmediantime {}",
+        "block details\nid {}\nHash {}\nheight {}\nversion {} {version_hex}\ntimestamp {}\nTXs\ntx_count {}\nsize {}\nweight {}\nWeight\nmerkle_root {}\nMerkle root {}\npreviousblockhash {}\nmediantime {}",
         block.id,
         shorten_string(&block.id, 13),
         block.height,
@@ -3374,7 +4655,14 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block) -> String {
         block.median_time,
     );
     if let Some(nonce) = block.nonce {
-        text.push_str(&format!("\nnonce {nonce} 0x{value:08x}", value = nonce));
+        let hex = format!("0x{value:08x}", value = nonce);
+        // block.component.html i18n="block.nonce". decimal2hex is 8 lowercase digits.
+        // Liquid hides that column. The raw decimal-and-hex line stays.
+        if network != Network::Liquid {
+            text.push_str("\nNonce ");
+            text.push_str(&hex);
+        }
+        text.push_str(&format!("\nnonce {nonce} {hex}"));
     }
     if let Some(bits) = block.bits {
         text.push_str(&format!("\nbits {bits} 0x{value:08x}", value = bits));
@@ -3528,6 +4816,26 @@ fn pegged_asset_stats(native: &splora_frontend_shared::NativeRegistryAsset) -> S
     lines.join("\n")
 }
 
+/// Loaded list length, the word of, and chain tx_count plus mempool tx_count.
+/// The asset heading has no noun after the count. An empty list stays off.
+/// A missing tx_count is not zero.
+fn asset_loaded_of_line(body: &str, txs_body: &str) -> Option<String> {
+    let rows: Vec<serde_json::Value> = serde_json::from_str(txs_body).ok()?;
+    if rows.is_empty() {
+        return None;
+    }
+    let (chain_count, mempool_count) = match one_registry_asset(body)? {
+        RegistryAsset::Issued(issued) => {
+            (issued.chain_stats.tx_count, issued.mempool_stats.tx_count)
+        }
+        RegistryAsset::Native(native) => {
+            (native.chain_stats.tx_count, native.mempool_stats.tx_count)
+        }
+    };
+    let sum = i128::from(chain_count) + i128::from(mempool_count);
+    Some(format!("{} of {sum}", rows.len()))
+}
+
 /// Liquid Bitcoin on liquid. Liquid testnet and every other asset use issuance.
 fn asset_transaction_heading(asset_id: &str) -> &'static str {
     const NATIVE_LIQUID_ASSET: &str =
@@ -3659,8 +4967,10 @@ fn poison_lines_for_tx(
     if found.is_empty() {
         return Vec::new();
     }
-    let mut lines =
-        vec!["Warning! This transaction involves deceptively similar addresses.".to_string()];
+    let mut lines = vec![
+        "Warning! This transaction involves deceptively similar addresses.".to_string(),
+        "Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.".to_string(),
+    ];
     lines.extend(found);
     lines
 }
@@ -3777,6 +5087,16 @@ fn registry_issued_lines(body: &str) -> String {
             }
             if let Some(ticker) = issued.ticker.filter(|ticker| !ticker.is_empty()) {
                 lines.push(ticker);
+            }
+            // Stored `entity.domain`. Not the Issuer domain header and not
+            // the asset-page `Issuer {domain}` line.
+            if let Some(domain) = issued
+                .entity
+                .get("domain")
+                .and_then(|value| value.as_str())
+                .filter(|domain| !domain.is_empty())
+            {
+                lines.push(domain.to_string());
             }
         }
     }
@@ -3924,7 +5244,12 @@ fn render_test_accept(body: &str) -> Result<String, ClientError> {
     if txids.is_empty() {
         return Ok(String::new());
     }
-    let mut lines = vec!["Allowed?".to_string()];
+    // test-transactions.component.html. The column header is its own line.
+    let mut lines = vec![
+        "Allowed?".to_string(),
+        "Rejection reason".to_string(),
+        "Effective fee rate".to_string(),
+    ];
     if let Ok(rows) = serde_json::from_str::<Vec<splora_frontend_shared::wire::TestTxResult>>(body)
     {
         if !rows.is_empty() {
@@ -4520,7 +5845,10 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
                 append_tx_body(&mut lines, &txs);
                 append_tx_body(&mut lines, &chain);
                 append_tx_body(&mut lines, &mempool);
-                if let Ok(text) = parse_asset_supply(&supply) {
+                if supply.trim().starts_with("Asset supply is blinded") {
+                    lines.push('\n');
+                    lines.push_str("Asset supply is blinded");
+                } else if let Ok(text) = parse_asset_supply(&supply) {
                     lines.push('\n');
                     lines.push_str(&text);
                 }
@@ -4571,6 +5899,12 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
                     return Ok(());
                 }
                 let addresses = parse_address_prefix(&body).map_err(http_parse)?;
+                if addresses.is_empty() {
+                    self.dashboard.lines = "There are no addresses.".to_string();
+                    self.dashboard.rows.clear();
+                    self.screen = Screen::Dashboard;
+                    return Ok(());
+                }
                 self.dashboard.lines = addresses.join("\n");
                 self.dashboard.rows = addresses
                     .iter()
@@ -4602,6 +5936,7 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
                 // Each hit is one button. The row is not a second window.
                 if !hits.is_empty() {
                     lines.push("suggestion window".to_string());
+                    lines.push("Liquid Asset".to_string());
                 }
                 for hit in &hits {
                     if !hit.name.is_empty() {
@@ -6302,7 +7637,7 @@ mod tests {
             serde_json::from_str(zero).expect("zero block");
         for painted in [
             render_block_line(&zero_block),
-            block_details_text(&zero_block),
+            block_details_text(&zero_block, Network::Mainnet),
         ] {
             assert!(painted.contains("nonce 0"), "{painted}");
             assert!(painted.contains("bits 0"), "{painted}");
@@ -6314,7 +7649,7 @@ mod tests {
             serde_json::from_str(omitted).expect("omitted block");
         for painted in [
             render_block_line(&omitted_block),
-            block_details_text(&omitted_block),
+            block_details_text(&omitted_block, Network::Mainnet),
         ] {
             assert!(!painted.contains("nonce"), "{painted}");
             assert!(!painted.contains("bits"), "{painted}");

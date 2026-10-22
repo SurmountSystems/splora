@@ -5,7 +5,8 @@
 //! needs a viewport, so it is not asserted here.
 
 use splora_web::{
-    block_details_markup, block_transactions_markup, block_tx_page_path, details_open_after_click,
+    block_details_markup, block_load_plan, block_transactions_markup, block_tx_page_path,
+    details_open_after_click,
 };
 
 const HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -203,5 +204,303 @@ fn details_button_shows_then_hides_the_panel() {
     assert!(
         !page.contains("Fiat price last updated"),
         "BlockPage renders a fiat timestamp"
+    );
+}
+
+fn difficulty_block_json(id: &str, difficulty: Option<&str>) -> String {
+    let difficulty_field = match difficulty {
+        Some(value) => format!(r#","difficulty":{value}"#),
+        None => String::new(),
+    };
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"merkle-root","previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":2{difficulty_field}}}"#
+    )
+}
+
+/// Whole line `Difficulty 1` from no-query `GET /block/:hash` when details are open.
+///
+/// The Difficulty cell stays. `1.0` prints as `1`, not `1.0`. Closed details
+/// omit the line. A missing key omits the cell and the line.
+#[test]
+fn open_block_details_paint_difficulty_1() {
+    const LINE: &str = "Difficulty 1";
+    let id = "diffblock1";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let body = difficulty_block_json(id, Some("1.0"));
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        open.contains("<tr><td>Difficulty</td><td>1</td></tr>"),
+        "{open}"
+    );
+    assert!(
+        !open
+            .lines()
+            .any(|line| line == "Difficulty 1.0" || line == "difficulty 1.0"),
+        "plain_number painted 1.0: {open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.contains("<tr><td>Difficulty</td><td>1</td></tr>"),
+        "{closed}"
+    );
+
+    let missing = block_details_markup(&difficulty_block_json(id, None), true);
+    assert!(
+        !missing.lines().any(|line| line == LINE),
+        "missing difficulty painted {LINE}: {missing}"
+    );
+    assert!(!missing.contains("<td>Difficulty</td>"), "{missing}");
+}
+
+/// Whole line `Difficulty 1.5` from no-query `GET /block/:hash` when details are open.
+///
+/// The Difficulty cell stays. The integer line `Difficulty 1` is not painted
+/// again. Closed details omit the line. A missing key omits the cell and the line.
+#[test]
+fn open_block_details_paint_difficulty_1_5() {
+    const LINE: &str = "Difficulty 1.5";
+    let id = "diffblock15";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let body = difficulty_block_json(id, Some("1.5"));
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        open.contains("<tr><td>Difficulty</td><td>1.5</td></tr>"),
+        "{open}"
+    );
+    assert!(
+        !open.lines().any(|line| line == "Difficulty 1"),
+        "painted Difficulty 1 again: {open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.contains("<tr><td>Difficulty</td><td>1.5</td></tr>"),
+        "{closed}"
+    );
+
+    let missing = block_details_markup(&difficulty_block_json(id, None), true);
+    assert!(
+        !missing.lines().any(|line| line == LINE),
+        "missing difficulty painted {LINE}: {missing}"
+    );
+    assert!(!missing.contains("<td>Difficulty</td>"), "{missing}");
+}
+
+fn merkle_block_json(id: &str, merkle_root: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":2,"version":1,"timestamp":1700000000,"tx_count":1,"size":100,"weight":400,"merkle_root":"{merkle_root}","previousblockhash":null,"mediantime":1699990000,"nonce":9,"bits":2,"difficulty":1}}"#
+    )
+}
+
+/// Whole line `Merkle root mm` from no-query `GET /block/:hash` when details are open.
+///
+/// The Merkle root cell stays. Closed details omit the line. This is not Difficulty.
+#[test]
+fn open_block_details_paint_merkle_root_mm() {
+    const LINE: &str = "Merkle root mm";
+    let id = "merklemm";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let body = merkle_block_json(id, "mm");
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        open.contains("<tr><td>Merkle root</td><td>mm</td></tr>"),
+        "{open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.contains("<tr><td>Merkle root</td><td>mm</td></tr>"),
+        "{closed}"
+    );
+}
+
+fn previous_block_json(id: &str, previous: Option<&str>) -> String {
+    let previous_field = match previous {
+        Some(value) => format!(r#","previousblockhash":"{value}""#),
+        None => String::new(),
+    };
+    format!(
+        r#"{{"id":"{id}","height":800000,"version":1,"timestamp":1700000000,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","mediantime":1700000000,"nonce":1,"bits":2,"difficulty":1{previous_field}}}"#
+    )
+}
+
+/// Whole line `previousblockhash prevblock` from no-query `GET /block/:hash` when details are open.
+///
+/// Closed details omit the line. A missing key omits the line. This is not Merkle root.
+#[test]
+fn open_block_details_paint_previousblockhash_prevblock() {
+    const LINE: &str = "previousblockhash prevblock";
+    let id = "oneblock";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let body = previous_block_json(id, Some("prevblock"));
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+
+    let missing = block_details_markup(&previous_block_json(id, None), true);
+    assert!(
+        !missing.lines().any(|line| line == LINE),
+        "missing previousblockhash painted {LINE}: {missing}"
+    );
+    assert!(
+        !missing
+            .lines()
+            .any(|line| line.starts_with("previousblockhash")),
+        "missing previousblockhash painted a previous line: {missing}"
+    );
+}
+
+/// Whole line `mediantime 1700000000` from no-query `GET /block/:hash` when details are open.
+///
+/// Closed details omit the line. A missing key does not invent the line.
+/// This is not the previousblockhash line.
+#[test]
+fn open_block_details_paint_mediantime_1700000000() {
+    const LINE: &str = "mediantime 1700000000";
+    let id = "oneblock";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let body = previous_block_json(id, Some("prevblock"));
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+
+    let missing = r#"{"id":"oneblock","height":800000,"version":1,"timestamp":1700000000,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","previousblockhash":"prevblock","nonce":1,"bits":2,"difficulty":1}"#;
+    let missing_paint = block_details_markup(missing, true);
+    assert!(
+        !missing_paint
+            .lines()
+            .any(|line| line.starts_with("mediantime")),
+        "missing mediantime painted a median line: {missing_paint}"
     );
 }

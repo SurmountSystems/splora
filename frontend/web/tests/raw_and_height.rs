@@ -91,3 +91,10 @@ fn failed_block_height_body_is_a_notice() {
         "BlockPage still preformats the height body: {block_page}"
     );
 }
+
+#[test]
+fn block_raw_markup_shows_block_raw_ccdd() {
+    let rows = "<tr class=\"block-row\">fields</tr>";
+    let markup = block_raw_beside(rows, &[0xcc, 0xdd]);
+    assert!(markup.contains("block raw ccdd"), "{markup}");
+}

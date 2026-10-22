@@ -100,3 +100,216 @@ fn null_sigops_omits_the_label() {
     assert_absent(&markup, "sigops-label");
     assert_scripts_stay_off(&markup);
 }
+
+/// Whole line `Sigops 0` from no-query `GET /tx/:txid`.
+///
+/// Sigops 0 paints that line once. The label cell and the raw integer cell
+/// stay. Sigops 1 paints `Sigops 1` once. A value that groups with a comma
+/// does not gain a whole line. Adjusted vsize and virtual size stay in their
+/// cells and do not become their own lines.
+#[test]
+fn sigops_zero_paints_sigops_0_as_its_own_line() {
+    const LINE: &str = "Sigops 0";
+    let markup = transaction_row_markup(&tx(7, Sigops::Present(0)));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert!(
+        markup.lines().filter(|line| *line == "Sigops").count() == 1,
+        "Sigops was not one line: {markup}"
+    );
+    assert_one(&markup, LABEL);
+    assert_one(&markup, &raw_cell(0));
+    assert_one(
+        &markup,
+        "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted as its own line: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "virtual size 1"),
+        "virtual size 1 was painted as its own line: {markup}"
+    );
+    assert_scripts_stay_off(&markup);
+
+    let one = transaction_row_markup(&tx(40, Sigops::Present(1)));
+    assert!(
+        one.lines().any(|line| line == "Sigops 1"),
+        "Sigops 1 is absent: {one}"
+    );
+    assert_eq!(
+        one.lines().filter(|line| *line == "Sigops 1").count(),
+        1,
+        "Sigops 1 was not one line: {one}"
+    );
+    assert_one(&one, LABEL);
+    assert_one(&one, &raw_cell(1));
+    assert_scripts_stay_off(&one);
+
+    let grouped = transaction_row_markup(&tx(40, Sigops::Present(1500)));
+    assert!(
+        !grouped.lines().any(|line| line == "Sigops 1,500"),
+        "sigops 1500 painted Sigops 1,500: {grouped}"
+    );
+    assert!(
+        !grouped.lines().any(|line| line == "Sigops 1500"),
+        "sigops 1500 painted Sigops 1500: {grouped}"
+    );
+    assert_one(&grouped, LABEL);
+    assert_one(&grouped, &raw_cell(1500));
+    assert_scripts_stay_off(&grouped);
+}
+
+/// Whole line `Sigops` from no-query `GET /tx/:txid`.
+///
+/// A present sigops, including explicit 0, paints a line whose entire text
+/// is Sigops. The label cell and the raw integer cell stay. `Sigops 0`
+/// stays. This calls `transaction_row_markup`. A missing key or JSON null
+/// is covered by the omit tests above.
+#[test]
+fn sigops_present_paints_sigops_as_its_own_line() {
+    const LINE: &str = "Sigops";
+    let markup = transaction_row_markup(&tx(7, Sigops::Present(0)));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "Sigops 0"),
+        "Sigops 0 was dropped: {markup}"
+    );
+    assert_one(&markup, LABEL);
+    assert_one(&markup, &raw_cell(0));
+    assert_scripts_stay_off(&markup);
+}
+
+/// Whole line `Version 0` from no-query `GET /tx/:txid`.
+///
+/// Version 0 paints that line once. The raw version cell stays the integer.
+/// A value that groups with a comma does not gain a whole line. Version 1
+/// does not gain a whole line: other transaction-row tests still require
+/// the word Version to stay absent when version is 1.
+#[test]
+fn version_zero_paints_version_0_as_its_own_line() {
+    const LINE: &str = "Version 0";
+    let body = tx(7, Sigops::Present(0)).replace("\"version\":1", "\"version\":0");
+    let markup = transaction_row_markup(&body);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert_one(&markup, "<td class=\"version\">0</td>");
+    assert_scripts_stay_off(&markup);
+
+    let one = transaction_row_markup(&tx(40, Sigops::Present(1)));
+    assert!(
+        !one.lines().any(|line| line == "Version 1"),
+        "version 1 painted Version 1: {one}"
+    );
+    assert_one(&one, "<td class=\"version\">1</td>");
+    assert_scripts_stay_off(&one);
+
+    let grouped_body = tx(40, Sigops::Present(1)).replace("\"version\":1", "\"version\":1500");
+    let grouped = transaction_row_markup(&grouped_body);
+    assert!(
+        !grouped.lines().any(|line| line == "Version 1,500"),
+        "version 1500 painted Version 1,500: {grouped}"
+    );
+    assert!(
+        !grouped.lines().any(|line| line == "Version 1500"),
+        "version 1500 painted Version 1500: {grouped}"
+    );
+    assert_one(&grouped, "<td class=\"version\">1500</td>");
+    assert_scripts_stay_off(&grouped);
+}
+
+/// Whole line `Version 2` from no-query `GET /tx/:txid`.
+///
+/// Version 2 paints that line once, and only when the version text is `2`.
+/// The raw version cell stays the integer. Version 0, Version 1, and a
+/// comma-grouped version do not gain this line. A version 1 row still has
+/// no word Version.
+#[test]
+fn version_two_paints_version_2_as_its_own_line() {
+    const LINE: &str = "Version 2";
+    let body = tx(7, Sigops::Present(0)).replace("\"version\":1", "\"version\":2");
+    let markup = transaction_row_markup(&body);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Version 0"),
+        "version 2 painted Version 0: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Version 1"),
+        "version 2 painted Version 1: {markup}"
+    );
+    assert_one(&markup, "<td class=\"version\">2</td>");
+    assert_scripts_stay_off(&markup);
+
+    let one = transaction_row_markup(&tx(40, Sigops::Present(1)));
+    assert!(
+        !one.lines().any(|line| line == "Version 1"),
+        "version 1 painted Version 1: {one}"
+    );
+    assert!(
+        !one.contains("Version"),
+        "version 1 contains the word Version: {one}"
+    );
+    assert_one(&one, "<td class=\"version\">1</td>");
+    assert_scripts_stay_off(&one);
+
+    let zero_body = tx(7, Sigops::Present(0)).replace("\"version\":1", "\"version\":0");
+    let zero = transaction_row_markup(&zero_body);
+    assert!(
+        zero.lines().any(|line| line == "Version 0"),
+        "version 0 dropped Version 0: {zero}"
+    );
+    assert!(
+        !zero.lines().any(|line| line == "Version 2"),
+        "version 0 painted Version 2: {zero}"
+    );
+
+    let grouped_body = tx(40, Sigops::Present(1)).replace("\"version\":1", "\"version\":1500");
+    let grouped = transaction_row_markup(&grouped_body);
+    assert!(
+        !grouped.lines().any(|line| line == "Version 1,500"),
+        "version 1500 painted Version 1,500: {grouped}"
+    );
+    assert!(
+        !grouped.lines().any(|line| line == "Version 1500"),
+        "version 1500 painted Version 1500: {grouped}"
+    );
+    assert!(
+        !grouped.contains("Version"),
+        "version 1500 contains the word Version: {grouped}"
+    );
+    assert_one(&grouped, "<td class=\"version\">1500</td>");
+    assert_scripts_stay_off(&grouped);
+}

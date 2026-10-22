@@ -86,7 +86,7 @@ fn assert_no_extra_controls(markup: &str) {
 fn output_type_paints_the_label_and_the_uppercase_type() {
     let body = tx(&input("null"), &output("v0_p2wpkh"));
     let markup = transaction_row_markup(&body);
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, &label_spans("V0_P2WPKH"));
     assert_one(
         &markup,
@@ -117,7 +117,7 @@ fn type_with_markup_characters_is_uppercased_then_escaped() {
 fn two_outputs_paint_the_label_twice() {
     let vout = format!("{},{}", output("v0_p2wpkh"), output("p2sh"));
     let markup = transaction_row_markup(&tx(&input("null"), &vout));
-    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
+    assert_eq!(markup.matches(LABEL).count(), 4, "{markup}");
     assert_one(&markup, &label_spans("V0_P2WPKH"));
     assert_one(&markup, &label_spans("P2SH"));
     assert_one(
@@ -132,7 +132,7 @@ fn two_outputs_paint_the_label_twice() {
 fn output_type_stays_beside_the_previous_output_label() {
     let body = tx(&input(&prevout("v0_p2wpkh")), &output("p2pkh"));
     let markup = transaction_row_markup(&body);
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, &label_spans("P2PKH"));
     assert_one(&markup, "Previous output type");
     assert_one(
@@ -151,7 +151,7 @@ fn output_type_stays_beside_the_previous_output_label() {
 fn empty_type_omits_the_label_for_that_output() {
     let vout = format!("{},{}", output(""), output("p2pkh"));
     let markup = transaction_row_markup(&tx(&input("null"), &vout));
-    assert_eq!(markup.matches(LABEL).count(), 1, "{markup}");
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, &label_spans("P2PKH"));
     assert_one(&markup, "<h2>Inputs & Outputs</h2>");
     assert_one(&markup, "<span class=\"scriptpubkey-type\">p2pkh</span>");
@@ -182,7 +182,7 @@ fn fee_output_type_is_transaction_fee_and_fee_input_stays_uppercase() {
         "<span class=\"scriptpubkey-type\">input script type fee</span>",
     );
     assert_one(&markup, "<span class=\"label\">Fee</span>");
-    assert_eq!(markup.matches("Fee rate").count(), 1, "{markup}");
+    assert_eq!(markup.matches("Fee rate").count(), 2, "{markup}");
     assert_eq!(markup.matches("<td class=\"fee\">").count(), 1, "{markup}");
     assert_absent(&markup, "<span class=\"output-type\">OP_RETURN</span>");
     assert_no_extra_controls(&markup);

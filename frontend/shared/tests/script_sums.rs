@@ -109,7 +109,10 @@ fn serialize_none_omits_both_sum_keys() {
             !object.contains_key("spent_txo_sum"),
             "{side} still has spent_txo_sum: {encoded}"
         );
-        assert_eq!(object["tx_count"], if side == "chain_stats" { 9 } else { 3 });
+        assert_eq!(
+            object["tx_count"],
+            if side == "chain_stats" { 9 } else { 3 }
+        );
     }
 }
 

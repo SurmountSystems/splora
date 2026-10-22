@@ -6,7 +6,7 @@
 //! An id of length 13 or less is the whole id. The hash cell stays the full
 //! id link. A missing id fails the block parse and does not paint Hash.
 
-use splora_web::block_rows_markup;
+use splora_web::{block_details_markup, block_load_plan, block_rows_markup};
 
 const LONG_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SHORT_ID: &str = "0123456789abc";
@@ -78,4 +78,72 @@ fn missing_id_does_not_paint_hash() {
         !markup.contains("Hash"),
         "missing id painted Hash: {markup}"
     );
+}
+
+fn details_json(id: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","height":800000,"version":1,"timestamp":1700000000,"tx_count":1,"size":20,"weight":80,"merkle_root":"mm","previousblockhash":"pp","mediantime":1700000000,"nonce":1,"bits":2,"difficulty":1.0}}"#
+    )
+}
+
+/// Whole line `Hash 012345...9abcdef` from no-query `GET /block/:hash` when details are open.
+///
+/// Angular `shortenString` of length 13. Closed details omit the line.
+/// The hash label cell, the short-hash cell, and the raw nonce line stay.
+#[test]
+fn open_block_details_paint_hash_012345_shortened() {
+    const LINE: &str = "Hash 012345...9abcdef";
+    const RAW_NONCE: &str = "nonce 1 0x00000001";
+    let id = "hashlabelblock";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let body = details_json(LONG_ID);
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        open.lines().any(|line| line == RAW_NONCE),
+        "raw {RAW_NONCE} was dropped: {open}"
+    );
+    assert!(
+        !open.contains("Nonce 0x00000009"),
+        "painted the closed nonce label for a different fixture: {open}"
+    );
+    assert!(
+        open.contains("<tr><td>Version</td>"),
+        "version cell was dropped: {open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    assert!(
+        closed.contains("<tr><td>Version</td>"),
+        "closed details dropped the version cell: {closed}"
+    );
+
+    let rows = block_rows_markup(&body, "[]");
+    assert_one(&rows, HASH_LABEL);
+    assert_one(&rows, &short_cell("012345...9abcdef"));
 }

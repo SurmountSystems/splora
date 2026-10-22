@@ -84,3 +84,60 @@ fn fee_one_million_paints_grouped() {
     assert_one(&markup, "<td class=\"fee\">1000000</td>");
     assert_scripts_stay_off(&markup);
 }
+
+/// Whole line `Fee 0 sats` from no-query `GET /tx/:txid`.
+///
+/// Fee 0 paints that line once. The Fee cell keeps the label and the unit
+/// apart. Fee 1 paints `Fee 1 sats` once. The decimal sequence span and the
+/// `nSequence 0x00` span stay. `nSequence 0x00` is not its own line.
+#[test]
+fn fee_zero_paints_fee_0_sats_as_its_own_line() {
+    const LINE: &str = "Fee 0 sats";
+    let markup = transaction_row_markup(&tx(0, 4));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert_one(&markup, &preview_cell("0"));
+    assert_one(&markup, "<td class=\"fee\">0</td>");
+    assert_one(&markup, "<span class=\"sequence\">sequence 1</span>");
+    assert_scripts_stay_off(&markup);
+
+    let one = transaction_row_markup(&tx(1, 4));
+    assert!(
+        one.lines().any(|line| line == "Fee 1 sats"),
+        "Fee 1 sats is absent: {one}"
+    );
+    assert_eq!(
+        one.lines().filter(|line| *line == "Fee 1 sats").count(),
+        1,
+        "Fee 1 sats was not one line: {one}"
+    );
+    assert_one(&one, &preview_cell("1"));
+    assert_scripts_stay_off(&one);
+
+    let zero_seq = transaction_row_markup(&tx(0, 4).replace("\"sequence\":1", "\"sequence\":0"));
+    assert!(
+        zero_seq.lines().any(|line| line == LINE),
+        "{LINE} is absent when sequence is 0: {zero_seq}"
+    );
+    assert_one(&zero_seq, "<span class=\"sequence\">sequence 0</span>");
+    assert_one(
+        &zero_seq,
+        "<span class=\"sequence\">sequence 0</span><span class=\"nsequence\">nSequence 0x00</span>",
+    );
+    assert!(
+        zero_seq.lines().any(|line| line == "sequence 0"),
+        "sequence 0 line was dropped: {zero_seq}"
+    );
+    assert!(
+        !zero_seq.lines().any(|line| line == "nSequence 0x00"),
+        "nSequence 0x00 was painted as its own line: {zero_seq}"
+    );
+    assert_scripts_stay_off(&zero_seq);
+}
