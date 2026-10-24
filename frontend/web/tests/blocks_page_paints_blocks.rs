@@ -7,7 +7,9 @@
 //! text is Blocks does not satisfy this test. A comment that names the word
 //! does not count.
 
-use splora_web::{blocks_list_requests, blocks_rows_markup};
+use splora_web::{
+    blocks_list_requests, blocks_rows_markup, dashboard_recent_blocks_markup, dashboard_rows_markup,
+};
 
 const WORD: &str = "Blocks";
 const H1: &str = "<h1>Blocks</h1>";
@@ -200,4 +202,44 @@ fn blocks_page_paints_blocks() {
     assert_eq!(calls[0].method, "GET");
     assert_eq!(calls[0].path, "/blocks");
     assert!(!calls[0].path.contains('?'), "{}", calls[0].path);
+}
+
+#[test]
+fn blocks_list_paints_blocks_as_its_own_line() {
+    const LINE: &str = "Blocks";
+    let json = blocks_json();
+    let markup = blocks_rows_markup(&json);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(!markup.contains(H1), "the rows gained the h1: {markup}");
+    let lines: Vec<&str> = markup.lines().collect();
+    let heading_at = lines.iter().position(|line| *line == LINE);
+    let txs_at = lines.iter().position(|line| *line == "TXs");
+    assert!(
+        heading_at.is_some() && txs_at.is_some() && heading_at < txs_at,
+        "{LINE} was not before TXs: {markup}"
+    );
+    let empty = blocks_rows_markup("[]");
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "{LINE} painted for an empty list: {empty}"
+    );
+    let unparsed = blocks_rows_markup("not-json");
+    assert!(
+        !unparsed.lines().any(|line| line == LINE),
+        "{LINE} painted for an unparsed body: {unparsed}"
+    );
+    let rows = dashboard_rows_markup(&json, "[]");
+    let dashboard = dashboard_recent_blocks_markup(&rows, &json, true);
+    assert!(
+        !dashboard.lines().any(|line| line == LINE),
+        "the dashboard gained {LINE}: {dashboard}"
+    );
 }

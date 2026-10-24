@@ -138,6 +138,58 @@ fn pegout_output_shows_the_badge_and_the_address_link() {
     assert_no_invented_unblinding(&markup);
 }
 
+/// Whole line beside the peg-out badge.
+///
+/// A line equal to Liquid Peg Out passes. The badge stays. A null peg-out
+/// and a peg-in do not gain the words.
+#[test]
+fn pegout_output_paints_liquid_peg_out_as_its_own_line() {
+    const LINE: &str = "Liquid Peg Out";
+    let body = tx(
+        "pegout-tx",
+        &input("pegout-prev", &output("bc1qsource", "10", ""), ""),
+        &output("", "0", &pegout_object()),
+    );
+    let markup = transaction_row_markup(&body);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"badge\">Liquid Peg Out</span>"),
+        "the badge was dropped: {markup}"
+    );
+    let quiet = tx(
+        "plain-tx",
+        &input(
+            "prev",
+            &output("bc1qinput", "10", ""),
+            r#""is_pegin":false"#,
+        ),
+        &output("bc1qoutput", "9", r#""pegout":null"#),
+    );
+    let omitted = transaction_row_markup(&quiet);
+    assert!(
+        !omitted.contains(LINE),
+        "a null peg-out painted {LINE}: {omitted}"
+    );
+    let pegin = tx(
+        "pegin-tx",
+        &input("pegin-prev", "null", r#""is_pegin":true"#),
+        &output("bc1qchange", "9", ""),
+    );
+    let pegin_markup = transaction_row_markup(&pegin);
+    assert!(
+        !pegin_markup.contains(LINE),
+        "a peg-in painted {LINE}: {pegin_markup}"
+    );
+}
+
 #[test]
 fn false_pegin_and_null_pegout_do_not_invent_a_label() {
     let body = tx(

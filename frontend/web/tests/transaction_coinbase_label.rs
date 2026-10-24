@@ -116,8 +116,8 @@ fn coinbase_input_paints_the_word_coinbase_once() {
     );
     assert_eq!(
         markup.matches(WORD).count(),
-        1,
-        "Coinbase was not once: {markup}"
+        2,
+        "Coinbase was not once in the span and once on its own line: {markup}"
     );
     assert!(
         markup.contains(DATA_SPAN),
@@ -186,6 +186,94 @@ fn coinbase_input_paints_input_coinbase() {
     assert!(
         markup.contains(ADJACENT),
         "the coinbase parenthetical was split from the data row: {markup}"
+    );
+    let ordinary = transaction_row_markup(&tx(false));
+    assert!(
+        !ordinary.lines().any(|line| line == LINE),
+        "false coinbase painted {LINE}: {ordinary}"
+    );
+    assert_scripts_stay_off(&markup);
+}
+
+/// Whole line `Coinbase` from no-query `GET /tx/:txid` when `is_coinbase` is true.
+///
+/// Angular paints the word Coinbase. GPUI `screen_paints_coinbase` requires
+/// one line equal to Coinbase. The label span stays. A false coinbase omits
+/// the line. `input coinbase` is the data row, not this label.
+#[test]
+fn coinbase_input_paints_coinbase_as_its_own_line() {
+    const LINE: &str = "Coinbase";
+    assert_no_query_transaction_page();
+    let markup = transaction_row_markup(&tx(true));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"tx-coinbase-label\">Coinbase</span>"),
+        "the Coinbase span was dropped: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line.starts_with("Coinbase ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "input coinbase"),
+        "the input coinbase row was dropped: {markup}"
+    );
+    let label_at = markup.lines().position(|line| line == LINE);
+    let data_at = markup.lines().position(|line| line == "input coinbase");
+    assert!(
+        label_at.is_some() && data_at.is_some() && label_at < data_at,
+        "{LINE} was not before input coinbase: {markup}"
+    );
+    let ordinary = transaction_row_markup(&tx(false));
+    assert!(
+        !ordinary.contains(LINE),
+        "false coinbase painted {LINE}: {ordinary}"
+    );
+    assert_scripts_stay_off(&markup);
+}
+
+/// Whole line `coinbase` from no-query `GET /tx/:txid` when `is_coinbase` is true.
+///
+/// GPUI `transaction_screen_paints_coinbase_word` requires one line equal to
+/// `coinbase`. The lowercase span stays glued to `(Newly Generated Coins)`.
+/// `Coinbase` and `input coinbase` stay. A false coinbase omits the line.
+#[test]
+fn coinbase_input_paints_lowercase_coinbase_as_its_own_line() {
+    const LINE: &str = "coinbase";
+    assert_no_query_transaction_page();
+    let markup = transaction_row_markup(&tx(true));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains(ADJACENT),
+        "the coinbase parenthetical was split from the data row: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "Coinbase"),
+        "Coinbase was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "input coinbase"),
+        "input coinbase was dropped: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line.starts_with("coinbase ")),
+        "{LINE} was painted as a longer sentence: {markup}"
     );
     let ordinary = transaction_row_markup(&tx(false));
     assert!(

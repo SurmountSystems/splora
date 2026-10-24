@@ -69,7 +69,8 @@ fn assert_row_still_paints(markup: &str) {
 #[test]
 fn v1_p2tr_input_paints_the_words_once() {
     let markup = transaction_row_markup(&tx(&prevout("v1_p2tr"), "v1_p2tr", ""));
-    assert_one(&markup, LABEL);
+    // The span and the whole line each contain the words.
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_absent(&markup, REDEEM_LABEL);
     assert_sentinels_stay_off(&markup);
@@ -88,8 +89,9 @@ fn p2sh_prevout_keeps_the_redeem_label_and_omits_the_words() {
     let redeem = format!(r#","inner_redeemscript_asm":"{REDEEM_ASM}""#);
     let markup = transaction_row_markup(&tx(&prevout("p2sh"), "p2pkh", &redeem));
     assert_row_still_paints(&markup);
-    assert_one(&markup, REDEEM_LABEL);
-    assert_one(&markup, REDEEM_ASM);
+    // The span and the whole line each contain the label and the asm.
+    assert_eq!(markup.matches(REDEEM_LABEL).count(), 2, "{markup}");
+    assert_eq!(markup.matches(REDEEM_ASM).count(), 2, "{markup}");
     assert_absent(&markup, LABEL);
     assert_sentinels_stay_off(&markup);
 }
@@ -99,7 +101,8 @@ fn null_prevout_redeem_input_omits_the_words() {
     let redeem = format!(r#","inner_redeemscript_asm":"{REDEEM_ASM}""#);
     let markup = transaction_row_markup(&tx("null", "p2pkh", &redeem));
     assert_row_still_paints(&markup);
-    assert_one(&markup, REDEEM_LABEL);
+    // The span and the whole line each contain the label.
+    assert_eq!(markup.matches(REDEEM_LABEL).count(), 2, "{markup}");
     assert_absent(&markup, LABEL);
     assert_sentinels_stay_off(&markup);
 }

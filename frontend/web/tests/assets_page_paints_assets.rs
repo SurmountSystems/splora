@@ -152,3 +152,53 @@ fn assets_page_paints_assets() {
         "mainnet painted the registry row"
     );
 }
+
+/// Whole line beside the assets registry from `GET /assets/registry`.
+///
+/// Angular paints `<h1>Assets</h1>`. A line equal to Assets passes. The
+/// line sits before the Name header. An empty list and mainnet omit it.
+#[test]
+fn loaded_registry_paints_assets_as_its_own_line() {
+    const LINE: &str = "Assets";
+    let markup = registry_list_markup(&registry_json(), true);
+    assert!(
+        markup.contains("<th>Name</th>"),
+        "the registry table was not rendered: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "{LINE} was painted inside a longer sentence: {markup}"
+    );
+    let line_at = markup
+        .lines()
+        .position(|line| line == LINE)
+        .expect("Assets line");
+    let name_at = markup.find("<th>Name</th>").expect("Name header");
+    let before_name = markup[..name_at].lines().count();
+    assert!(
+        line_at < before_name,
+        "Assets was not before the Name header: {markup}"
+    );
+    let empty = registry_list_markup("[]", true);
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty list painted {LINE}: {empty}"
+    );
+    let mainnet = registry_list_markup(&registry_json(), false);
+    assert!(
+        !mainnet.lines().any(|line| line == LINE),
+        "mainnet painted {LINE}: {mainnet}"
+    );
+}

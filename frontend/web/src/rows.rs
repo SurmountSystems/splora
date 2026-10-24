@@ -286,6 +286,8 @@ fn block_row(block: &Block) -> String {
         ),
         td("median-time", &block.median_time.to_string()),
     ];
+    // GPUI whole line. The label cell stays. This line is the words alone.
+    cells.push("\nTXs\n".to_string());
     if let Some(previous) = nonempty(block.previous_block_hash.as_deref()) {
         cells.push(td("previous", &block_anchor(previous)));
     }
@@ -465,6 +467,8 @@ fn input_party(input: &TxInput) -> String {
         // Angular `[ngIf]="vin.prevout"`. The script asm stays off this row.
         inner
             .push_str("<span class=\"previous-output-script-label\">Previous output script</span>");
+        // GPUI whole line. The span stays. A missing prevout never reaches here.
+        inner.push_str("\nPrevious output script\n");
         if !prevout.script_pubkey_type.is_empty() {
             inner.push_str(&script_type_span(&format!(
                 "input script type {}",
@@ -503,9 +507,17 @@ fn input_party(input: &TxInput) -> String {
         // Angular address cell is the word Coinbase. The lowercase span stays
         // the data row and stays adjacent to the parenthetical.
         inner.push_str("<span class=\"tx-coinbase-label\">Coinbase</span>");
+        // GPUI whole line. The span stays. A false coinbase never reaches here.
+        inner.push_str("\nCoinbase\n");
         inner.push_str("<span class=\"coinbase\">coinbase</span>");
         // No liquid or liquidtestnet gate on this markup. Coinbase true paints it.
         inner.push_str("<span class=\"newly-generated-coins\">(Newly Generated Coins)</span>");
+        // GPUI whole line. The span stays glued to the lowercase coinbase span.
+        inner.push_str("\n(Newly Generated Coins)\n");
+        // GPUI whole line. The lowercase span stays glued to the parenthetical.
+        inner.push('\n');
+        inner.push_str("coinbase");
+        inner.push('\n');
         // GPUI whole line. A false coinbase never reaches this branch.
         inner.push_str("\ninput coinbase\n");
     }
@@ -522,6 +534,8 @@ fn input_party(input: &TxInput) -> String {
         && input.is_pegin != Some(true)
     {
         inner.push_str("<span class=\"unknown-input\">UNKNOWN</span>");
+        // GPUI whole line. The span stays. Coinbase, peg-in, issuance, and a prevout never reach here.
+        inner.push_str("\nUNKNOWN\n");
     }
     inner.push_str(&format!(
         "<span class=\"sequence\">sequence {}</span>",
@@ -535,6 +549,11 @@ fn input_party(input: &TxInput) -> String {
         format!("0x{digits}")
     };
     inner.push_str(&format!("<span class=\"nsequence\">nSequence {hex}</span>"));
+    // GPUI whole line for sequence 256. The hex span stays glued to the decimal span.
+    // Sequence 0 stays the span only. Do not paint nSequence 0x00.
+    if hex == "0x0100" {
+        inner.push_str("\nnSequence 0x0100\n");
+    }
     // GPUI whole line. The decimal span and the hex span stay adjacent.
     inner.push_str(&format!("\nsequence {}\n", input.sequence));
     // Angular `*ngIf` is falsy for a missing field and for an empty string.
@@ -548,6 +567,12 @@ fn input_party(input: &TxInput) -> String {
         inner.push_str(&format!(
             "<span class=\"p2sh-redeem-script\">{escaped}</span>"
         ));
+        // GPUI whole line. The spans stay. A missing, null, or empty asm never reaches here.
+        // Escaped asm keeps `<` out of the markup. `OP_DUP OP_HASH160` is unchanged.
+        inner.push('\n');
+        inner.push_str("P2SH redeem script ");
+        inner.push_str(&escaped);
+        inner.push('\n');
     }
     // Angular cell when `vin.prevout.scriptpubkey_type` is `v1_p2tr`.
     // The inner witness script stays off the page.
@@ -557,6 +582,8 @@ fn input_party(input: &TxInput) -> String {
         .is_some_and(|prevout| prevout.script_pubkey_type == "v1_p2tr");
     if tapscript_prevout {
         inner.push_str("<span class=\"p2tr-tapscript-label\">P2TR tapscript</span>");
+        // GPUI whole line. The span stays. Any other prevout never reaches here.
+        inner.push_str("\nP2TR tapscript\n");
     }
     // Angular else branch when `inner_witnessscript_asm` is set and the
     // prevout is not `v1_p2tr`. A missing key, JSON null, and an empty
@@ -568,19 +595,29 @@ fn input_party(input: &TxInput) -> String {
             .is_some_and(|text| !text.is_empty())
     {
         inner.push_str("<span class=\"p2wsh-witness-script-label\">P2WSH witness script</span>");
+        // GPUI whole line. The span stays. The witness script stays off.
+        inner.push('\n');
+        inner.push_str("P2WSH witness script");
+        inner.push('\n');
     }
     // Taproot script-path envelope. Liquid stays off. The script stays off.
     if let Some(button) = inscription_button(input) {
         inner.push_str(button);
+        // GPUI whole line. The button stays. The script and the witness stay off.
+        inner.push_str("\nInscription\n");
     }
     format!("<span class=\"party\">{inner}</span>")
 }
 
 fn output_party(output: &TxOutput) -> String {
-    output_party_at(output, false)
+    output_party_at(output, false, false)
 }
 
-fn output_party_at(output: &TxOutput, confidential_address_line: bool) -> String {
+fn output_party_at(
+    output: &TxOutput,
+    confidential_address_line: bool,
+    multisig_type_line: bool,
+) -> String {
     let mut inner = String::new();
     if let Some(address) = nonempty(output.script_pubkey_address.as_deref()) {
         inner.push_str(&address_span(address));
@@ -598,16 +635,40 @@ fn output_party_at(output: &TxOutput, confidential_address_line: bool) -> String
         inner.push_str("<span class=\"op-return\">OP_RETURN</span>");
         // Non-liquid output: scriptpubkey hex prefix 6a5d. The button text
         // is Runestone. The script hex and the payload stay off the page.
+        // The button stays glued to the OP_RETURN span.
         if output.script_pubkey.starts_with("6a5d") {
             inner.push_str(
                 "<button type=\"button\" class=\"btn btn-sm badge badge-ord\">Runestone</button>",
             );
         }
+        // GPUI whole line on the transaction page. The spans stay.
+        // The address page does not get this line. An input does not call this.
+        if multisig_type_line {
+            inner.push_str("\nType OP_RETURN\n");
+        }
         // Angular details cell when `scriptpubkey_type` is `op_return`.
         // The decoded payload stays off the page.
         inner.push_str("<span class=\"op-return-data-label\">data</span>");
+        // GPUI whole line. The span stays. The script stays off.
+        inner.push('\n');
+        inner.push_str("data");
+        inner.push('\n');
     } else if !output.script_pubkey_type.is_empty() {
         inner.push_str(&script_type_span(&output.script_pubkey_type));
+        // GPUI whole line. The scriptpubkey-type span stays. An input does not call this.
+        if output.script_pubkey_type == "anchor" {
+            inner.push_str("\noutput script type anchor\n");
+        }
+        // GPUI whole line on the transaction page. The scriptpubkey-type span stays.
+        // The address page does not get this line. An input does not call this.
+        if multisig_type_line && output.script_pubkey_type == "v0_p2wsh" {
+            inner.push_str("\noutput script type v0_p2wsh\n");
+        }
+        // GPUI whole line on the transaction page. The scriptpubkey-type span stays.
+        // The address page does not get this line. An input does not call this.
+        if multisig_type_line && output.script_pubkey_type == "multisig" {
+            inner.push_str("\noutput script type multisig\n");
+        }
     }
     // Angular output cell: `scriptpubkeyType` pipe, then escape.
     // `fee` is Transaction fee. `provably_unspendable` is the address-type
@@ -627,9 +688,33 @@ fn output_party_at(output: &TxOutput, confidential_address_line: bool) -> String
         inner.push_str(&format!("<span class=\"output-type\">{escaped}</span>"));
         // GPUI whole line. The label span stays. This line is the word alone.
         inner.push_str("\nType\n");
-        // GPUI line for the type value empty. The Type cell stays EMPTY.
+        // GPUI whole line. The Type cell stays EMPTY.
         if output.script_pubkey_type == "empty" {
-            inner.push_str("<span class=\"gpui-type-line\">Type EMPTY</span>");
+            inner.push('\n');
+            inner.push_str("Type EMPTY");
+            inner.push('\n');
+        }
+        // GPUI whole line on the transaction page. The spans stay.
+        // The address page does not get this line.
+        if multisig_type_line && output.script_pubkey_type == "multisig" {
+            inner.push('\n');
+            inner.push_str("Type MULTISIG");
+            inner.push('\n');
+        }
+        // GPUI whole line on the transaction page. The P2PK span stays.
+        // The address page does not get this line.
+        if multisig_type_line && output.script_pubkey_type == "p2pk" {
+            inner.push_str("\nType P2PK\n");
+        }
+        // GPUI whole line on the transaction page. The ANCHOR span stays.
+        // The address page does not get this line. An input does not call this.
+        if multisig_type_line && output.script_pubkey_type == "anchor" {
+            inner.push_str("\nType ANCHOR\n");
+        }
+        // GPUI whole line on the transaction page. The V0_P2WSH span stays.
+        // The address page does not get this line. An input does not call this.
+        if multisig_type_line && output.script_pubkey_type == "v0_p2wsh" {
+            inner.push_str("\nType V0_P2WSH\n");
         }
     }
     // Address-type body for a fee output. Not the scriptpubkey-type span.
@@ -637,9 +722,21 @@ fn output_party_at(output: &TxOutput, confidential_address_line: bool) -> String
     if output.script_pubkey_type == "fee" {
         inner.push_str("<span class=\"address-fee\">fee</span>");
         inner.push_str("<span class=\"gpui-output-script-type-fee\">output script type fee</span>");
+        // GPUI whole line. The Transaction fee cell stays.
+        // The address page does not get this line.
+        if multisig_type_line {
+            inner.push_str("\nType FEE\n");
+        }
     }
     if let Some(value) = output.value {
         inner.push_str(&value_span(value));
+        // GPUI whole line when the address is empty and the amount is 1.
+        // Two spaces between address and value. An addressed output is a
+        // different sentence. The value span stays.
+        let address = output.script_pubkey_address.as_deref().unwrap_or("");
+        if address.is_empty() && value == 1 {
+            inner.push_str("\noutput address  value 1\n");
+        }
     }
     format!("<span class=\"party\">{inner}</span>")
 }
@@ -673,7 +770,7 @@ fn show_more_button(len: usize) -> Option<String> {
     ))
 }
 
-fn tx_parties(tx: &Transaction) -> String {
+fn tx_parties(tx: &Transaction, multisig_type_line: bool) -> String {
     let mut parties = String::new();
     let vin_shown = angular_row_limit(tx.vin.len(), ROW_LIMIT);
     for input in tx.vin.iter().take(vin_shown) {
@@ -684,7 +781,7 @@ fn tx_parties(tx: &Transaction) -> String {
     }
     let vout_shown = angular_row_limit(tx.vout.len(), ROW_LIMIT);
     for (index, output) in tx.vout.iter().take(vout_shown).enumerate() {
-        parties.push_str(&output_party_at(output, index <= 1));
+        parties.push_str(&output_party_at(output, index <= 1, multisig_type_line));
     }
     if let Some(button) = show_more_button(tx.vout.len()) {
         parties.push_str(&button);
@@ -753,6 +850,10 @@ fn grouped_integer(value: u64) -> String {
 }
 
 fn tx_row(tx: &Transaction) -> String {
+    tx_row_at(tx, false)
+}
+
+fn tx_row_at(tx: &Transaction, multisig_type_line: bool) -> String {
     let row = TxRow::from(tx);
     let confirmed = tx
         .status
@@ -762,6 +863,7 @@ fn tx_row(tx: &Transaction) -> String {
     let n = adjusted_vsize_text(tx.weight, tx.sigops);
     let (number, unit) = size_number_and_unit(tx.size);
     let (weight_number, weight_unit) = weight_number_and_unit(tx.weight);
+    let virtual_size_words = format!("Virtual size {}", tx.weight / 4);
     let mut cells = vec![
         td("txid", &txid_anchor(&row.txid)),
         td("fee", &row.fee.to_string()),
@@ -782,7 +884,7 @@ fn tx_row(tx: &Transaction) -> String {
             "weight-units",
             &format!("Weight {weight_number} {weight_unit}"),
         ),
-        td("virtual-size", &format!("Virtual size {}", tx.weight / 4)),
+        td("virtual-size", &virtual_size_words),
         td("adjusted-vsize", &format!("Adjusted vsize {n}")),
         td("version", &row.version.to_string()),
         td("locktime-label", "Locktime"),
@@ -790,6 +892,10 @@ fn tx_row(tx: &Transaction) -> String {
         td("sigops-label", "Sigops"),
         td("sigops", &row.sigops.to_string()),
     ];
+    // GPUI whole line. The virtual-size cell stays. This line is the words alone.
+    cells.push('\n'.to_string());
+    cells.push(virtual_size_words);
+    cells.push('\n'.to_string());
     // The value cell stays the raw integer. The label cell stays.
     // GPUI whole line. This line is the label text alone.
     cells.push("\nLocktime\n".to_string());
@@ -851,7 +957,7 @@ fn tx_row(tx: &Transaction) -> String {
             cells.push("\nTimestamp\n".to_string());
         }
     }
-    let parties = tx_parties(tx);
+    let parties = tx_parties(tx, multisig_type_line);
     if !parties.is_empty() {
         cells.push(format!("<td class=\"parties\">{parties}</td>"));
     }
@@ -926,10 +1032,15 @@ fn p2wpkh_type_row(address: &str) -> String {
         return String::new();
     }
     // Not the output script type. That row uppercases `v0_p2wpkh` to `V0_P2WPKH`.
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2WPKH</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A different shape never reaches here.
+    row.push('\n');
+    row.push_str("Type P2WPKH");
+    row.push('\n');
+    row
 }
 
 /// Mainnet `bc1` plus `q` plus 58 bech32 characters. The address JSON has no type field.
@@ -950,10 +1061,15 @@ fn p2wsh_type_row(address: &str) -> String {
         return String::new();
     }
     // Not the output script type. That row uppercases `v0_p2wsh` to `V0_P2WSH`.
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2WSH</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A different shape never reaches here.
+    row.push('\n');
+    row.push_str("Type P2WSH");
+    row.push('\n');
+    row
 }
 
 /// Mainnet `bc1` plus `p` plus 58 bech32 characters. The address JSON has no type field.
@@ -974,10 +1090,15 @@ fn p2tr_type_row(address: &str) -> String {
         return String::new();
     }
     // Not the output script type `V1_P2TR`, and not the input label `P2TR tapscript`.
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2TR</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A different shape never reaches here.
+    row.push('\n');
+    row.push_str("Type P2TR");
+    row.push('\n');
+    row
 }
 
 fn base58_char(ch: char) -> bool {
@@ -1005,10 +1126,15 @@ fn p2pkh_type_row(address: &str) -> String {
     }
     // Angular has no dedicated p2pkh case. The default arm uppercases the type.
     // Not the output script type and not the output-type span.
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2PKH</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A different shape never reaches here.
+    row.push('\n');
+    row.push_str("Type P2PKH");
+    row.push('\n');
+    row
 }
 
 /// Mainnet first character `3` plus a base58 remainder of length 26 through 34.
@@ -1051,10 +1177,17 @@ fn p2sh_type_row(address: &str, txs_json: &str) -> String {
     if !mainnet_p2sh(address) || spend_rewrote_p2sh(address, txs_json) {
         return String::new();
     }
-    paragraph(
+    // Angular has no dedicated p2sh case. The default arm uppercases the type.
+    // Not the output script type and not the output-type span.
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2SH</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A rewritten spend returns above.
+    row.push('\n');
+    row.push_str("Type P2SH");
+    row.push('\n');
+    row
 }
 
 /// `processInputs` sets `p2sh-p2wpkh` when a vin spending this address has a
@@ -1084,10 +1217,15 @@ fn p2sh_p2wpkh_type_row(address: &str, txs_json: &str) -> String {
     }
     // Angular has no dedicated case. The default arm uppercases the type.
     // The scriptsig and the witness stay off this row.
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2SH-P2WPKH</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A miss returns above.
+    row.push('\n');
+    row.push_str("Type P2SH-P2WPKH");
+    row.push('\n');
+    row
 }
 
 /// `processInputs` sets `p2sh-p2wsh` when a vin spending this address has a
@@ -1117,10 +1255,15 @@ fn p2sh_p2wsh_type_row(address: &str, txs_json: &str) -> String {
     }
     // Angular has no dedicated case. The default arm uppercases the type.
     // The scriptsig and the witness stay off this row.
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         "<span class=\"address-type-label\">Type</span><span class=\"badge bg-primary\"><span>P2SH-P2WSH</span></span>",
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A miss returns above.
+    row.push('\n');
+    row.push_str("Type P2SH-P2WSH");
+    row.push('\n');
+    row
 }
 
 fn witness_nonempty(input: &TxInput) -> bool {
@@ -1393,13 +1536,18 @@ fn multisig_address_type_row(address: &str, txs_json: &str) -> String {
     let Some(label) = multisig_redeem_label(input, kind) else {
         return String::new();
     };
-    paragraph(
+    let mut row = paragraph(
         "address-type",
         &format!(
             "<span class=\"address-type-label\">Type</span>{}",
             multisig_warning_badge(&label)
         ),
-    )
+    );
+    // GPUI whole line. The address-type paragraph stays. A miss returns above.
+    row.push('\n');
+    row.push_str(&label);
+    row.push('\n');
+    row
 }
 
 /// Badge after a successful address document. Classified from the address string.
@@ -1486,35 +1634,55 @@ fn address_summary(stats: &AddressStats, txs_json: &str) -> String {
         stats.chain_stats.spent_txo_sum,
     ) {
         out.push_str(&paragraph("confirmed-balance", &words));
+        // GPUI whole line. The paragraph stays. A missing chain sum never reaches here.
+        out.push('\n');
+        out.push_str(&words);
+        out.push('\n');
     }
-    out.push_str(&paragraph(
-        "confirmed-utxos",
-        &confirmed_utxo_words(
-            stats.chain_stats.funded_txo_count,
-            stats.chain_stats.spent_txo_count,
-        ),
-    ));
+    let words = confirmed_utxo_words(
+        stats.chain_stats.funded_txo_count,
+        stats.chain_stats.spent_txo_count,
+    );
+    out.push_str(&paragraph("confirmed-utxos", &words));
+    // GPUI whole line. The paragraph stays. A missing count never reaches here.
+    out.push('\n');
+    out.push_str(&words);
+    out.push('\n');
     if let Some(words) = total_received_words(stats.chain_stats.funded_txo_sum) {
         out.push_str(&paragraph("total-received", &words));
+        // GPUI whole line. The paragraph stays. A missing chain funded sum never reaches here.
+        out.push('\n');
+        out.push_str(&words);
+        out.push('\n');
     }
     if let Some(words) = total_sent_words(
         stats.chain_stats.spent_txo_sum,
         stats.mempool_stats.spent_txo_sum,
     ) {
         out.push_str(&paragraph("total-sent", &words));
+        // GPUI whole line. The paragraph stays. A missing mempool spent sum never reaches here.
+        out.push('\n');
+        out.push_str(&words);
+        out.push('\n');
     }
-    out.push_str(&paragraph(
-        "pending-utxos",
-        &pending_utxo_words(
-            stats.mempool_stats.funded_txo_count,
-            stats.mempool_stats.spent_txo_count,
-        ),
-    ));
+    let words = pending_utxo_words(
+        stats.mempool_stats.funded_txo_count,
+        stats.mempool_stats.spent_txo_count,
+    );
+    out.push_str(&paragraph("pending-utxos", &words));
+    // GPUI whole line. The paragraph stays. A missing count never reaches here.
+    out.push('\n');
+    out.push_str(&words);
+    out.push('\n');
     if let Some(words) = pending_amount_words(
         stats.mempool_stats.funded_txo_sum,
         stats.mempool_stats.spent_txo_sum,
     ) {
         out.push_str(&paragraph("pending-amount", &words));
+        // GPUI whole line. The paragraph stays. A missing mempool sum never reaches here.
+        out.push('\n');
+        out.push_str(&words);
+        out.push('\n');
     }
     if let Some(words) = balance_words(
         stats.chain_stats.funded_txo_sum,
@@ -1523,18 +1691,26 @@ fn address_summary(stats: &AddressStats, txs_json: &str) -> String {
         stats.mempool_stats.spent_txo_sum,
     ) {
         out.push_str(&paragraph("balance", &words));
+        // GPUI whole line. The paragraph stays. A missing sum never reaches here.
+        out.push('\n');
+        out.push_str(&words);
+        out.push('\n');
     }
-    out.push_str(&paragraph(
-        "transactions",
-        &transactions_words(stats.chain_stats.tx_count, stats.mempool_stats.tx_count),
-    ));
-    out.push_str(&paragraph(
-        "unspent-txos",
-        &unspent_txo_words(
-            stats.chain_stats.funded_txo_count,
-            stats.chain_stats.spent_txo_count,
-        ),
-    ));
+    let words = transactions_words(stats.chain_stats.tx_count, stats.mempool_stats.tx_count);
+    out.push_str(&paragraph("transactions", &words));
+    // GPUI whole line. The paragraph stays. A missing count never reaches here.
+    out.push('\n');
+    out.push_str(&words);
+    out.push('\n');
+    let words = unspent_txo_words(
+        stats.chain_stats.funded_txo_count,
+        stats.chain_stats.spent_txo_count,
+    );
+    out.push_str(&paragraph("unspent-txos", &words));
+    // GPUI whole line. The paragraph stays. A missing count never reaches here.
+    out.push('\n');
+    out.push_str(&words);
+    out.push('\n');
     out
 }
 
@@ -1549,12 +1725,13 @@ pub fn recent_rows_markup(recent_json: &str) -> String {
         return String::new();
     }
     // Recent transactions page. The visible page heading is the h1 from
-    // recent-transactions-list.component.html. The dashboard card uses the
+    // recent-transactions-list.component.html. The whole line is those words
+    // alone. The h1 stays. The dashboard card uses the
     // same letters. TXID, Amount, vSize, and Fee stay once each, not once
     // per row. The txid cell stays the raw id. `value`, `vsize`, and `fee`
     // stay raw integers. The blocks list does not get this heading.
     format!(
-        "<h1>Recent Transactions</h1><table class=\"tx-rows\"><thead><th class=\"table-cell-txid\">TXID</th><th class=\"table-cell-satoshis\">Amount</th><th class=\"table-cell-vsize\">vSize</th><th class=\"table-cell-fees\">Fee</th></thead><tbody>{}</tbody></table>",
+        "<h1>Recent Transactions</h1>\nRecent Transactions\n<table class=\"tx-rows\"><thead><th class=\"table-cell-txid\">TXID</th><th class=\"table-cell-satoshis\">Amount</th><th class=\"table-cell-vsize\">vSize</th><th class=\"table-cell-fees\">Fee</th></thead><tbody>{}</tbody></table>",
         painted.concat()
     )
 }
@@ -1626,10 +1803,15 @@ pub fn blocks_rows_markup(blocks_json: &str) -> String {
     if exact_empty_array(blocks_json) {
         return empty_list("blocks");
     }
-    table(
-        "block-rows",
-        blocks_from(blocks_json).iter().map(block_row).collect(),
-    )
+    let rows: Vec<String> = blocks_from(blocks_json).iter().map(block_row).collect();
+    if rows.is_empty() {
+        return table("block-rows", rows);
+    }
+    // GPUI whole lines. The page h1 and the Transactions header stay.
+    // The dashboard rows do not get these lines.
+    let mut out = String::from("\nTransactions\n\nBlocks\n");
+    out.push_str(&table("block-rows", rows));
+    out
 }
 
 /// Angular `block.error.loading-block-data`. The italic line stays the HTTP body.
@@ -1647,10 +1829,19 @@ pub(crate) fn block_load_error_markup(body: &str) -> String {
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with("indexer error "))
         .unwrap_or("");
-    format!(
+    let mut markup = format!(
         "<div class=\"http-error\"><p><b><span>Error loading block data.</span></b></p><i class=\"small\">({})</i></div>",
         html_escape(http_body)
-    )
+    );
+    // GPUI whole line. The span stays. The italic HTTP body stays in parentheses.
+    markup.push_str("\nError loading block data.\n");
+    if !http_body.is_empty() {
+        // GPUI whole line. Raw body, outside the parentheses. An empty body stays off.
+        markup.push('\n');
+        markup.push_str(http_body);
+        markup.push('\n');
+    }
+    markup
 }
 
 /// Angular `address.error.loading-address-data`. The italic line stays the HTTP body.
@@ -1668,10 +1859,19 @@ pub(crate) fn address_load_error_markup(body: &str) -> String {
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with("indexer error "))
         .unwrap_or("");
-    format!(
+    let mut markup = format!(
         "<div class=\"http-error\"><p><b><span>Error loading address data.</span></b></p><i class=\"small\">({})</i></div>",
         html_escape(http_body)
-    )
+    );
+    // GPUI whole line. The span stays. The italic HTTP body stays in parentheses.
+    markup.push_str("\nError loading address data.\n");
+    if !http_body.is_empty() {
+        // GPUI whole line. Raw body, outside the parentheses. An empty body stays off.
+        markup.push('\n');
+        markup.push_str(http_body);
+        markup.push('\n');
+    }
+    markup
 }
 
 pub fn block_rows_markup(block_json: &str, txs_json: &str) -> String {
@@ -2077,15 +2277,25 @@ fn output_total_words(tx: &Transaction) -> Option<String> {
 pub fn transaction_row_markup(body: &str) -> String {
     let mut out = match one_tx(body) {
         Some(tx) => {
+            // GPUI whole line. The h1 in TransactionPage stays. Transaction hex stays off.
+            let mut markup = String::from("\nTransaction\n");
             // Angular subtitle, once, before the list. Empty vin and vout still show it.
-            let mut markup = String::from("<h2>Inputs & Outputs</h2>");
+            markup.push_str("<h2>Inputs & Outputs</h2>");
+            // GPUI whole line. The h2 stays. This line is the words alone.
+            markup.push_str("\nInputs & Outputs\n");
             // `toggleDetailsFromTxPage`. Not the diagram button.
             markup.push_str(
                 "<button type=\"button\" class=\"btn btn-outline-info btn-sm\">Details</button>",
             );
-            markup.push_str(&table("tx-rows", vec![tx_row(&tx)]));
+            // GPUI whole line. The button stays. Show diagram stays off.
+            markup.push_str("\nDetails\n");
+            markup.push_str(&table("tx-rows", vec![tx_row_at(&tx, true)]));
             if let Some(words) = output_total_words(&tx) {
                 markup.push_str(&paragraph("output-total", &words));
+                // GPUI whole line. The paragraph stays. A missing value never reaches here.
+                markup.push('\n');
+                markup.push_str(&words);
+                markup.push('\n');
             }
             // The page call has no network. Confirmed heights use mainnet.
             // TransactionPage replaces this with the network it is showing.
@@ -2108,7 +2318,8 @@ pub fn transaction_row_markup(body: &str) -> String {
 ///
 /// `tracker.component.html` paints `Block height` only when the transaction
 /// is confirmed and `status.block_height` is present. A missing height omits
-/// the caption. Outspend status does not use this function.
+/// the caption. Explicit 0 is present. JSON null is not. The label div stays.
+/// The whole line is the words alone. Outspend status does not use this function.
 pub fn confirmation_markup(tx_body: &str, tip_height_body: &str) -> String {
     let status = one_tx(tx_body).and_then(|tx| tx.status);
     let confirmed = status.as_ref().is_some_and(|status| status.confirmed);
@@ -2120,14 +2331,35 @@ pub fn confirmation_markup(tx_body: &str, tip_height_body: &str) -> String {
     let mut markup = match (tip_height, block_height) {
         (Some(tip_height), Some(block_height)) => {
             let count = tip_height as i128 - block_height as i128 + 1;
-            paragraph("confirmations", &format!("Confirmations {count}"))
+            let mut text = paragraph("confirmations", &format!("Confirmations {count}"));
+            if count == 1 {
+                // GPUI whole line. The paragraph stays. This line is the words alone.
+                text.push_str("\nconfirmations 1\n");
+            }
+            if count == 11 {
+                // GPUI whole line. The paragraph stays. This line is the words alone.
+                text.push_str("\nconfirmations 11\n");
+            }
+            text
         }
-        (Some(_), None) => paragraph("unconfirmed", "Unconfirmed"),
-        (None, Some(_)) => paragraph("confirmed", "Confirmed"),
+        (Some(_), None) => {
+            let mut text = paragraph("unconfirmed", "Unconfirmed");
+            // GPUI whole line. The paragraph stays. This line is the word alone.
+            text.push_str("\nUnconfirmed\n");
+            text
+        }
+        (None, Some(_)) => {
+            let mut text = paragraph("confirmed", "Confirmed");
+            // GPUI whole line. The paragraph stays. This line is the word alone.
+            text.push_str("\nConfirmed\n");
+            text
+        }
         (None, None) => String::new(),
     };
     if confirmed && block_height.is_some() {
         markup.push_str("<div class=\"label\">Block height</div>");
+        // GPUI whole line. The label div stays. This line is the words alone.
+        markup.push_str("\nBlock height\n");
     }
     markup
 }
@@ -2219,6 +2451,24 @@ fn paint_outspend(spend: &splora_frontend_shared::wire::Outspend) -> String {
         ));
     }
     out.push_str("</p>");
+    // GPUI whole line. The paragraph stays. Unspent stays spent false.
+    out.push('\n');
+    if spend.spent {
+        out.push_str("spent true");
+    } else {
+        out.push_str("spent false");
+    }
+    out.push('\n');
+    // GPUI whole line. The paragraph keeps its index. A missing vin stays off.
+    if let Some(vin) = spend.vin {
+        out.push_str(&format!("vin {vin}"));
+        out.push('\n');
+    }
+    // GPUI whole line. The span stays. A missing status stays off.
+    if let Some(status) = spend.status.as_ref() {
+        out.push_str(&format!("confirmed {}", yes_no(status.confirmed)));
+        out.push('\n');
+    }
     out
 }
 
@@ -2458,17 +2708,20 @@ pub fn test_txid_markup(body: &str) -> String {
             .collect::<String>()
     };
     // One column header for the table, not one header per txid.
+    // GPUI whole line. The Allowed? cell stays. Angular paints the
+    // Rejection reason header whenever the result list is not empty.
     if anchors.is_empty() {
         String::new()
     } else {
-        format!("<th class=\"allowed\">Allowed?</th>{anchors}")
+        format!("<th class=\"allowed\">Allowed?</th>{anchors}\nAllowed?\nRejection reason\n")
     }
 }
 
 /// Column header from `POST /txs/test` when a row already has `effective-feerate`.
 ///
-/// The header is not part of [`test_txid_markup`]. That function stays Allowed?
-/// plus the txid anchors.
+/// The header is not part of [`test_txid_markup`]. That function stays the
+/// Allowed? cell, the txid anchors, one line equal to Allowed?, and one line
+/// equal to Rejection reason.
 pub fn effective_fee_rate_markup(body: &str) -> String {
     let Ok(rows) = parse_test_tx_results_json(body) else {
         return String::new();
@@ -2479,7 +2732,8 @@ pub fn effective_fee_rate_markup(body: &str) -> String {
     if !served {
         return String::new();
     }
-    "<th class=\"rate\">Effective fee rate</th>".to_string()
+    // GPUI whole line. The header cell stays. A row with no fees returns above.
+    "<th class=\"rate\">Effective fee rate</th>\nEffective fee rate\n".to_string()
 }
 
 pub fn package_txid_markup(body: &str) -> String {
@@ -3050,6 +3304,10 @@ pub fn scripthash_markup(body: &str) -> String {
                     wire.chain_stats.spent_txo_sum,
                 ) {
                     out.push_str(&paragraph("confirmed-balance", &words));
+                    // GPUI whole line. The paragraph stays. A missing chain sum never reaches here.
+                    out.push('\n');
+                    out.push_str(&words);
+                    out.push('\n');
                 }
                 out.push_str(&paragraph(
                     "confirmed-utxos",
@@ -3060,12 +3318,20 @@ pub fn scripthash_markup(body: &str) -> String {
                 ));
                 if let Some(words) = total_received_words(wire.chain_stats.funded_txo_sum) {
                     out.push_str(&paragraph("total-received", &words));
+                    // GPUI whole line. The paragraph stays. A missing chain funded sum never reaches here.
+                    out.push('\n');
+                    out.push_str(&words);
+                    out.push('\n');
                 }
                 if let Some(words) = total_sent_words(
                     wire.chain_stats.spent_txo_sum,
                     wire.mempool_stats.spent_txo_sum,
                 ) {
                     out.push_str(&paragraph("total-sent", &words));
+                    // GPUI whole line. The paragraph stays. A missing mempool spent sum never reaches here.
+                    out.push('\n');
+                    out.push_str(&words);
+                    out.push('\n');
                 }
                 out.push_str(&paragraph(
                     "pending-utxos",
@@ -3088,10 +3354,13 @@ pub fn scripthash_markup(body: &str) -> String {
                 ) {
                     out.push_str(&paragraph("balance", &words));
                 }
-                out.push_str(&paragraph(
-                    "transactions",
-                    &transactions_words(wire.chain_stats.tx_count, wire.mempool_stats.tx_count),
-                ));
+                let words =
+                    transactions_words(wire.chain_stats.tx_count, wire.mempool_stats.tx_count);
+                out.push_str(&paragraph("transactions", &words));
+                // GPUI whole line. The paragraph stays. A missing count never reaches here.
+                out.push('\n');
+                out.push_str(&words);
+                out.push('\n');
             }
             out
         }
@@ -3160,7 +3429,12 @@ pub fn address_rows_markup(stats_json: &str, txs_json: &str, utxo_json: &str) ->
         return load_error;
     }
     let mut out = one_stats(stats_json)
-        .map(|stats| address_summary(&stats, txs_json))
+        .map(|stats| {
+            // GPUI whole line. The h1 in AddressPage stays. A load error returns above.
+            let mut summary = String::from("\nAddress\n");
+            summary.push_str(&address_summary(&stats, txs_json));
+            summary
+        })
         .unwrap_or_default();
     out.push_str(&address_tx_of_heading(stats_json, txs_json));
     if exact_empty_array(txs_json) {
@@ -3240,6 +3514,8 @@ fn peg_labels_from_tx(tx: &Transaction) -> String {
         vout_rows.push_str(&format!(
             "<tr><td>Peg-out to {link}<span class=\"badge\">Liquid Peg Out</span></td></tr>"
         ));
+        // GPUI whole line. The badge stays. A null peg-out never reaches here.
+        vout_rows.push_str("\nLiquid Peg Out\n");
     }
     vin_vout_tables(&vin_rows, &vout_rows)
 }
@@ -3498,6 +3774,10 @@ pub fn poison_alert_markup(tx_json: &str, network: &str) -> String {
     let mut out = String::from(
         "<div class=\"alert alert-mempool\" role=\"alert\"><span>Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.</span></div>",
     );
+    // GPUI whole line. The alert div stays.
+    out.push('\n');
+    out.push_str("Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.");
+    out.push('\n');
     for alert in alerts {
         let prefix = html_escape(&alert.parts.prefix);
         let infix = html_escape(&alert.parts.infix);
@@ -3564,6 +3844,7 @@ pub fn block_details_markup(block_json: &str, open: bool) -> String {
         // GPUI whole line. Closed details keep the cell and omit this line.
         if open {
             difficulty_line = format!("\nDifficulty {difficulty}\n");
+            difficulty_line.push_str(&format!("\ndifficulty {difficulty}\n"));
         }
     }
     // Decimal stays (`>9<` in block_transactions). Hex is decimal2hex, 4 bytes.

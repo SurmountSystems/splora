@@ -116,8 +116,13 @@ fn v0_p2wsh_output_shows_uppercase_type_once() {
     ));
     assert_eq!(
         markup.matches("V0_P2WSH").count(),
+        2,
+        "expected the Type cell V0_P2WSH and the line Type V0_P2WSH in {markup}"
+    );
+    assert_eq!(
+        markup.matches("Type V0_P2WSH").count(),
         1,
-        "expected V0_P2WSH once in {markup}"
+        "Type V0_P2WSH was not once: {markup}"
     );
     assert_one(&markup, TYPE_SPANS);
     assert_eq!(

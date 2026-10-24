@@ -94,6 +94,77 @@ fn non_op_return_output_omits_the_data_label() {
 }
 
 #[test]
+/// Whole line `data` from an `op_return` output on no-query `GET /tx/:txid`.
+///
+/// GPUI `transaction_screen_paints_op_return_data` requires one line equal
+/// to `data`. Angular `transactions-list.component.html` paints that word
+/// beside `OP_RETURN`. The span stays. A runestone keeps its button. Script
+/// hex and script asm stay off. A non-`op_return` output and an input
+/// prevout omit the line.
+#[test]
+fn op_return_output_paints_data_as_its_own_line() {
+    const LINE: &str = "data";
+    let markup = paint("null", &output(SCRIPT, ASM, "op_return"));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains(LABEL),
+        "the data span was dropped: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"op-return\">OP_RETURN</span>"),
+        "OP_RETURN was dropped: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line.starts_with("data ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    assert_absent(&markup, SCRIPT);
+    assert_absent(&markup, ASM);
+
+    let stone = paint("null", &output("6a5d0614c0a2331441ee", ASM, "op_return"));
+    assert_eq!(
+        stone.lines().filter(|line| *line == LINE).count(),
+        1,
+        "a runestone output did not paint {LINE} once: {stone}"
+    );
+    assert!(
+        stone.contains("Runestone"),
+        "Runestone was dropped: {stone}"
+    );
+    assert!(
+        stone.contains(
+            "<span class=\"op-return\">OP_RETURN</span><button type=\"button\" class=\"btn btn-sm badge badge-ord\">Runestone</button>"
+        ),
+        "the runestone button left the OP_RETURN span: {stone}"
+    );
+    assert_absent(&stone, "6a5d0614c0a2331441ee");
+    assert_absent(&stone, ASM);
+
+    let other = paint("null", &output(SCRIPT, ASM, "p2pkh"));
+    assert!(
+        !other.lines().any(|line| line == LINE),
+        "a non-op_return output painted {LINE}: {other}"
+    );
+
+    let prevout = output(SCRIPT, ASM, "op_return");
+    let input = paint(&prevout, &output("0014aa", "OUTASMZZ", "p2pkh"));
+    assert!(
+        !input.lines().any(|line| line == LINE),
+        "an input prevout painted {LINE}: {input}"
+    );
+    assert_absent(&input, SCRIPT);
+    assert_absent(&input, ASM);
+}
+
+#[test]
 fn input_prevout_op_return_omits_the_data_label() {
     let prevout = output(SCRIPT, ASM, "op_return");
     let markup = paint(&prevout, &output("0014aa", "OUTASMZZ", "p2pkh"));

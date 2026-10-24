@@ -114,3 +114,29 @@ fn null_sigops_omits_adjusted_vsize() {
     assert_absent(&markup, "Adjusted vsize 0");
     assert_scripts_stay_off(&markup);
 }
+
+/// Whole line `Adjusted vsize 10.00` from weight 20 and sigops 2.
+///
+/// `max(20 / 4, 2 * 5)` is 10, then two decimal places. The adjusted-vsize
+/// cell stays. The weight side `Adjusted vsize 5.00` is not its own line.
+#[test]
+fn weight_twenty_sigops_two_paints_adjusted_vsize_10_00_line() {
+    const LINE: &str = "Adjusted vsize 10.00";
+    let markup = transaction_row_markup(&tx(20, Sigops::Present(2)));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert_one(&markup, &adjusted_cell("10"));
+    assert_one(&markup, &virtual_cell(5));
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 5.00"),
+        "weight 20 painted the weight side: {markup}"
+    );
+    assert_scripts_stay_off(&markup);
+}

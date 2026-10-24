@@ -7,7 +7,9 @@
 //! list, leaves the rows unchanged. This is not a clock, not Size, and not
 //! the blocks-list Timestamp label.
 
-use splora_web::{blocks_rows_markup, dashboard_rows_markup, parse_blocks_json};
+use splora_web::{
+    blocks_rows_markup, dashboard_mined_markup, dashboard_rows_markup, parse_blocks_json,
+};
 
 const LABEL: &str = "<td class=\"table-cell-mined\">Mined</td>";
 const TIMESTAMP: u32 = 1_700_000_000;
@@ -212,5 +214,58 @@ fn dashboard_page_paints_mined() {
     assert!(
         !bad.contains("Mined"),
         "an unreadable block list painted Mined: {bad}"
+    );
+}
+
+/// Whole line `Mined` when the dashboard block list parses.
+///
+/// GPUI `dashboard_screen_paints_mined` requires one line equal to Mined.
+/// The table cell stays beside the raw timestamp. An empty list and an
+/// unparsed body omit the line. The blocks list does not gain the word.
+/// This is not a clock.
+#[test]
+fn dashboard_page_paints_mined_as_its_own_line() {
+    const LINE: &str = "Mined";
+    let json = blocks_json();
+    let markup = dashboard_mined_markup(&dashboard_rows_markup(&json, "[]"), &json);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains(LABEL),
+        "the Mined cell was dropped: {markup}"
+    );
+    let time = format!("<td class=\"time\">{TIMESTAMP}</td>");
+    assert!(
+        markup.contains(&format!("{LABEL}{time}")),
+        "the cell left the raw timestamp: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line.starts_with("Mined ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    assert!(
+        !markup.contains("Mined 1700000000") && !markup.contains("ago"),
+        "{LINE} became a clock: {markup}"
+    );
+    assert!(
+        !blocks_rows_markup(&json).contains(LINE),
+        "the blocks list gained {LINE}"
+    );
+    let empty = dashboard_mined_markup(&dashboard_rows_markup("[]", "[]"), "[]");
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty block list painted {LINE}: {empty}"
+    );
+    let bad = dashboard_mined_markup(&dashboard_rows_markup("not-json", "[]"), "not-json");
+    assert!(
+        !bad.contains(LINE),
+        "an unreadable block list painted {LINE}: {bad}"
     );
 }

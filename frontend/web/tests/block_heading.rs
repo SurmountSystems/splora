@@ -7,7 +7,7 @@
 //! true` uses the title words Stale Block, including height 0. A missing
 //! `stale` key stays Block or Genesis. The indexer struct has no stale field.
 
-use splora_web::parse_block_json;
+use splora_web::{block_page_heading_markup, parse_block_json};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HEIGHT: u32 = 123;
@@ -342,4 +342,42 @@ fn stale_true_paints_one_h1_with_stale_block_and_the_height_digits() {
         "block-link anchor missing: {genesis}"
     );
     assert!(!genesis.contains(','), "thousands separator in {genesis}");
+}
+
+/// Whole line beside the block h1 from `GET /block/:hash`.
+///
+/// A loaded height above 0 paints one line equal to Block. The h1 stays.
+/// Genesis and Stale Block do not paint that line.
+#[test]
+fn loaded_block_paints_block_as_its_own_line() {
+    const LINE: &str = "Block";
+    let markup = block_page_heading_markup(&block_json(HEIGHT));
+    assert!(
+        markup.contains("class=\"block-link\""),
+        "the block heading was not rendered: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_eq!(h1_count(&markup), 1, "{markup}");
+    assert!(
+        !markup.lines().any(|line| line.starts_with("Block ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    let genesis = block_page_heading_markup(&block_json(0));
+    assert!(
+        !genesis.lines().any(|line| line == LINE),
+        "Genesis painted {LINE}: {genesis}"
+    );
+    let stale = block_page_heading_markup(&stale_block_json(HEIGHT));
+    assert!(
+        !stale.lines().any(|line| line == LINE),
+        "Stale Block painted {LINE}: {stale}"
+    );
 }

@@ -24,7 +24,8 @@ fn unspent_txos_are_chain_funded_minus_chain_spent() {
     let markup = paint(&chain_counts(4, 1));
     let phrase = "Unspent TXOs 3";
     let paragraph = "<p class=\"unspent-txos\">Unspent TXOs 3</p>";
-    assert_eq!(markup.matches(phrase).count(), 1, "{markup}");
+    // The paragraph and the whole line each contain the words.
+    assert_eq!(markup.matches(phrase).count(), 2, "{markup}");
     assert!(markup.contains(paragraph), "{markup}");
     let transactions = markup
         .find("Transactions")

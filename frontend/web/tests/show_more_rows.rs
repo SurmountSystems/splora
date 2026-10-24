@@ -111,16 +111,22 @@ fn assert_visible_addresses(markup: &str, prefix: &str, shown: usize, total: usi
 }
 
 fn assert_kept_labels(markup: &str, shown_inputs: usize) {
+    // The span and the whole line each contain the words, once per shown input.
     assert_eq!(
         markup.matches("Previous output script").count(),
-        shown_inputs,
+        shown_inputs * 2,
         "Previous output script count in {markup}"
     );
     assert_one(
         markup,
         "<span class=\"p2tr-tapscript-label\">P2TR tapscript</span>",
     );
-    assert_one(markup, "P2SH redeem script");
+    // The span and the whole line each contain the label.
+    assert_eq!(
+        markup.matches("P2SH redeem script").count(),
+        2,
+        "P2SH redeem script count in {markup}"
+    );
     assert!(
         markup.contains(REDEEM_ASM),
         "P2SH redeem script asm was dropped: {markup}"

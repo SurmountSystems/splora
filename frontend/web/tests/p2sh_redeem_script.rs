@@ -72,8 +72,9 @@ fn assert_row_still_paints(markup: &str) {
 #[test]
 fn present_asm_paints_the_label_and_the_asm_once() {
     let markup = transaction_row_markup(&tx(Redeem::Present(REDEEM_ASM)));
-    assert_one(&markup, "P2SH redeem script");
-    assert_one(&markup, REDEEM_ASM);
+    // The span and the whole line each contain the label and the asm.
+    assert_eq!(markup.matches("P2SH redeem script").count(), 2, "{markup}");
+    assert_eq!(markup.matches(REDEEM_ASM).count(), 2, "{markup}");
     assert_one(&markup, &redeem_spans(REDEEM_ASM));
     assert_sentinels_stay_off(&markup);
 }
@@ -82,7 +83,8 @@ fn present_asm_paints_the_label_and_the_asm_once() {
 fn angle_bracket_asm_is_escaped_and_stays_visible_as_text() {
     let asm = "OP_DUP <OP_HASH160>";
     let markup = transaction_row_markup(&tx(Redeem::Present(asm)));
-    assert_one(&markup, "P2SH redeem script");
+    // The span and the escaped whole line each contain the label.
+    assert_eq!(markup.matches("P2SH redeem script").count(), 2, "{markup}");
     assert_one(&markup, &redeem_spans("OP_DUP &lt;OP_HASH160&gt;"));
     assert_absent(&markup, "<OP_HASH160>");
     assert_sentinels_stay_off(&markup);

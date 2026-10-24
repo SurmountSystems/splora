@@ -47,7 +47,8 @@ fn assert_absent(markup: &str, needle: &str) {
 
 fn assert_heading_once_before_the_table(markup: &str) {
     assert_one(markup, HEADING);
-    assert_eq!(markup.matches("Inputs & Outputs").count(), 1, "{markup}");
+    // The h2 and the whole line each contain the words.
+    assert_eq!(markup.matches("Inputs & Outputs").count(), 2, "{markup}");
     assert_eq!(markup.matches("<h2>").count(), 1, "{markup}");
     let heading_at = markup.find(HEADING).expect("heading");
     let table_at = markup

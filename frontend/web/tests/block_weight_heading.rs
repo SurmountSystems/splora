@@ -5,7 +5,10 @@
 //! transaction cell `Weight N WU`. The fixture weight is 4, the same integer
 //! `block_heading.rs` already sends. The value cell keeps that integer.
 
-use splora_web::{block_details_markup, block_fields_text, block_rows_markup, parse_block_json};
+use splora_web::{
+    block_details_markup, block_fields_text, block_page_weight_markup, block_rows_markup,
+    parse_block_json,
+};
 
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const WEIGHT: u32 = 4;
@@ -200,5 +203,57 @@ fn block_page_paints_weight() {
     assert!(
         !rows.contains("Weight"),
         "the block row weight cell gained the word Weight: {rows}"
+    );
+}
+
+/// Whole line from `block.component.html` after block details open.
+///
+/// A line equal to Weight passes. The label cell stays. Closed details omit
+/// the line and keep the cell. An unreadable body omits the line. The block
+/// row does not gain the word. This is not a grouped `Weight ` label.
+#[test]
+fn block_page_paints_weight_as_its_own_line() {
+    const LINE: &str = "Weight";
+    let json = block_json();
+    let open_details = block_details_markup(&json, true);
+    let open = block_page_weight_markup(&open_details, &json);
+    assert!(
+        open.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {open}"
+    );
+    assert_eq!(
+        open.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {open}"
+    );
+    assert!(
+        open.contains("<td>Weight</td>"),
+        "open details dropped the Weight cell: {open}"
+    );
+    assert!(
+        open.contains(&format!("<td>{WEIGHT}</td>")),
+        "open details dropped the raw weight: {open}"
+    );
+    assert!(
+        !open.lines().any(|line| line.starts_with("Weight ")),
+        "a grouped Weight label was painted: {open}"
+    );
+    let rows = block_rows_markup(&json, "[]");
+    assert!(!rows.contains(LINE), "the block row gained {LINE}: {rows}");
+    let closed_details = block_details_markup(&json, false);
+    let closed = block_page_weight_markup(&closed_details, &json);
+    assert!(
+        closed.contains("<td>Weight</td>"),
+        "closed details dropped the Weight cell: {closed}"
+    );
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+    let unreadable = block_details_markup("not-json", true);
+    let omitted = block_page_weight_markup(&unreadable, "not-json");
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "an unreadable body painted {LINE}: {omitted}"
     );
 }

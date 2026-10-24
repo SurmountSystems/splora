@@ -68,7 +68,7 @@ fn status_footer_paints_mempool_size_from_vsize() {
     assert!(markup.contains(LABEL), "Mempool size is absent: {markup}");
     assert_one(&markup, LABEL);
     assert_one(&markup, "<div class=\"sub-text\">300</div>");
-    assert_eq!(markup.matches("Mempool size").count(), 1, "{markup}");
+    assert_eq!(markup.matches("Mempool size").count(), 2, "{markup}");
     assert!(
         markup.find(LABEL).unwrap() < markup.find("<div class=\"sub-text\">300</div>").unwrap(),
         "the label belongs before the raw vsize: {markup}"
@@ -123,4 +123,58 @@ fn status_footer_paints_mempool_size_from_vsize() {
         !mempool_page.contains('?'),
         "MempoolPage read a query string: {mempool_page}"
     );
+}
+
+/// Whole line `Mempool size:` from no-query `GET /mempool`.
+///
+/// GPUI `status_footer_paints_mempool_size_from_vsize` requires one line
+/// equal to `Mempool size:`. The span and the raw vsize stay. A zero vsize
+/// still paints the line. An empty body and a body with no vsize omit it.
+#[test]
+fn status_footer_paints_mempool_size_as_its_own_line() {
+    const LINE: &str = "Mempool size:";
+    let markup = mempool_size_markup(&mempool_json(300));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains(LABEL),
+        "the Mempool size span was dropped: {markup}"
+    );
+    assert!(
+        markup.contains("<div class=\"sub-text\">300</div>"),
+        "the raw vsize was dropped: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line.starts_with("Mempool size: ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    assert_absent(&markup, "kB");
+    assert_absent(&markup, "MB");
+    assert_absent(&markup, "Incoming Transactions");
+    let zero = mempool_size_markup(&mempool_json(0));
+    assert!(
+        zero.lines().any(|line| line == LINE),
+        "zero vsize omitted {LINE}: {zero}"
+    );
+    assert!(zero.contains("<div class=\"sub-text\">0</div>"), "{zero}");
+    for body in [
+        "",
+        "not-json",
+        "{}",
+        r#"{"count":2,"total_fee":1,"fee_histogram":[]}"#,
+    ] {
+        assert!(
+            !mempool_size_markup(body).contains(LINE),
+            "{body} painted {LINE}"
+        );
+    }
 }

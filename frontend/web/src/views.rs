@@ -489,18 +489,20 @@ pub fn mempool_size_markup(body: &str) -> String {
         return String::new();
     };
     format!(
-        "<span class=\"mempoolSize\">Mempool size:</span><div class=\"sub-text\">{}</div>",
+        "<span class=\"mempoolSize\">Mempool size:</span>\nMempool size:\n<div class=\"sub-text\">{}</div>",
         stats.vsize
     )
 }
 
-fn mempool_summary_text(body: &str) -> String {
+pub fn mempool_summary_text(body: &str) -> String {
     let mut lines = Vec::new();
     if skip_closed_or_empty(body, &mut lines) {
         return lines.join("\n");
     }
     match parse_mempool_summary_json(body) {
         Ok(stats) => {
+            // GPUI whole line. The count line stays next. The confirmation word stays off.
+            lines.push("Unconfirmed:".to_string());
             lines.push(format!(
                 "mempool count {count} vsize {vsize} total_fee {total_fee}",
                 count = stats.count,
@@ -546,11 +548,16 @@ fn dashboard_tip_fees_text(tip_hash: &str, tip_height: &str, fees: &str) -> Stri
 
 /// Fees card title from `dashboard.component.html` line 6.
 /// Liquid keeps the fee estimates and does not paint this heading.
-fn transaction_fees_heading(liquid: bool) -> String {
+pub fn transaction_fees_heading(liquid: bool) -> String {
     if liquid {
         String::new()
     } else {
-        "<h2>Transaction Fees</h2>".to_string()
+        let mut markup = String::from("<h2>Transaction Fees</h2>");
+        // GPUI whole line. The h2 stays. Liquid returns above.
+        markup.push('\n');
+        markup.push_str("Transaction Fees");
+        markup.push('\n');
+        markup
     }
 }
 
@@ -559,7 +566,7 @@ fn transaction_fees_heading(liquid: bool) -> String {
 /// Angular `th i18n="dashboard.latest-blocks.mined"` is the word Mined.
 /// The value cell stays the raw timestamp. A body that does not parse, or
 /// an empty list, leaves the rows unchanged. This is not a clock.
-fn dashboard_mined_markup(rows: &str, blocks_json: &str) -> String {
+pub fn dashboard_mined_markup(rows: &str, blocks_json: &str) -> String {
     let Ok(blocks) = parse_blocks_json(blocks_json) else {
         return rows.to_string();
     };
@@ -573,6 +580,10 @@ fn dashboard_mined_markup(rows: &str, blocks_json: &str) -> String {
     let label = "<td class=\"table-cell-mined\">Mined</td>";
     let mut out = String::with_capacity(rows.len() + label.len());
     out.push_str(&rows[..at]);
+    // GPUI whole line. The cell stays beside the raw timestamp.
+    out.push('\n');
+    out.push_str("Mined");
+    out.push('\n');
     out.push_str(label);
     out.push_str(&rows[at..]);
     out
@@ -583,7 +594,7 @@ fn dashboard_mined_markup(rows: &str, blocks_json: &str) -> String {
 /// Angular `h5 i18n="dashboard.recent-blocks"` is the words Recent Blocks.
 /// The rows stay the block list from `GET /blocks`. A body that does not
 /// parse, or an empty list, leaves the rows unchanged. This is not a clock.
-fn dashboard_recent_blocks_markup(rows: &str, blocks_json: &str) -> String {
+pub fn dashboard_recent_blocks_markup(rows: &str, blocks_json: &str, paint_size: bool) -> String {
     let Ok(blocks) = parse_blocks_json(blocks_json) else {
         return rows.to_string();
     };
@@ -593,6 +604,12 @@ fn dashboard_recent_blocks_markup(rows: &str, blocks_json: &str) -> String {
     let heading = "<h5>Recent Blocks</h5>";
     let mut out = String::with_capacity(heading.len() + rows.len());
     out.push_str(heading);
+    // GPUI whole line. The heading tag stays. This line is the words alone.
+    out.push_str("\nRecent Blocks\n");
+    if paint_size {
+        // GPUI whole line. The size value cell stays. Liquid does not get this line.
+        out.push_str("\nSize\n");
+    }
     out.push_str(rows);
     out
 }
@@ -637,6 +654,7 @@ fn Dashboard() -> impl IntoView {
                         &blocks,
                     ),
                     &blocks,
+                    network.get() != Network::Liquid,
                 ),
             )
         }></div>
@@ -731,12 +749,18 @@ pub fn block_page_heading_markup(block_json: &str) -> String {
             _ => "Block",
         }
     };
-    let Some(block) = parsed else {
-        return format!("<h1>{title}</h1>");
+    let mut markup = if let Some(block) = parsed {
+        let id = &block.id;
+        let height = block.height;
+        format!("<h1>{title} <a class=\"block-link\" href=\"/block/{id}\">{height}</a></h1>")
+    } else {
+        format!("<h1>{title}</h1>")
     };
-    let id = &block.id;
-    let height = block.height;
-    format!("<h1>{title} <a class=\"block-link\" href=\"/block/{id}\">{height}</a></h1>")
+    // GPUI whole line. The h1 stays. Genesis and Stale Block do not use this line.
+    if title == "Block" {
+        markup.push_str("\nBlock\n");
+    }
+    markup
 }
 
 /// Block-details Size label beside the other detail rows.
@@ -777,6 +801,10 @@ pub fn block_page_weight_markup(details: &str, block_json: &str) -> String {
     let mut out = String::with_capacity(details.len() + row.len());
     out.push_str(&details[..at]);
     out.push_str(&row);
+    // GPUI whole line. Closed details keep the cell and omit this line.
+    if !details.contains("id=\"details\" hidden") {
+        out.push_str("\nWeight\n");
+    }
     out.push_str(&details[at..]);
     out
 }
@@ -1089,7 +1117,7 @@ fn status_pairs(rows: &[(String, String)]) -> Vec<(String, String)> {
 /// Angular `h2 i18n="address.unspent-outputs"` is the words Unspent Outputs.
 /// It is shown when the utxo list has more than two rows. Fewer rows, or a
 /// body that does not parse, leaves the address markup unchanged.
-fn address_unspent_outputs_markup(rows: &str, utxo_json: &str) -> String {
+pub fn address_unspent_outputs_markup(rows: &str, utxo_json: &str) -> String {
     let Ok(utxos) = parse_utxos_json(utxo_json) else {
         return rows.to_string();
     };
@@ -1104,6 +1132,10 @@ fn address_unspent_outputs_markup(rows: &str, utxo_json: &str) -> String {
     let mut out = String::with_capacity(rows.len() + heading.len());
     out.push_str(&rows[..at]);
     out.push_str(heading);
+    // GPUI whole line. The h2 stays. Two or fewer utxos return above.
+    out.push('\n');
+    out.push_str("Unspent Outputs");
+    out.push('\n');
     out.push_str(&rows[at..]);
     out
 }
@@ -1113,7 +1145,7 @@ fn address_unspent_outputs_markup(rows: &str, utxo_json: &str) -> String {
 /// Angular `h2 i18n="address.balance-history"` is the words Balance History.
 /// It is shown when the transaction list has more than two rows. Fewer rows,
 /// or a body that does not parse, leaves the address markup unchanged.
-fn address_balance_history_markup(rows: &str, txs_json: &str) -> String {
+pub fn address_balance_history_markup(rows: &str, txs_json: &str) -> String {
     let Ok(txs) = parse_transactions_json(txs_json) else {
         return rows.to_string();
     };
@@ -1128,6 +1160,10 @@ fn address_balance_history_markup(rows: &str, txs_json: &str) -> String {
     let mut out = String::with_capacity(rows.len() + heading.len());
     out.push_str(&rows[..at]);
     out.push_str(heading);
+    // GPUI whole line. The h2 stays. Two or fewer transactions return above.
+    out.push('\n');
+    out.push_str("Balance History");
+    out.push('\n');
     out.push_str(&rows[at..]);
     out
 }
@@ -1423,6 +1459,19 @@ fn MultiAddressPage() -> impl IntoView {
     }
 }
 
+/// Broadcast form title from `push-transaction.component.html`.
+///
+/// The h1 stays. GPUI also requires one line whose entire text is
+/// Broadcast Transaction. A failed POST body does not use this function.
+pub fn broadcast_transaction_heading() -> String {
+    let mut markup = String::from("<h1>Broadcast Transaction</h1>");
+    // GPUI whole line. The h1 stays.
+    markup.push('\n');
+    markup.push_str("Broadcast Transaction");
+    markup.push('\n');
+    markup
+}
+
 #[component]
 fn BroadcastPage() -> impl IntoView {
     let call = broadcast_screen_request();
@@ -1431,7 +1480,7 @@ fn BroadcastPage() -> impl IntoView {
     } else {
         broadcast_path().to_string()
     };
-    let heading = "<h1>Broadcast Transaction</h1>";
+    let heading = broadcast_transaction_heading();
     view! {
         <div inner_html=heading></div>
         <label>"Maximum burn amount (sats)"</label>

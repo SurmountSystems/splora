@@ -140,3 +140,53 @@ fn loaded_no_query_address_page_paints_the_address_heading_once() {
         "expected one h1 whose text is Address, got {headings:?} in {page}"
     );
 }
+
+/// Whole line beside the address page heading from `GET /address/:addr`.
+///
+/// Angular paints `<h1>Address</h1>`. A line equal to Address passes.
+/// The h1 in `AddressPage` stays. A load error omits the line.
+#[test]
+fn loaded_address_page_paints_address_as_its_own_line() {
+    const LINE: &str = "Address";
+    let markup = address_rows_markup(&loaded_stats(), "[]", "[]");
+    assert!(
+        markup.contains("<p class=\"chain-tx-count\">1</p>"),
+        "the loaded address page did not paint the address rows: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "{LINE} was painted inside a longer sentence: {markup}"
+    );
+    assert!(
+        !markup.contains(LOAD_ERROR),
+        "a successful address load painted the loading error: {markup}"
+    );
+    let failed = address_rows_markup(
+        "Error loading address data.\nindexer error GET /address/x",
+        "",
+        "",
+    );
+    assert!(
+        !failed.lines().any(|line| line == LINE),
+        "a load error painted {LINE}: {failed}"
+    );
+    let page = component_body(views_source(), "AddressPage");
+    let headings = element_texts(page, "<h1>", "</h1>");
+    assert_eq!(
+        headings.iter().filter(|text| text.as_str() == LINE).count(),
+        1,
+        "the h1 was dropped: {headings:?}"
+    );
+}

@@ -100,7 +100,7 @@ fn prevout_paints_the_words_once() {
         &output("p2pkh"),
     );
     let markup = paint(&body);
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_one(&markup, "Previous output type");
     assert_sentinels_stay_off(&markup);
@@ -111,7 +111,7 @@ fn empty_asm_still_paints_the_words_once() {
     let body = tx(&input(&prevout("v0_p2wpkh", ""), ""), &output("p2pkh"));
     let markup = paint(&body);
     assert_row_still_paints(&markup);
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_absent(&markup, SCRIPT_HEX);
     assert_absent(&markup, SCRIPT_SIG);
@@ -123,7 +123,7 @@ fn empty_type_still_paints_the_words_once() {
     let body = tx(&input(&prevout("", SCRIPT_ASM), ""), &output("p2pkh"));
     let markup = paint(&body);
     assert_row_still_paints(&markup);
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_absent(&markup, "Previous output type");
     assert_sentinels_stay_off(&markup);
@@ -137,7 +137,7 @@ fn two_prevouts_paint_the_words_twice() {
         input(&prevout("p2sh", SCRIPT_ASM), "")
     );
     let markup = paint(&tx(&vin, &output("p2pkh")));
-    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
+    assert_eq!(markup.matches(LABEL).count(), 4, "{markup}");
     assert_eq!(markup.matches(LABEL_SPAN).count(), 2, "{markup}");
     assert_sentinels_stay_off(&markup);
 }
@@ -150,7 +150,7 @@ fn one_prevout_and_one_null_paint_the_words_once() {
         input("null", "")
     );
     let markup = paint(&tx(&vin, &output("p2pkh")));
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_sentinels_stay_off(&markup);
 }
@@ -193,9 +193,10 @@ fn v1_p2tr_prevout_keeps_the_tapscript_label_once() {
         prevout("v1_p2tr", SCRIPT_ASM)
     );
     let markup = paint(&tx(&vin, &output("p2pkh")));
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
-    assert_one(&markup, P2TR_LABEL);
+    // The span and the whole line each contain the words.
+    assert_eq!(markup.matches(P2TR_LABEL).count(), 2, "{markup}");
     assert_one(&markup, P2TR_SPAN);
     assert_absent(&markup, REDEEM_LABEL);
     assert_sentinels_stay_off(&markup);
@@ -208,10 +209,11 @@ fn p2sh_redeem_with_prevout_keeps_the_redeem_label_once() {
         &input(&prevout("p2sh", SCRIPT_ASM), &extra),
         &output("p2pkh"),
     ));
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
-    assert_one(&markup, REDEEM_LABEL);
-    assert_one(&markup, REDEEM_ASM);
+    // The span and the whole line each contain the label and the asm.
+    assert_eq!(markup.matches(REDEEM_LABEL).count(), 2, "{markup}");
+    assert_eq!(markup.matches(REDEEM_ASM).count(), 2, "{markup}");
     assert_one(
         &markup,
         "<span class=\"p2sh-redeem-label\">P2SH redeem script</span>",
@@ -239,7 +241,7 @@ fn fee_output_with_prevout_keeps_transaction_fee_once() {
         &input(&prevout("v0_p2wpkh", SCRIPT_ASM), ""),
         &output("fee"),
     ));
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_one(&markup, FEE_LABEL);
     assert_one(

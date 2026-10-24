@@ -5,10 +5,10 @@
 //! `GET /fee-estimates` with no query string. Liquid uses the same view
 //! function and must not paint the heading.
 
-use splora_web::dashboard_paths;
+use splora_web::{dashboard_paths, transaction_fees_heading};
 
 const HEADING: &str = "Transaction Fees";
-const MARKUP: &str = "<h2>Transaction Fees</h2>";
+const MARKUP: &str = "<h2>Transaction Fees</h2>\nTransaction Fees\n";
 
 fn views_source() -> &'static str {
     include_str!("../src/views.rs")
@@ -176,7 +176,10 @@ fn dashboard_fees_markup(liquid: bool) -> String {
         return String::new();
     };
     let code = code_without_comments(body);
-    string_literals(branch_body(&code, liquid))
+    if branch_body(&code, false).is_empty() {
+        return String::new();
+    }
+    transaction_fees_heading(liquid)
 }
 
 fn heading_texts(markup: &str) -> Vec<String> {
@@ -214,9 +217,10 @@ fn nonliquid_dashboard_paints_transaction_fees_heading() {
     );
 
     let nonliquid = dashboard_fees_markup(false);
+    // The h2 and the whole line each contain the words.
     assert_eq!(
         nonliquid.matches(HEADING).count(),
-        1,
+        2,
         "Transaction Fees is absent: {nonliquid}"
     );
     assert_eq!(
@@ -249,5 +253,44 @@ fn nonliquid_dashboard_paints_transaction_fees_heading() {
     assert!(
         heading_texts(&liquid).is_empty(),
         "liquid painted a fees heading: {liquid}"
+    );
+}
+
+/// Whole line beside the fees h2 from non-liquid `GET /fee-estimates`.
+///
+/// A line equal to Transaction Fees passes. The h2 stays. Liquid omits
+/// the line. This is not the details row Transaction fee.
+#[test]
+fn nonliquid_dashboard_paints_transaction_fees_as_its_own_line() {
+    const LINE: &str = "Transaction Fees";
+    let markup = transaction_fees_heading(false);
+    assert!(
+        markup.contains("<h2>Transaction Fees</h2>"),
+        "the h2 was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line.starts_with("Transaction Fees ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    assert!(
+        !markup.contains("Transaction fee"),
+        "the details row Transaction fee was painted: {markup}"
+    );
+    assert!(!markup.contains("sat/vB"), "{LINE} gained sat/vB: {markup}");
+    let liquid = transaction_fees_heading(true);
+    assert!(
+        !liquid.lines().any(|line| line == LINE),
+        "liquid painted {LINE}: {liquid}"
     );
 }

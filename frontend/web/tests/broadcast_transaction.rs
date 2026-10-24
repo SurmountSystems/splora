@@ -6,7 +6,7 @@
 //! and not a txid.
 
 use splora_frontend_shared::broadcast_path;
-use splora_web::{broadcast_fields_text, submission_links};
+use splora_web::{broadcast_fields_text, broadcast_transaction_heading, submission_links};
 
 const HEADING: &str = "<h1>Broadcast Transaction</h1>";
 const SENTENCE: &str = "Transaction not found";
@@ -45,15 +45,21 @@ fn component_body<'a>(src: &'a str, name: &str) -> &'a str {
 #[test]
 fn broadcast_page_paints_the_heading_once() {
     let page = component_body(views_source(), "BroadcastPage");
-    assert_eq!(
-        page.matches(HEADING).count(),
-        1,
-        "BroadcastPage is missing the Broadcast Transaction heading: {page}"
+    assert!(
+        page.contains("broadcast_transaction_heading("),
+        "BroadcastPage dropped the heading path: {page}"
     );
+    let markup = broadcast_transaction_heading();
     assert_eq!(
-        page.matches("Broadcast Transaction").count(),
+        markup.matches(HEADING).count(),
         1,
-        "the heading was repeated: {page}"
+        "BroadcastPage is missing the Broadcast Transaction heading: {markup}"
+    );
+    // The h1 and the whole line each contain the words.
+    assert_eq!(
+        markup.matches("Broadcast Transaction").count(),
+        2,
+        "the heading and the whole line were not both present: {markup}"
     );
     for needle in [
         "Transaction hex",
@@ -71,6 +77,31 @@ fn broadcast_page_paints_the_heading_once() {
             "{needle} leaked into the broadcast page: {page}"
         );
     }
+}
+
+/// Whole line beside the broadcast h1.
+///
+/// A line equal to Broadcast Transaction passes. The h1 stays. The failed
+/// POST body is the indexer sentence and omits this line.
+#[test]
+fn broadcast_page_paints_broadcast_transaction_as_its_own_line() {
+    const LINE: &str = "Broadcast Transaction";
+    let markup = broadcast_transaction_heading();
+    assert!(markup.contains(HEADING), "the h1 was dropped: {markup}");
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    let failed = broadcast_fields_text(SENTENCE);
+    assert!(
+        !failed.lines().any(|line| line == LINE),
+        "a failed POST painted {LINE}: {failed}"
+    );
 }
 
 #[test]

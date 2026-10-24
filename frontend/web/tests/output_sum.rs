@@ -219,3 +219,47 @@ fn output_total_add_does_not_wrap() {
         ],
     );
 }
+
+/// Whole line `Output total 150` from no-query `GET /tx/:txid`.
+///
+/// GPUI `transaction_screen_paints_output_total_sentence` requires one line
+/// equal to `Output total 150` for output values 100 and 50. The paragraph
+/// stays after the table. A missing value omits the line.
+#[test]
+fn output_values_paint_output_total_as_its_own_line() {
+    const LINE: &str = "Output total 150";
+    let body = tx(
+        &input("SUMSIGHEXDEAD", "SUMSIGASMDEAD"),
+        &format!(
+            "{},{}",
+            output("SUMOUTHEXA", "SUMOUTASMA", Some(100), None),
+            output("SUMOUTHEXB", "SUMOUTASMB", Some(50), None)
+        ),
+    );
+    let markup = transaction_row_markup(&body);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_output_total(&markup, 150);
+    assert_scripts_stay_off(
+        &markup,
+        &["SUMSIGHEXDEAD", "SUMSIGASMDEAD", "SUMOUTHEXA", "SUMOUTASMA"],
+    );
+
+    let missing = tx(
+        &input("MISSSIGHEXDEAD", "MISSSIGASMDEAD"),
+        &output("MISSOUTHEXA", "MISSOUTASMA", None, None),
+    );
+    assert!(
+        !transaction_row_markup(&missing)
+            .lines()
+            .any(|line| line.starts_with("Output total ")),
+        "a missing value painted an output total line"
+    );
+}

@@ -217,6 +217,52 @@ fn balance_difference_is_signed() {
 }
 
 #[test]
+/// Whole line `Balance 4015` from no-query `GET /address/:address`.
+///
+/// GPUI `address_screen_paints_balance_line` requires one line equal to
+/// `Balance 4015` when all four sums are present. The balance paragraph
+/// stays. Confirmed balance and Pending stay. A missing sum omits the line.
+#[test]
+fn address_page_paints_balance_as_its_own_line() {
+    const LINE: &str = "Balance 4015";
+    let markup = address_markup(&address_body(EXAMPLE_CHAIN, EXAMPLE_MEMPOOL));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains("<p class=\"balance\">Balance 4015</p>"),
+        "the balance paragraph was dropped: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line.contains(LINE) && line != LINE),
+        "the longer balance line was dropped: {markup}"
+    );
+    assert!(markup.contains("Confirmed balance 4000"), "{markup}");
+    assert!(
+        markup.contains("<p class=\"pending-amount\">Pending 15</p>"),
+        "{markup}"
+    );
+
+    let omitted = address_markup(&address_body(EXAMPLE_CHAIN, r#","funded_txo_sum":20"#));
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a missing sum painted {LINE}: {omitted}"
+    );
+    assert!(
+        !omitted.contains("Balance "),
+        "a missing sum painted a balance: {omitted}"
+    );
+}
+
+#[test]
 fn scripthash_wire_parse_failure_does_not_invent_balance() {
     let body = r#"{"scripthash":"deadbeef","chain_stats":{"tx_count":4,"funded_txo_sum":5000,"spent_txo_sum":1000},"mempool_stats":{"tx_count":1,"funded_txo_count":4,"spent_txo_count":1,"funded_txo_sum":20,"spent_txo_sum":5}}"#;
     let markup = scripthash_markup(body);

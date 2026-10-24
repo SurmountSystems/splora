@@ -117,3 +117,46 @@ fn no_query_tx_page_paints_the_transaction_heading_once() {
         "Transaction hex was painted: {markup}"
     );
 }
+
+/// Whole line beside the transaction page heading from `GET /tx/:txid`.
+///
+/// Angular paints `<h1>Transaction</h1>`. A line equal to Transaction passes.
+/// The h1 in `TransactionPage` stays. An empty body omits the line.
+/// Transaction hex stays off.
+#[test]
+fn loaded_tx_page_paints_transaction_as_its_own_line() {
+    const LINE: &str = "Transaction";
+    let markup = transaction_row_markup(&tx());
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .filter(|line| line.contains(LINE))
+            .all(|line| line == LINE),
+        "{LINE} was painted inside a longer sentence: {markup}"
+    );
+    assert!(
+        !markup.contains("Transaction hex"),
+        "Transaction hex was painted: {markup}"
+    );
+    let empty = transaction_row_markup("");
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty body painted {LINE}: {empty}"
+    );
+    let page = component_body(views_source(), "TransactionPage");
+    let headings = element_texts(page, "<h1>", "</h1>");
+    assert_eq!(
+        headings.iter().filter(|text| text.as_str() == LINE).count(),
+        1,
+        "the h1 was dropped: {headings:?}"
+    );
+}

@@ -6,7 +6,8 @@
 //! When that tip is absent and `status.block_height` is set, the label is the
 //! word Confirmed once. That word is not the substring inside Unconfirmed or
 //! Confirmations.
-//! A parsed tip with no block height paints the word Unconfirmed once.
+//! A parsed tip with no block height paints the paragraph once and one line
+//! whose entire text is Unconfirmed.
 //! Script hex stays off the page.
 
 use splora_web::confirmation_markup;
@@ -147,10 +148,11 @@ fn parsed_tip_without_a_count_paints_unconfirmed_once() {
         1,
         "expected one {expected} in {unconfirmed}"
     );
+    // The paragraph and the whole line each contain the word.
     assert_eq!(
         unconfirmed.matches("Unconfirmed").count(),
-        1,
-        "expected Unconfirmed once in {unconfirmed}"
+        2,
+        "expected Unconfirmed in the paragraph and on its own line in {unconfirmed}"
     );
     assert!(
         !unconfirmed.contains("class=\"confirmations\""),
@@ -197,8 +199,8 @@ fn missing_tip_with_block_height_paints_confirmed_once() {
     );
     assert_eq!(
         whole_word_count(&empty_tip, "Confirmed"),
-        1,
-        "expected the word Confirmed once in {empty_tip}"
+        2,
+        "expected the word Confirmed in the paragraph and on its own line in {empty_tip}"
     );
     assert!(!empty_tip.contains("Unconfirmed"), "{empty_tip}");
     assert!(
@@ -219,8 +221,8 @@ fn missing_tip_with_block_height_paints_confirmed_once() {
     );
     assert_eq!(
         whole_word_count(&non_integer, "Confirmed"),
-        1,
-        "expected the word Confirmed once in {non_integer}"
+        2,
+        "expected the word Confirmed in the paragraph and on its own line in {non_integer}"
     );
     assert!(!non_integer.contains("Unconfirmed"), "{non_integer}");
     assert!(
@@ -247,10 +249,11 @@ fn missing_tip_with_block_height_paints_confirmed_once() {
         1,
         "expected one {unconfirmed_markup} in {unconfirmed}"
     );
+    // The paragraph and the whole line each contain the word.
     assert_eq!(
         unconfirmed.matches("Unconfirmed").count(),
-        1,
-        "expected Unconfirmed once in {unconfirmed}"
+        2,
+        "expected Unconfirmed in the paragraph and on its own line in {unconfirmed}"
     );
     assert_eq!(
         whole_word_count(&unconfirmed, "Confirmed"),
@@ -321,5 +324,225 @@ fn transaction_page_uses_the_existing_tip_height() {
     assert!(
         !page.contains("800000"),
         "TransactionPage hardcodes a tip height: {page}"
+    );
+}
+
+/// Whole line `Unconfirmed` when the tip parses and `status.block_height` is absent.
+///
+/// GPUI `transaction_screen_paints_unconfirmed` requires one line whose entire
+/// text equals Unconfirmed. The paragraph stays. A parsed tip with a height
+/// paints the count and omits this line. An empty tip omits this line.
+#[test]
+fn parsed_tip_without_height_paints_unconfirmed_as_its_own_line() {
+    const LINE: &str = "Unconfirmed";
+    let markup = confirmation_markup(&tx(Some(r#"{"confirmed":false}"#)), "100");
+    assert!(
+        markup.contains("<p class=\"unconfirmed\">Unconfirmed</p>"),
+        "the paragraph was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+
+    let counted = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":90}"#)), "100");
+    assert!(
+        !counted.lines().any(|line| line == LINE),
+        "a parsed tip with a block height painted {LINE}: {counted}"
+    );
+
+    let empty_tip = confirmation_markup(&tx(Some(r#"{"confirmed":false}"#)), "");
+    assert!(
+        !empty_tip.lines().any(|line| line == LINE),
+        "an empty tip painted {LINE}: {empty_tip}"
+    );
+
+    let confirmed = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":4}"#)), "");
+    assert!(
+        !confirmed.lines().any(|line| line == LINE),
+        "Confirmed painted {LINE}: {confirmed}"
+    );
+
+    let neither = confirmation_markup(&tx(None), "");
+    assert!(
+        !neither.lines().any(|line| line == LINE),
+        "no tip and no status painted {LINE}: {neither}"
+    );
+}
+
+/// Whole line `Confirmed` when the tip is absent and `status.block_height` is set.
+///
+/// GPUI `assert_one_fee_and_confirmed` requires one line whose entire text
+/// equals `Confirmed`. The paragraph stays. A parsed tip paints the count
+/// instead. A missing height omits the line. `Unconfirmed` is not this line.
+#[test]
+fn missing_tip_paints_confirmed_as_its_own_line() {
+    const LINE: &str = "Confirmed";
+    let markup = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":4}"#)), "");
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_eq!(
+        markup
+            .matches("<p class=\"confirmed\">Confirmed</p>")
+            .count(),
+        1,
+        "the Confirmed paragraph was dropped: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "confirmed" || line == "Unconfirmed"),
+        "confirmation letter case changed: {markup}"
+    );
+
+    let non_integer = confirmation_markup(
+        &tx(Some(r#"{"confirmed":true,"block_height":4}"#)),
+        "not-a-height",
+    );
+    assert!(
+        non_integer.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {non_integer}"
+    );
+    assert_eq!(
+        non_integer.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {non_integer}"
+    );
+
+    let counted = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":4}"#)), "100");
+    assert!(
+        !counted.lines().any(|line| line == LINE),
+        "a parsed tip painted {LINE}: {counted}"
+    );
+
+    let missing_height = confirmation_markup(&tx(Some(r#"{"confirmed":true}"#)), "");
+    assert!(
+        !missing_height.lines().any(|line| line == LINE),
+        "a missing height painted {LINE}: {missing_height}"
+    );
+
+    let unconfirmed = confirmation_markup(&tx(Some(r#"{"confirmed":false}"#)), "100");
+    assert!(
+        !unconfirmed.lines().any(|line| line == LINE),
+        "Unconfirmed painted {LINE}: {unconfirmed}"
+    );
+}
+
+/// Whole line `confirmations 1` when the tip and the block height agree.
+///
+/// GPUI `assert_badge_neighbors` requires one line whose entire text equals
+/// `confirmations 1`. The capital paragraph stays. A count other than 1 omits
+/// this line. An omitted count omits this line. `Confirmations 1` is not this line.
+#[test]
+fn transaction_in_the_tip_paints_confirmations_1_as_its_own_line() {
+    const LINE: &str = "confirmations 1";
+    let markup = confirmation_markup(
+        &tx(Some(r#"{"confirmed":true,"block_height":800000}"#)),
+        "800000",
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_one(&markup, 1);
+    assert!(
+        !markup.lines().any(|line| line == "Confirmations 1"),
+        "a capital whole line was painted: {markup}"
+    );
+
+    let other = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":90}"#)), "100");
+    assert!(
+        !other.lines().any(|line| line == LINE),
+        "a count other than 1 painted {LINE}: {other}"
+    );
+    assert_one(&other, 11);
+
+    let omitted = confirmation_markup(&tx(Some(r#"{"confirmed":false}"#)), "100");
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "an omitted count painted {LINE}: {omitted}"
+    );
+
+    let empty_tip =
+        confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":800000}"#)), "");
+    assert!(
+        !empty_tip.lines().any(|line| line == LINE),
+        "an empty tip painted {LINE}: {empty_tip}"
+    );
+}
+
+/// Whole line `confirmations 11` when the tip is 100 and the block height is 90.
+///
+/// The count is the tip minus the block height, plus one. The capital paragraph
+/// stays. A count of 1 still paints `confirmations 1` and does not paint this
+/// line. Unconfirmed and a missing tip omit this line. `Confirmations 11` is
+/// not this line.
+#[test]
+fn transaction_eleven_confirmations_paints_confirmations_11_as_its_own_line() {
+    const LINE: &str = "confirmations 11";
+    let markup = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":90}"#)), "100");
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_one(&markup, 11);
+    assert!(
+        !markup.lines().any(|line| line == "Confirmations 11"),
+        "a capital whole line was painted: {markup}"
+    );
+
+    let one = confirmation_markup(
+        &tx(Some(r#"{"confirmed":true,"block_height":800000}"#)),
+        "800000",
+    );
+    assert!(
+        one.lines().any(|line| line == "confirmations 1"),
+        "a count of 1 did not paint confirmations 1: {one}"
+    );
+    assert_eq!(
+        one.lines()
+            .filter(|line| *line == "confirmations 1")
+            .count(),
+        1,
+        "confirmations 1 was not painted once: {one}"
+    );
+    assert!(
+        !one.lines().any(|line| line == LINE),
+        "a count of 1 painted {LINE}: {one}"
+    );
+    assert_one(&one, 1);
+
+    let unconfirmed = confirmation_markup(&tx(Some(r#"{"confirmed":false}"#)), "100");
+    assert!(
+        !unconfirmed.lines().any(|line| line == LINE),
+        "unconfirmed painted {LINE}: {unconfirmed}"
+    );
+
+    let missing_tip = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":90}"#)), "");
+    assert!(
+        !missing_tip.lines().any(|line| line == LINE),
+        "a missing tip painted {LINE}: {missing_tip}"
     );
 }

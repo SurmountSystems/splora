@@ -55,7 +55,7 @@ fn assert_exact_details(markup: &str) {
         texts
             .iter()
             .filter(|text| text.contains(WORD))
-            .all(|text| text == WORD),
+            .all(|text| text.trim() == WORD),
         "Details was painted inside a longer sentence: {markup}"
     );
 }
@@ -107,5 +107,38 @@ fn loaded_tx_page_paints_details_once() {
     assert!(
         !visible_texts(&empty).iter().any(|text| text == WORD),
         "an empty body painted Details: {empty}"
+    );
+}
+
+/// Whole line beside the Details button from `GET /tx/:txid`.
+///
+/// A line equal to Details passes. The button stays. An empty body omits
+/// the line. Show diagram stays off.
+#[test]
+fn loaded_tx_page_paints_details_as_its_own_line() {
+    const LINE: &str = "Details";
+    let markup = transaction_row_markup(&tx());
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_eq!(
+        markup.matches(BUTTON).count(),
+        1,
+        "the Details button was dropped: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line.starts_with("Details ")),
+        "Details was painted as a longer sentence: {markup}"
+    );
+    let empty = transaction_row_markup("");
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty body painted {LINE}: {empty}"
     );
 }

@@ -116,8 +116,13 @@ fn multisig_output_shows_uppercase_type_once() {
     ));
     assert_eq!(
         markup.matches("MULTISIG").count(),
+        2,
+        "expected the Type cell MULTISIG and the line Type MULTISIG in {markup}"
+    );
+    assert_eq!(
+        markup.matches("Type MULTISIG").count(),
         1,
-        "expected MULTISIG once in {markup}"
+        "Type MULTISIG was not once: {markup}"
     );
     assert_one(&markup, TYPE_SPANS);
     assert_eq!(

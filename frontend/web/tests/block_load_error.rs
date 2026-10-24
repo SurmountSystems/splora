@@ -53,7 +53,7 @@ fn assert_load_error(markup: &str) {
     );
     assert_eq!(
         markup.matches(SENTENCE).count(),
-        1,
+        2,
         "the span was not painted once: {markup}"
     );
     assert!(

@@ -81,7 +81,10 @@ pub use search::{
 pub use splora_frontend_shared::{assets_registry_path, assets_registry_search_path};
 pub use theme::{ACCENT, BACKGROUND, TEXT};
 pub use views::{
-    App, asset_page_markup, looks_like_block_hash, mempool_size_markup, submission_links,
+    App, address_balance_history_markup, address_unspent_outputs_markup, asset_page_markup,
+    block_page_heading_markup, block_page_weight_markup, broadcast_transaction_heading,
+    dashboard_mined_markup, dashboard_recent_blocks_markup, looks_like_block_hash,
+    mempool_size_markup, mempool_summary_text, submission_links, transaction_fees_heading,
 };
 
 #[cfg(target_arch = "wasm32")]

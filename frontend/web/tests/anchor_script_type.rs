@@ -82,9 +82,10 @@ fn anchor_output_shows_uppercase_type_once() {
     let markup = paint(&tx(&input("null"), &output("anchor")));
     assert_eq!(
         markup.matches("ANCHOR").count(),
-        1,
-        "expected ANCHOR once in {markup}"
+        2,
+        "expected the Type cell ANCHOR and the line Type ANCHOR in {markup}"
     );
+    assert_eq!(markup.matches("Type ANCHOR").count(), 1, "{markup}");
     assert_one(&markup, TYPE_SPANS);
     assert_eq!(
         class_span_values(&markup, "output-type"),

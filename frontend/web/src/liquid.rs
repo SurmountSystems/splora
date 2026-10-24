@@ -268,7 +268,14 @@ pub fn registry_list_markup(body: &str, liquid: bool) -> String {
     // Column headers once for the assets list, not once per row.
     // Loaded thead: Name, then Ticker, then Issuer domain, then Asset ID.
     // Not the loading thead. Not the Name-line parenthetical.
-    format!("<th>Name</th><th>Ticker</th><th>Issuer domain</th><th>Asset ID</th>{painted}")
+    // GPUI whole line. The h1 in AssetsPage stays. Empty and mainnet return above.
+    // GPUI whole line. The Name th stays. Empty, invalid, and mainnet return above.
+    // GPUI whole line. The Ticker th stays. Empty, invalid, and mainnet return above.
+    // GPUI whole line. The Issuer domain th stays. Empty, invalid, and mainnet return above.
+    // GPUI whole line. The Asset ID th stays. Empty, invalid, and mainnet return above.
+    format!(
+        "\nAssets\n<th>Name</th>\nName\n<th>Ticker</th>\nTicker\n<th>Issuer domain</th>\nIssuer domain\n<th>Asset ID</th>\nAsset ID\n{painted}"
+    )
 }
 
 pub fn registry_entry_markup(body: &str, liquid: bool) -> String {

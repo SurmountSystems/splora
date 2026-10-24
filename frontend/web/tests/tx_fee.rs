@@ -141,3 +141,30 @@ fn fee_zero_paints_fee_0_sats_as_its_own_line() {
     );
     assert_scripts_stay_off(&zero_seq);
 }
+
+/// Whole line `Fee 50 sats` from no-query `GET /tx/:txid`.
+///
+/// GPUI `assert_one_fee_and_confirmed` requires one line whose entire text
+/// equals `Fee 50 sats`. The Fee cell keeps the label and the unit apart.
+/// A grouped fee does not use this sentence. `Fee rate 0.50 sat/vB` stays off.
+#[test]
+fn fee_fifty_paints_fee_50_sats_as_its_own_line() {
+    const LINE: &str = "Fee 50 sats";
+    let markup = transaction_row_markup(&tx(50, 400));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_one(&markup, &preview_cell("50"));
+    assert_one(&markup, "<td class=\"fee\">50</td>");
+    assert!(
+        !markup.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+        "Fee rate 0.50 sat/vB was painted: {markup}"
+    );
+    assert_scripts_stay_off(&markup);
+}

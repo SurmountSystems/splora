@@ -147,6 +147,53 @@ fn bech32_input_and_output_show_postfix_6p6e3r() {
 }
 
 #[test]
+/// Whole line from the Angular poison warning on no-query `GET /tx/:txid`.
+///
+/// GPUI `transaction_screen_paints_poison_attack_warning` requires one line
+/// equal to that sentence when two addresses are similar. The alert div
+/// stays. Dissimilar addresses omit the line.
+#[test]
+fn similar_addresses_paint_the_poison_warning_as_its_own_line() {
+    let incoming = "bc1qge86gqjnk8aqs3nvv7ejrvcd4zq6qur36p6e3r";
+    let outgoing = "bc1qge8xyxjex6zzzx5g8hh65vsel4e548p26p6e3r";
+    let body = transaction(
+        "44544516084ea916ff1eb69c675c693e252addbbaf77102ffff86e3979ac6132",
+        &input(&output("v0_p2wpkh", incoming)),
+        &output("v0_p2wpkh", outgoing),
+    );
+    let markup = poison_alert_markup(&body, "mainnet");
+    assert!(
+        markup.lines().any(|line| line == WARNING),
+        "no line equals {WARNING}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == WARNING).count(),
+        1,
+        "{WARNING} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains("class=\"alert alert-mempool\""),
+        "the alert div was dropped: {markup}"
+    );
+    assert!(
+        markup.contains(&format!("<span>{WARNING}</span>")),
+        "the warning span was dropped: {markup}"
+    );
+
+    let dissimilar = transaction(
+        "aa",
+        &input(&output("p2pkh", "1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF")),
+        &output("p2pkh", "1Ay8vMC7R1UbyCCZRVULMV7iQpHSAbguJP"),
+    );
+    assert!(
+        !poison_alert_markup(&dissimilar, "mainnet")
+            .lines()
+            .any(|line| line == WARNING),
+        "dissimilar addresses painted {WARNING}"
+    );
+}
+
+#[test]
 fn dissimilar_addresses_do_not_invent_an_alert() {
     let body = transaction(
         "aa",

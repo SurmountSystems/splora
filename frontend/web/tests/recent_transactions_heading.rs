@@ -47,7 +47,8 @@ fn assert_absent(markup: &str, needle: &str) {
 
 fn assert_heading_once_before_the_table(markup: &str) {
     assert_one(markup, HEADING);
-    assert_eq!(markup.matches(LETTERS).count(), 1, "{markup}");
+    // The h1 and the whole line each contain the words.
+    assert_eq!(markup.matches(LETTERS).count(), 2, "{markup}");
     assert_eq!(markup.matches("<h1>").count(), 1, "{markup}");
     let heading_at = markup.find(HEADING).expect("heading");
     let table_at = markup.find("<table class=\"tx-rows\"").expect("tx table");
@@ -102,4 +103,40 @@ fn blocks_list_does_not_gain_the_heading() {
     let markup = blocks_rows_markup(&block_list());
     assert_absent(&markup, LETTERS);
     assert_absent(&markup, HEADING);
+}
+
+/// Whole line beside the Recent Transactions h1 from `GET /mempool/recent`.
+///
+/// A line equal to Recent Transactions passes. The h1 stays. An empty list
+/// omits the line. The blocks list does not gain it.
+#[test]
+fn recent_page_paints_recent_transactions_as_its_own_line() {
+    const LINE: &str = "Recent Transactions";
+    let markup = recent_rows_markup(&recent(TXID, 10, 141, 99000));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_one(&markup, HEADING);
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line.starts_with("Recent Transactions ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    let empty = recent_rows_markup("[]");
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty list painted {LINE}: {empty}"
+    );
+    let blocks = blocks_rows_markup(&block_list());
+    assert!(
+        !blocks.lines().any(|line| line == LINE),
+        "the blocks list painted {LINE}: {blocks}"
+    );
 }

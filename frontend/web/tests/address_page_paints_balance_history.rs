@@ -5,7 +5,7 @@
 //! two rows. The address route has no query string. Two rows, an empty
 //! list, or a body that does not parse leaves the rows unchanged.
 
-use splora_web::{address_rows_markup, parse_transactions_json};
+use splora_web::{address_balance_history_markup, address_rows_markup, parse_transactions_json};
 
 const LABEL: &str = "<h2>Balance History</h2>";
 const TX_TABLE: &str = "<table class=\"tx-rows\">";
@@ -213,5 +213,55 @@ fn address_page_paints_balance_history() {
     assert!(
         !unparsed.contains(LABEL),
         "an unparsed body painted Balance History: {unparsed}"
+    );
+}
+
+/// Whole line `Balance History` when more than two transactions parse.
+///
+/// GPUI `address_screen_paints_balance_history` requires one line equal to
+/// Balance History. The h2 stays. Two rows, an empty list, and an unparsed
+/// body omit the line.
+#[test]
+fn address_page_paints_balance_history_as_its_own_line() {
+    const LINE: &str = "Balance History";
+    let body = txs_json(3);
+    let markup = address_balance_history_markup(&address_rows_markup("", &body, "[]"), &body);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(markup.contains(LABEL), "the heading was dropped: {markup}");
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line.starts_with("Balance History ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    let line_at = markup.lines().position(|line| line == LINE);
+    let table_at = markup.lines().position(|line| line.contains(TX_TABLE));
+    assert!(
+        line_at.is_some() && table_at.is_some() && line_at < table_at,
+        "{LINE} was not above the transaction rows: {markup}"
+    );
+    let two_body = txs_json(2);
+    let two = address_balance_history_markup(&address_rows_markup("", &two_body, "[]"), &two_body);
+    assert!(
+        !two.lines().any(|line| line == LINE),
+        "two transactions painted {LINE}: {two}"
+    );
+    assert!(
+        !address_balance_history_markup(&address_rows_markup("", "[]", "[]"), "[]")
+            .lines()
+            .any(|line| line == LINE)
+    );
+    assert!(
+        !address_balance_history_markup(&address_rows_markup("", "not-json", "[]"), "not-json")
+            .lines()
+            .any(|line| line == LINE)
     );
 }

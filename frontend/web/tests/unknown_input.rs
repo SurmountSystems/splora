@@ -63,13 +63,75 @@ fn assert_sentinels_stay_off(markup: &str) {
     assert_absent(markup, PREV_ASM);
 }
 
+/// Whole line `UNKNOWN` when `vin.prevout` is missing and the input is not
+/// coinbase, peg-in, or issuance.
+///
+/// GPUI requires one line whose entire text is UNKNOWN. The span stays.
+/// A present prevout, issuance, coinbase, and peg-in omit the line.
+#[test]
+fn null_prevout_paints_unknown_as_its_own_line() {
+    const LINE: &str = "UNKNOWN";
+    let markup = transaction_row_markup(&tx(&null_prevout(false, "")));
+    assert!(
+        markup.contains(UNKNOWN_SPAN),
+        "the span was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+
+    let omitted = transaction_row_markup(&tx(&input("", false, "")));
+    assert_eq!(
+        omitted.lines().filter(|line| *line == LINE).count(),
+        1,
+        "an omitted prevout key did not paint {LINE} once: {omitted}"
+    );
+
+    let prevout = format!(
+        r#""prevout":{{"scriptpubkey":"{PREV_SCRIPT}","scriptpubkey_asm":"{PREV_ASM}","scriptpubkey_type":"v0_p2wpkh"}},"#
+    );
+    let present = transaction_row_markup(&tx(&input(&prevout, false, "")));
+    assert!(
+        !present.lines().any(|line| line == LINE),
+        "a present prevout painted {LINE}: {present}"
+    );
+
+    let extra = format!(
+        r#","issuance":{{"asset_id":"{ASSET_ID}","is_reissuance":false,"asset_entropy":"{ASSET_ENTROPY}"}}"#
+    );
+    let issued = transaction_row_markup(&tx(&null_prevout(false, &extra)));
+    assert!(
+        !issued.lines().any(|line| line == LINE),
+        "issuance painted {LINE}: {issued}"
+    );
+
+    let coinbase = transaction_row_markup(&tx(&null_prevout(true, "")));
+    assert!(
+        !coinbase.lines().any(|line| line == LINE),
+        "coinbase painted {LINE}: {coinbase}"
+    );
+
+    let pegin = transaction_row_markup(&tx(&null_prevout(false, r#","is_pegin":true"#)));
+    assert!(
+        !pegin.lines().any(|line| line == LINE),
+        "peg-in painted {LINE}: {pegin}"
+    );
+}
+
 #[test]
 fn null_prevout_paints_unknown_once() {
     let markup = transaction_row_markup(&tx(&null_prevout(false, "")));
     assert_one(&markup, UNKNOWN_SPAN);
+    // The span and the whole line each contain the word.
     assert_eq!(
         markup.matches("UNKNOWN").count(),
-        1,
+        2,
         "UNKNOWN count in {markup}"
     );
     assert_one(&markup, "<span class=\"sequence\">sequence 1</span>");
@@ -121,9 +183,10 @@ fn peg_in_without_prevout_does_not_paint_unknown() {
 fn omitted_prevout_key_paints_unknown_once() {
     let markup = transaction_row_markup(&tx(&input("", false, "")));
     assert_one(&markup, UNKNOWN_SPAN);
+    // The span and the whole line each contain the word.
     assert_eq!(
         markup.matches("UNKNOWN").count(),
-        1,
+        2,
         "UNKNOWN count in {markup}"
     );
     assert_one(&markup, "<span class=\"sequence\">sequence 1</span>");

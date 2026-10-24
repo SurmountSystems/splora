@@ -99,7 +99,7 @@ fn v0_p2wsh_input_paints_the_label_once() {
         "no-query GET /tx/:txid is missing: {calls:?}"
     );
     let markup = transaction_row_markup(&tx(&prevout("v0_p2wsh"), "p2pkh", Inner::Present));
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_absent(&markup, P2TR_LABEL);
     assert_row_still_paints(&markup);
@@ -110,7 +110,8 @@ fn v0_p2wsh_input_paints_the_label_once() {
 fn v1_p2tr_prevout_keeps_tapscript_and_omits_this_label() {
     let markup = transaction_row_markup(&tx(&prevout("v1_p2tr"), "p2pkh", Inner::Present));
     assert_row_still_paints(&markup);
-    assert_one(&markup, P2TR_LABEL);
+    // The span and the whole line each contain the words.
+    assert_eq!(markup.matches(P2TR_LABEL).count(), 2, "{markup}");
     assert_absent(&markup, LABEL);
     assert_sentinels_stay_off(&markup);
 }
@@ -119,7 +120,7 @@ fn v1_p2tr_prevout_keeps_tapscript_and_omits_this_label() {
 fn null_prevout_with_inner_script_paints_the_label() {
     let markup = transaction_row_markup(&tx("null", "p2pkh", Inner::Present));
     assert_row_still_paints(&markup);
-    assert_one(&markup, LABEL);
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
     assert_absent(&markup, P2TR_LABEL);
     assert_sentinels_stay_off(&markup);
@@ -155,4 +156,63 @@ fn v0_p2wsh_output_does_not_paint_the_label() {
     assert_row_still_paints(&markup);
     assert_absent(&markup, LABEL);
     assert_sentinels_stay_off(&markup);
+}
+
+/// Whole line `P2WSH witness script` when the inner witness script is set.
+///
+/// GPUI `transaction_screen_paints_p2wsh_witness_script` requires one line
+/// equal to those words. The span stays. A v1_p2tr prevout, a missing inner
+/// script, and a v0_p2wsh output omit the line. The script text stays off.
+#[test]
+fn v0_p2wsh_input_paints_p2wsh_witness_script_as_its_own_line() {
+    const LINE: &str = "P2WSH witness script";
+    let markup = transaction_row_markup(&tx(&prevout("v0_p2wsh"), "p2pkh", Inner::Present));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        markup.contains(LABEL_SPAN),
+        "the span was dropped: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line.starts_with("P2WSH witness script ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    assert_sentinels_stay_off(&markup);
+    let null_prevout = transaction_row_markup(&tx("null", "p2pkh", Inner::Present));
+    assert_eq!(
+        null_prevout.lines().filter(|line| *line == LINE).count(),
+        1,
+        "a null prevout did not paint {LINE} once: {null_prevout}"
+    );
+    assert_sentinels_stay_off(&null_prevout);
+    let tapscript = transaction_row_markup(&tx(&prevout("v1_p2tr"), "p2pkh", Inner::Present));
+    assert!(
+        !tapscript.lines().any(|line| line == LINE),
+        "a v1_p2tr prevout painted {LINE}: {tapscript}"
+    );
+    assert!(
+        tapscript.contains(P2TR_LABEL),
+        "P2TR tapscript was dropped: {tapscript}"
+    );
+    for omitted in [
+        transaction_row_markup(&tx(&prevout("v0_p2wsh"), "p2pkh", Inner::Missing)),
+        transaction_row_markup(&tx(&prevout("v0_p2wsh"), "p2pkh", Inner::Null)),
+        transaction_row_markup(&tx(&prevout("v0_p2wsh"), "p2pkh", Inner::Empty)),
+        transaction_row_markup(&tx(&prevout("p2pkh"), "v0_p2wsh", Inner::Missing)),
+    ] {
+        assert!(
+            !omitted.lines().any(|line| line == LINE),
+            "an omit path painted {LINE}: {omitted}"
+        );
+        assert_sentinels_stay_off(&omitted);
+    }
 }

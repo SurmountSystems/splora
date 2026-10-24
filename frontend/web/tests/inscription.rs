@@ -89,12 +89,20 @@ fn assert_exact_inscription(markup: &str) {
     );
     assert_eq!(
         markup.matches(WORD).count(),
+        2,
+        "the button and the whole line each contain Inscription: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == WORD).count(),
         1,
-        "Inscription was not the visible text once: {markup}"
+        "Inscription was not its own line once: {markup}"
     );
     let stripped = markup.replacen(BUTTON, "", 1);
     assert!(
-        !stripped.contains(WORD),
+        stripped
+            .lines()
+            .filter(|line| line.contains(WORD))
+            .all(|line| line == WORD),
         "Inscription was painted inside a longer sentence: {stripped}"
     );
 }
@@ -123,7 +131,7 @@ fn assert_runestone_stays(markup: &str) {
     );
     assert_eq!(
         markup.matches(WORD).count(),
-        markup.matches(BUTTON).count(),
+        markup.matches(BUTTON).count() * 2,
         "Inscription replaced Runestone or leaked beside the button: {markup}"
     );
 }
@@ -281,4 +289,37 @@ fn liquid_omits_inscription() {
     assert_runestone_stays(&markup);
     assert_scripts_stay_off(&markup);
     assert_no_tooltip(&markup);
+}
+
+/// Whole line beside the Inscription button.
+///
+/// A line equal to Inscription passes. The button stays. A script that
+/// lacks the envelope bytes, and a Liquid body, omit the line. The script
+/// and the witness stay off that line.
+#[test]
+fn inscription_paints_inscription_as_its_own_line() {
+    const LINE: &str = "Inscription";
+    let marked = witness(&[WIT_ITEM, SCRIPT, CONTROL]);
+    let markup = paint("v1_p2tr", &marked, false);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(markup.contains(BUTTON), "the button was dropped: {markup}");
+    let plain = witness(&[WIT_ITEM, PLAIN, CONTROL]);
+    let omitted = paint("v1_p2tr", &plain, false);
+    assert!(
+        !omitted.lines().any(|line| line == LINE),
+        "a script without the envelope painted {LINE}: {omitted}"
+    );
+    let liquid = paint("v1_p2tr", &marked, true);
+    assert!(
+        !liquid.lines().any(|line| line == LINE),
+        "liquid painted {LINE}: {liquid}"
+    );
 }

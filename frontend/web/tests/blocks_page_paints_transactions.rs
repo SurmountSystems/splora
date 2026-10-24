@@ -157,14 +157,20 @@ fn blocks_page_paints_transactions() {
         1,
         "Transactions was not painted once: {markup}"
     );
+    // The header cell and the whole line each contain the word.
     assert_eq!(
         markup.matches(WORD).count(),
-        1,
-        "Transactions was not the header alone: {markup}"
+        2,
+        "Transactions was not the header plus one line: {markup}"
     );
     let rows = blocks_rows_markup(&json);
+    assert_eq!(
+        rows.lines().filter(|line| *line == WORD).count(),
+        1,
+        "the blocks list did not paint one Transactions line: {rows}"
+    );
     assert!(
-        !rows.contains(WORD),
+        !rows.replacen("\nTransactions\n", "", 1).contains(WORD),
         "the block row gained the word Transactions: {rows}"
     );
     assert!(
@@ -193,4 +199,48 @@ fn blocks_page_paints_transactions() {
     assert_eq!(calls[0].path, "/blocks");
     assert!(!calls[0].path.contains('?'), "{}", calls[0].path);
     assert!(!calls[0].path.contains('#'), "{}", calls[0].path);
+}
+
+/// Whole line beside the Transactions header from `GET /blocks`.
+///
+/// A line equal to Transactions passes. The header cell stays. An empty
+/// list omits the line. The line comes before TXs.
+#[test]
+fn blocks_list_paints_transactions_as_its_own_line() {
+    const LINE: &str = "Transactions";
+    let markup = blocks_rows_markup(&blocks_json());
+    assert!(
+        markup.contains("<td class=\"tx-count-label\">TXs</td>"),
+        "the blocks list was not rendered: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line.starts_with("Transactions ")),
+        "{LINE} was painted as a longer sentence: {markup}"
+    );
+    let lines: Vec<&str> = markup.lines().collect();
+    let header_at = lines.iter().position(|line| *line == LINE);
+    let txs_at = lines.iter().position(|line| *line == "TXs");
+    assert!(
+        header_at.is_some() && txs_at.is_some() && header_at < txs_at,
+        "{LINE} was not before TXs: {markup}"
+    );
+    let empty = blocks_rows_markup("[]");
+    assert!(
+        !empty.lines().any(|line| line == LINE),
+        "an empty list painted {LINE}: {empty}"
+    );
+    let unparsed = blocks_rows_markup("not-json");
+    assert!(
+        !unparsed.lines().any(|line| line == LINE),
+        "an unparsed body painted {LINE}: {unparsed}"
+    );
 }
