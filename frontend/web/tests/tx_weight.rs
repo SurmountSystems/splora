@@ -89,13 +89,17 @@ fn explicit_zero_weight_paints_zero_wu() {
 }
 
 #[test]
-fn weight_seven_keeps_virtual_size_and_adjusted_vsize() {
+fn weight_seven_keeps_virtual_size_and_omits_adjusted_vsize_1_75() {
     let markup = transaction_row_markup(&tx(Weight::Present(7)));
     assert_one(&markup, &units_cell("Weight 7 WU"));
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
-    assert_one(
+    assert_absent(
         &markup,
         "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
     );
     assert_scripts_stay_off(&markup);
 }

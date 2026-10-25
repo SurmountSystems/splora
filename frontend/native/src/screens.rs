@@ -3818,11 +3818,12 @@ fn fee_words(fee: u64) -> String {
 }
 
 /// Details fee rate. A finite `fee / (weight / 4)` paints the bare line
-/// `Fee rate`. A missing weight, JSON null, or zero weight omits the line.
+/// `Fee rate`. Integer `weight / 4 == 0` (weights 0, 1, 2, and 3), a missing
+/// weight, or JSON null omits the line before the f64 division.
 /// The raw header `fee_rate N` stays and still uses integer virtual size.
 fn fee_rate_words(fee: u64, document: &serde_json::Value) -> Option<String> {
     let weight = json_u64_at(document, "weight")?;
-    if weight == 0 {
+    if weight / 4 == 0 {
         return None;
     }
     let rate = (fee as f64) / ((weight as f64) / 4.0);

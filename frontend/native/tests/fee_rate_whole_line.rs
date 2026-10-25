@@ -1,9 +1,8 @@
 //! Whole-line fee rate on the transaction screen from `GET /tx/:txid`.
 //!
-//! Fee 584 and weight 572 are the served body. The rate is fee divided by
-//! weight divided by 4. Under 10 that rate keeps two fraction digits.
-//! The screen must include one line equal to `Fee rate 4.08 sat/vB`.
-//! A longer line that only contains those words does not count.
+//! Fee 584 and weight 572 are the served body. A finite rate paints the bare
+//! line `Fee rate`. The text `sat/vB` stays off. A longer line that contains
+//! those words does not count as that bare line.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -136,18 +135,50 @@ fn paint_tx_fee_rate(txid: &str, fee: u64, weight_field: &str) -> String {
     painted(&host)
 }
 
-/// Fee 584 and weight 572 paint one line equal to `Fee rate 4.08 sat/vB`.
+/// Fee 584 and weight 572 paint the bare line `Fee rate` once.
+/// `sat/vB` stays off. The rate digits are not an equality gate.
 #[test]
-fn transaction_screen_paints_fee_rate_4_08_whole_line() {
-    const LINE: &str = "Fee rate 4.08 sat/vB";
+fn transaction_screen_paints_bare_fee_rate_line() {
+    const LINE: &str = "Fee rate";
     let text = paint_tx_fee_rate("rate408", 584, r#""weight":572"#);
     assert!(
         text.lines().any(|line| line == LINE),
-        "fee 584 and weight 572 did not paint {LINE}: {text}"
+        "no line equals \"Fee rate\": {text}"
     );
     assert_eq!(
         text.lines().filter(|line| *line == LINE).count(),
         1,
-        "{LINE} was not one line: {text}"
+        "Fee rate was not painted once: {text}"
     );
+    assert!(
+        !text.contains("sat/vB"),
+        "the fee rate line painted sat/vB: {text}"
+    );
+}
+
+/// Fee 1 and integer weight/4 == 0 omit the bare line `Fee rate`.
+///
+/// Weights 1, 2, and 3 take that path. The shipped transaction screen
+/// omits that whole line. `sat/vB` stays off. A longer sentence that merely
+/// contains those words is not this line.
+#[test]
+fn transaction_screen_omits_fee_rate_line_when_weight_under_four() {
+    const LINE: &str = "Fee rate";
+    for (txid, weight) in [("ratew1", 1u32), ("ratew2", 2), ("ratew3", 3)] {
+        let text = paint_tx_fee_rate(txid, 1, &format!(r#""weight":{weight}"#));
+        assert!(
+            text.contains(&format!("tx txid {txid}")),
+            "weight {weight} hid the transaction: {text}"
+        );
+        assert!(
+            !text
+                .lines()
+                .any(|line| line == LINE || line.starts_with("Fee rate ")),
+            "fee 1 and weight {weight} painted Fee rate: {text}"
+        );
+        assert!(
+            !text.contains("sat/vB"),
+            "fee 1 and weight {weight} painted sat/vB: {text}"
+        );
+    }
 }

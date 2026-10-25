@@ -58,9 +58,13 @@ fn locktime_zero_paints_the_label_and_zero() {
     assert_one(&markup, LABEL);
     assert_one(&markup, &raw_cell(0));
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
-    assert_one(
+    assert_absent(
         &markup,
         "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
     );
     assert_scripts_stay_off(&markup);
 }

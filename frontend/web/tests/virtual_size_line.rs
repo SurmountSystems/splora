@@ -163,3 +163,58 @@ fn weight_zero_paints_virtual_size_0_as_its_own_line() {
         "null weight was painted as 0: {null}"
     );
 }
+
+/// Whole lines `virtual size 10` and `virtual size 2` from no-query `GET /tx/:txid`.
+///
+/// Integer virtual size is `weight / 4`. Weight 40 is 10. Weight 8 is 2.
+/// Each paints that lowercase sentence as one whole line. The capital cell
+/// `Virtual size N` stays. The whole line `virtual size 1` stays off.
+/// Weight 0 and weight 5 still forbid `virtual size 2` in the test above.
+#[test]
+fn weight_forty_and_eight_paint_lowercase_virtual_size_lines() {
+    let ten = transaction_row_markup(&tx(40));
+    assert!(
+        ten.lines().any(|line| line == "virtual size 10"),
+        "weight 40 omitted virtual size 10: {ten}"
+    );
+    assert_eq!(
+        ten.lines()
+            .filter(|line| *line == "virtual size 10")
+            .count(),
+        1,
+        "virtual size 10 was not painted once: {ten}"
+    );
+    assert!(
+        ten.contains("<td class=\"virtual-size\">Virtual size 10</td>"),
+        "weight 40 dropped the Virtual size 10 cell: {ten}"
+    );
+    assert!(
+        ten.lines()
+            .filter(|line| line.contains("virtual-size"))
+            .all(|line| line != "virtual size 10"),
+        "the virtual-size cell line is virtual size 10: {ten}"
+    );
+    assert!(
+        !ten.lines().any(|line| line == "virtual size 1"),
+        "weight 40 painted virtual size 1: {ten}"
+    );
+
+    let two = transaction_row_markup(&tx(8));
+    assert!(
+        two.lines().any(|line| line == "virtual size 2"),
+        "weight 8 omitted virtual size 2: {two}"
+    );
+    assert_eq!(
+        two.lines().filter(|line| *line == "virtual size 2").count(),
+        1,
+        "virtual size 2 was not painted once: {two}"
+    );
+    assert!(
+        two.contains("<td class=\"virtual-size\">Virtual size 2</td>"),
+        "weight 8 dropped the Virtual size 2 cell: {two}"
+    );
+    assert!(
+        !two.lines().any(|line| line == "virtual size 1"),
+        "weight 8 painted virtual size 1: {two}"
+    );
+}

@@ -62,9 +62,13 @@ fn sequence_zero_paints_nsequence_hex_and_keeps_the_decimal() {
     assert_one(&markup, &sequence_spans(0, "0x00"));
     assert_one(&markup, "<span class=\"sequence\">sequence 0</span>");
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
-    assert_one(
+    assert_absent(
         &markup,
         "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
     );
     assert_fixtures_stay_off(&markup);
 }

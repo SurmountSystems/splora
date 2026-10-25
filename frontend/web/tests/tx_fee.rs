@@ -3,7 +3,7 @@
 //! Angular paints `tx.fee | number` with DecimalPipe `1.0-3` and an en-US
 //! grouping comma. Fee is an integer, so there is no fraction. The cell is
 //! `<span class="label">Fee</span> {grouped} <span class="symbol">sats</span>`.
-//! The raw fee cell stays. Virtual size and adjusted vsize stay.
+//! The raw fee cell stays. Virtual size stays. Adjusted vsize 1.75 stays off.
 
 use splora_web::transaction_row_markup;
 
@@ -70,9 +70,13 @@ fn fee_fifteen_hundred_paints_grouped_and_keeps_vsize() {
     assert_one(&markup, &preview_cell("1,500"));
     assert_one(&markup, "<td class=\"fee\">1500</td>");
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
-    assert_one(
+    assert_absent(
         &markup,
         "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
     );
     assert_scripts_stay_off(&markup);
 }

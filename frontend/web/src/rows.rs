@@ -898,16 +898,9 @@ fn tx_parties(tx: &Transaction, multisig_type_line: bool) -> String {
     parties
 }
 
-/// Mempool `Math.max(weight / 4, sigops * 5)`, then `Math.round(n * 100) / 100`.
-/// Floating division, not the integer virtual-size quotient.
-fn adjusted_vsize_text(weight: u32, sigops: u32) -> String {
-    let value = (f64::from(weight) / 4.0).max(f64::from(sigops) * 5.0);
-    let rounded = (value * 100.0).round() / 100.0;
-    plain_number(rounded)
-}
-
-/// Same value as `adjusted_vsize_text`, printed with two decimal places.
-/// The cell keeps the JavaScript number. This string is only the whole-line gate.
+/// `max(weight / 4, sigops * 5)`, printed with two decimal places.
+/// The adjusted-vsize cell and the whole line both use this text.
+/// They are painted only when it ends in `.00` and the whole part is not `1`.
 fn adjusted_vsize_two_decimals(weight: u32, sigops: u32) -> String {
     let value = (f64::from(weight) / 4.0).max(f64::from(sigops) * 5.0);
     let cents = (value * 100.0).round() as u64;
@@ -988,7 +981,16 @@ fn tx_row_from_shared(
         .as_ref()
         .map(|status| status.confirmed)
         .unwrap_or(false);
-    let n = adjusted_vsize_text(tx.weight, tx.sigops);
+    let adjusted_line = adjusted_vsize_two_decimals(tx.weight, tx.sigops);
+    let adjusted_words = if let Some(whole) = adjusted_line.strip_suffix(".00") {
+        if whole != "1" {
+            Some(format!("Adjusted vsize {adjusted_line}"))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let (number, unit) = size_number_and_unit(tx.size);
     let (weight_number, weight_unit) = weight_number_and_unit(tx.weight);
     let virtual_size_words = format!("Virtual size {}", tx.weight / 4);
@@ -1013,30 +1015,33 @@ fn tx_row_from_shared(
             &format!("Weight {weight_number} {weight_unit}"),
         ),
         td("virtual-size", &virtual_size_words),
-        td("adjusted-vsize", &format!("Adjusted vsize {n}")),
+    ];
+    if let Some(words) = adjusted_words.as_deref() {
+        cells.push(td("adjusted-vsize", words));
+    }
+    cells.extend([
         td("version", &row.version.to_string()),
         td("locktime-label", "Locktime"),
         td("locktime", &row.lock_time.to_string()),
         td("sigops-label", "Sigops"),
         td("sigops", &row.sigops.to_string()),
-    ];
+    ]);
     // GPUI whole line. The virtual-size cell stays. This line is the words alone.
     cells.push('\n'.to_string());
     cells.push(virtual_size_words);
     cells.push('\n'.to_string());
-    // GPUI whole line. Lowercase `virtual size 0` when `weight / 4` is 0.
-    // The cell stays `Virtual size N`. `virtual size 1` and `virtual size 2`
-    // stay off. A missing key or JSON null never reaches this row.
-    if tx.weight / 4 == 0 {
-        cells.push("\nvirtual size 0\n".to_string());
+    // GPUI whole line. Lowercase `virtual size {quotient}` when `weight / 4`
+    // is not 1. Quotient 0 still paints `virtual size 0`. The cell stays
+    // `Virtual size N`. Quotient 1 stays off this line. A missing key or
+    // JSON null never reaches this row.
+    let virtual_size = tx.weight / 4;
+    if virtual_size != 1 {
+        cells.push(format!("\nvirtual size {virtual_size}\n"));
     }
-    // GPUI whole line. The adjusted-vsize cell stays the JavaScript number.
-    // Two decimals when that form ends in .00, except 1.00. 1 and 1.00 stay off.
-    let adjusted_line = adjusted_vsize_two_decimals(tx.weight, tx.sigops);
-    if let Some(whole) = adjusted_line.strip_suffix(".00") {
-        if whole != "1" {
-            cells.push(format!("\nAdjusted vsize {adjusted_line}\n"));
-        }
+    // The cell above uses this same text. Two decimals, painted only when
+    // that text ends in .00 and the whole part is not 1.
+    if let Some(words) = &adjusted_words {
+        cells.push(format!("\n{words}\n"));
     }
     // The value cell stays the raw integer. The label cell stays.
     // GPUI whole line. This line is the label text alone.

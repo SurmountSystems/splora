@@ -1,10 +1,11 @@
 //! Adjusted vsize on the transaction details row from `GET /tx/:txid`.
 //!
-//! When sigops is present, the cell is `Math.max(weight / 4, sigops * 5)`
-//! with floating division, then `Math.round(value * 100) / 100`, then
-//! JavaScript number stringification. A missing or null sigops omits the
-//! row. Explicit zero still paints. Script hex, asm, scriptsig, and witness
-//! stay off the page. Virtual size stays integer `weight / 4`.
+//! When sigops is present, adjusted vsize is `max(weight / 4, sigops * 5)`
+//! with floating division, then two decimal places. The cell and the whole
+//! line are painted only when that text ends in `.00` and the whole part is
+//! not `1`. A missing or null sigops omits the row. Explicit zero still
+//! paints `0.00`. Script hex, asm, scriptsig, and witness stay off the page.
+//! Virtual size stays integer `weight / 4`.
 
 use splora_web::transaction_row_markup;
 
@@ -63,9 +64,13 @@ fn assert_scripts_stay_off(markup: &str) {
 }
 
 #[test]
-fn weight_over_four_larger_paints_fraction() {
+fn weight_seven_sigops_zero_omits_adjusted_vsize_1_75() {
     let markup = transaction_row_markup(&tx(7, Sigops::Present(0)));
-    assert_one(&markup, &adjusted_cell("1.75"));
+    assert_absent(&markup, &adjusted_cell("1.75"));
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
+    );
     assert_one(&markup, &virtual_cell(1));
     assert_absent(&markup, &adjusted_cell("1"));
     assert_scripts_stay_off(&markup);
@@ -74,7 +79,7 @@ fn weight_over_four_larger_paints_fraction() {
 #[test]
 fn weight_over_four_larger_paints_one_hundred() {
     let markup = transaction_row_markup(&tx(400, Sigops::Present(1)));
-    assert_one(&markup, &adjusted_cell("100"));
+    assert_one(&markup, &adjusted_cell("100.00"));
     assert_one(&markup, &virtual_cell(100));
     assert_absent(&markup, "Adjusted vsize 5");
     assert_scripts_stay_off(&markup);
@@ -83,7 +88,7 @@ fn weight_over_four_larger_paints_one_hundred() {
 #[test]
 fn sigops_times_five_larger_paints_fifteen() {
     let markup = transaction_row_markup(&tx(8, Sigops::Present(3)));
-    assert_one(&markup, &adjusted_cell("15"));
+    assert_one(&markup, &adjusted_cell("15.00"));
     assert!(
         markup.lines().any(|line| line == "Adjusted vsize 15.00"),
         "Adjusted vsize 15.00 is absent: {markup}"
@@ -96,7 +101,7 @@ fn sigops_times_five_larger_paints_fifteen() {
 #[test]
 fn explicit_zero_sigops_paints_adjusted_vsize_zero() {
     let markup = transaction_row_markup(&tx(0, Sigops::Present(0)));
-    assert_one(&markup, &adjusted_cell("0"));
+    assert_one(&markup, &adjusted_cell("0.00"));
     assert_one(&markup, &virtual_cell(0));
     assert_scripts_stay_off(&markup);
 }
@@ -122,7 +127,8 @@ fn null_sigops_omits_adjusted_vsize() {
 /// Whole line `Adjusted vsize 10.00` from weight 20 and sigops 2.
 ///
 /// `max(20 / 4, 2 * 5)` is 10, then two decimal places. The adjusted-vsize
-/// cell stays. The weight side `Adjusted vsize 5.00` is not its own line.
+/// cell is that same `10.00` text. The weight side `Adjusted vsize 5.00` is
+/// not its own line.
 #[test]
 fn weight_twenty_sigops_two_paints_adjusted_vsize_10_00_line() {
     const LINE: &str = "Adjusted vsize 10.00";
@@ -136,7 +142,7 @@ fn weight_twenty_sigops_two_paints_adjusted_vsize_10_00_line() {
         1,
         "{LINE} was not one line: {markup}"
     );
-    assert_one(&markup, &adjusted_cell("10"));
+    assert_one(&markup, &adjusted_cell("10.00"));
     assert_one(&markup, &virtual_cell(5));
     assert!(
         !markup.lines().any(|line| line == "Adjusted vsize 5.00"),
@@ -148,7 +154,7 @@ fn weight_twenty_sigops_two_paints_adjusted_vsize_10_00_line() {
 /// Whole line `Adjusted vsize 15.00` from weight 8 and sigops 3.
 ///
 /// `max(8 / 4, 3 * 5)` is 15, then two decimal places. The adjusted-vsize
-/// cell stays `Adjusted vsize 15`.
+/// cell is that same `15.00` text.
 #[test]
 fn weight_eight_sigops_three_paints_adjusted_vsize_15_00_line() {
     const LINE: &str = "Adjusted vsize 15.00";
@@ -162,7 +168,7 @@ fn weight_eight_sigops_three_paints_adjusted_vsize_15_00_line() {
         1,
         "{LINE} was not one line: {markup}"
     );
-    assert_one(&markup, &adjusted_cell("15"));
+    assert_one(&markup, &adjusted_cell("15.00"));
     assert_one(&markup, &virtual_cell(2));
     assert_absent(&markup, "Adjusted vsize 2");
     assert_scripts_stay_off(&markup);

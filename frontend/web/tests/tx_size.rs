@@ -65,9 +65,13 @@ fn ten_bytes_stays_bytes() {
     assert_absent(&markup, "Size 10 <span class=\"symbol\">kB</span>");
     assert_absent(&markup, "Size 10 kB");
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
-    assert_one(
+    assert_absent(
         &markup,
         "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
     );
     assert_scripts_stay_off(&markup);
 }

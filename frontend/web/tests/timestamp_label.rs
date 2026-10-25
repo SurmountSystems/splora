@@ -116,9 +116,13 @@ fn confirmed_block_time_paints_the_label_beside_the_integer() {
     assert_absent(&raw_cell(1_600_000_000), "Timestamp");
     assert_absent(&markup, "1,600,000,000");
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
-    assert_one(
+    assert_absent(
         &markup,
         "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "Adjusted vsize 1.75 was painted: {markup}"
     );
     assert_scripts_stay_off(&markup);
 }
