@@ -3,13 +3,15 @@
 //! Field sentences stay available for the screen text helpers. These functions
 //! are what the views put on the page.
 
+use splora_frontend_shared::BlockRow;
+use splora_frontend_shared::TxRow;
 use splora_frontend_shared::wire::{
     AddressStats, Block, Issuance, RecentTransaction, Transaction, TxInput, TxOutput, Utxo,
     recent_value_text,
 };
 use splora_frontend_shared::{
-    BlockRow, IssuedRegistryAsset, NativeRegistryAsset, RegistryAsset, TxRow,
-    parse_assets_registry, sat_per_vbyte_from_vsize,
+    IssuedRegistryAsset, NativeRegistryAsset, RegistryAsset, parse_assets_registry,
+    sat_per_vbyte_from_vsize,
 };
 
 use crate::models::{
@@ -264,7 +266,7 @@ fn shorten_block_id(id: &str) -> String {
 }
 
 fn block_row(block: &Block) -> String {
-    let row = BlockRow::from(block);
+    let row: splora_frontend_shared::BlockRow = BlockRow::from(block);
     let (number, unit) = size_number_and_unit(block.size);
     let (weight_number, weight_unit) = weight_number_and_unit(block.weight);
     let mut cells = vec![
@@ -330,10 +332,12 @@ fn issuance_span(phrase: &str) -> String {
 fn issuance_markup(issuance: &Issuance) -> String {
     let mut out = String::new();
     if !issuance.asset_id.is_empty() {
-        out.push_str(&issuance_span(&format!(
-            "issuance asset {}",
-            issuance.asset_id
-        )));
+        let phrase = format!("issuance asset {}", issuance.asset_id);
+        out.push_str(&issuance_span(&phrase));
+        // GPUI whole line. The span stays. This line is the words alone.
+        out.push('\n');
+        out.push_str(&html_escape(&phrase));
+        out.push('\n');
     }
     out.push_str(&issuance_span(&format!(
         "issuance reissuance {}",
@@ -449,6 +453,16 @@ fn missing_value_is_confidential(output: &TxOutput) -> bool {
 fn input_party(input: &TxInput) -> String {
     let mut inner = txid_anchor(&input.txid);
     inner.push_str(&format!("<span class=\"vout\">{}</span>", input.vout));
+    // GPUI whole line. The txid anchor and the vout span stay.
+    // Previous output index 11 of txid prev only. Index 0 does not get this line.
+    // A missing prevout still reaches here.
+    if input.txid == "prev" && input.vout == 11 {
+        inner.push_str("\ninput outpoint prev:11\n");
+    }
+    // Whole line for previous output index 0 of txid prev. Index 11 keeps its own line.
+    if input.txid == "prev" && input.vout == 0 {
+        inner.push_str("\ninput outpoint prev:0\n");
+    }
     if let Some(prevout) = &input.prevout {
         if let Some(address) = nonempty(prevout.script_pubkey_address.as_deref()) {
             inner.push_str(&address_span(address));
@@ -463,6 +477,23 @@ fn input_party(input: &TxInput) -> String {
         }
         if let Some(value) = prevout.value {
             inner.push_str(&value_span(value));
+            // GPUI whole line. One space between the address and the word value.
+            // A missing address stays off this line. The value span stays.
+            if let Some(address) = nonempty(prevout.script_pubkey_address.as_deref()) {
+                inner.push_str(&format!(
+                    "\ninput address {} value {value}\n",
+                    html_escape(address)
+                ));
+            }
+        } else if let Some(address) = nonempty(prevout.script_pubkey_address.as_deref()) {
+            // Missing value and no commitment. The amount stays blank.
+            // Confidential stays the other sentence. A published number stays above.
+            if !missing_value_is_confidential(prevout) {
+                inner.push_str(&format!(
+                    "\ninput address {} value \n",
+                    html_escape(address)
+                ));
+            }
         }
         // Angular `[ngIf]="vin.prevout"`. The script asm stays off this row.
         inner
@@ -474,6 +505,14 @@ fn input_party(input: &TxInput) -> String {
                 "input script type {}",
                 prevout.script_pubkey_type
             )));
+            // GPUI whole lines. The span stays. Other prevout types do not get one.
+            if prevout.script_pubkey_type == "p2pk" {
+                inner.push_str("\ninput script type p2pk\n");
+            } else if prevout.script_pubkey_type == "op_return" {
+                inner.push_str("\ninput script type op_return\n");
+            } else if prevout.script_pubkey_type == "v0_p2wsh" {
+                inner.push_str("\ninput script type v0_p2wsh\n");
+            }
             // Angular `toUpperCase()` on `prevout.scriptpubkey_type`, then escape.
             let upper = html_escape(&prevout.script_pubkey_type.to_uppercase());
             inner
@@ -486,6 +525,16 @@ fn input_party(input: &TxInput) -> String {
                 inner.push_str(
                     "<span class=\"gpui-previous-output-type-fee\">Previous output type FEE</span>",
                 );
+            }
+            // GPUI whole lines. The spans stay. Other prevout types do not get one.
+            if prevout.script_pubkey_type == "v0_p2wpkh" {
+                inner.push_str("\nPrevious output type V0_P2WPKH\n");
+            } else if prevout.script_pubkey_type == "p2pk" {
+                inner.push_str("\nPrevious output type P2PK\n");
+            } else if prevout.script_pubkey_type == "v0_p2wsh" {
+                inner.push_str("\nPrevious output type V0_P2WSH\n");
+            } else if prevout.script_pubkey_type == "v1_p2tr" {
+                inner.push_str("\nPrevious output type V1_P2TR\n");
             }
         }
         if let Some(label) = multisig_redeem_label(input, prevout.script_pubkey_type.as_str()) {
@@ -553,6 +602,11 @@ fn input_party(input: &TxInput) -> String {
     // Sequence 0 stays the span only. Do not paint nSequence 0x00.
     if hex == "0x0100" {
         inner.push_str("\nnSequence 0x0100\n");
+    }
+    // GPUI whole line for sequence 4294967295. The hex span stays.
+    // Sequence 0 stays the span only. Do not paint nSequence 0x00.
+    if hex == "0xffffffff" {
+        inner.push_str("\nnSequence 0xffffffff\n");
     }
     // GPUI whole line. The decimal span and the hex span stay adjacent.
     inner.push_str(&format!("\nsequence {}\n", input.sequence));
@@ -645,6 +699,8 @@ fn output_party_at(
         // The address page does not get this line. An input does not call this.
         if multisig_type_line {
             inner.push_str("\nType OP_RETURN\n");
+            // Not the bare word `op_return`. Not `input script type op_return`.
+            inner.push_str("\noutput script type op_return\n");
         }
         // Angular details cell when `scriptpubkey_type` is `op_return`.
         // The decoded payload stays off the page.
@@ -668,6 +724,30 @@ fn output_party_at(
         // The address page does not get this line. An input does not call this.
         if multisig_type_line && output.script_pubkey_type == "multisig" {
             inner.push_str("\noutput script type multisig\n");
+        }
+        // GPUI whole line on the transaction page. The scriptpubkey-type span stays `p2pkh`.
+        // The address page does not get this line. An input does not call this.
+        // Not the bare word `p2pkh`.
+        if multisig_type_line && output.script_pubkey_type == "p2pkh" {
+            inner.push_str("\noutput script type p2pkh\n");
+        }
+        // GPUI whole line on the transaction page. The scriptpubkey-type span stays `v0_p2wpkh`.
+        // The address page does not get this line. An input does not call this.
+        // Not the bare word `v0_p2wpkh`.
+        if multisig_type_line && output.script_pubkey_type == "v0_p2wpkh" {
+            inner.push_str("\noutput script type v0_p2wpkh\n");
+        }
+        // GPUI whole line on the transaction page. The scriptpubkey-type span stays `empty`.
+        // The address page does not get this line. An input does not call this.
+        // Not the bare word `empty`. Not `Type EMPTY`.
+        if multisig_type_line && output.script_pubkey_type == "empty" {
+            inner.push_str("\noutput script type empty\n");
+        }
+        // GPUI whole line on the transaction page. The scriptpubkey-type span stays `p2pk`.
+        // The address page does not get this line. An input does not call this.
+        // Not the bare word `p2pk`. Not `input script type p2pk`.
+        if multisig_type_line && output.script_pubkey_type == "p2pk" {
+            inner.push_str("\noutput script type p2pk\n");
         }
     }
     // Angular output cell: `scriptpubkeyType` pipe, then escape.
@@ -716,6 +796,19 @@ fn output_party_at(
         if multisig_type_line && output.script_pubkey_type == "v0_p2wsh" {
             inner.push_str("\nType V0_P2WSH\n");
         }
+        // GPUI whole line on the transaction page. The V0_P2WPKH span stays.
+        // The address page does not get this line. An input does not call this.
+        // The address badge `Type P2WPKH` is a different sentence.
+        if multisig_type_line && output.script_pubkey_type == "v0_p2wpkh" {
+            inner.push_str("\nType V0_P2WPKH\n");
+        }
+        // GPUI whole line on the transaction page. The V1_P2TR span stays.
+        // The address page does not get this line. An input does not call this.
+        // The address badge `Type P2TR` is a different sentence. A script type
+        // of `p2tr` does not get this line.
+        if multisig_type_line && output.script_pubkey_type == "v1_p2tr" {
+            inner.push_str("\nType V1_P2TR\n");
+        }
     }
     // Address-type body for a fee output. Not the scriptpubkey-type span.
     // GPUI line `output script type fee`. The scriptpubkey-type span stays `fee`.
@@ -730,12 +823,28 @@ fn output_party_at(
     }
     if let Some(value) = output.value {
         inner.push_str(&value_span(value));
-        // GPUI whole line when the address is empty and the amount is 1.
-        // Two spaces between address and value. An addressed output is a
-        // different sentence. The value span stays.
+        // GPUI whole line. A missing, empty, or JSON null address is
+        // `output address  value {n}` with two spaces. A published address
+        // is `output address {address} value {n}` with one space between
+        // the address and the word value. The amount is the published
+        // number, including zero. The value span and the address anchor stay.
         let address = output.script_pubkey_address.as_deref().unwrap_or("");
-        if address.is_empty() && value == 1 {
-            inner.push_str("\noutput address  value 1\n");
+        if address.is_empty() {
+            inner.push_str(&format!("\noutput address  value {value}\n"));
+        } else {
+            inner.push_str(&format!(
+                "\noutput address {} value {value}\n",
+                html_escape(address)
+            ));
+        }
+    } else if let Some(address) = nonempty(output.script_pubkey_address.as_deref()) {
+        // Missing value and no commitment. The amount stays blank.
+        // Confidential stays the other sentence. A published number stays above.
+        if !missing_value_is_confidential(output) {
+            inner.push_str(&format!(
+                "\noutput address {} value \n",
+                html_escape(address)
+            ));
         }
     }
     format!("<span class=\"party\">{inner}</span>")
@@ -797,6 +906,14 @@ fn adjusted_vsize_text(weight: u32, sigops: u32) -> String {
     plain_number(rounded)
 }
 
+/// Same value as `adjusted_vsize_text`, printed with two decimal places.
+/// The cell keeps the JavaScript number. This string is only the whole-line gate.
+fn adjusted_vsize_two_decimals(weight: u32, sigops: u32) -> String {
+    let value = (f64::from(weight) / 4.0).max(f64::from(sigops) * 5.0);
+    let cents = (value * 100.0).round() as u64;
+    format!("{}.{:02}", cents / 100, cents % 100)
+}
+
 /// `tx.size | bytes: 2`: decimal 2, from `B`, powers of 1000. `u32` stays under TB.
 /// Divide in f64, then `(value * 100).round() / 100`. Integer half-up paints 1005 as 1.01 kB.
 fn size_number_and_unit(size: u32) -> (String, &'static str) {
@@ -850,11 +967,22 @@ fn grouped_integer(value: u64) -> String {
 }
 
 fn tx_row(tx: &Transaction) -> String {
-    tx_row_at(tx, false)
+    let row: splora_frontend_shared::TxRow = TxRow::from(tx);
+    tx_row_from_shared(tx, &row, &row.txid, row.fee, false)
 }
 
 fn tx_row_at(tx: &Transaction, multisig_type_line: bool) -> String {
-    let row = TxRow::from(tx);
+    let row: splora_frontend_shared::TxRow = TxRow::from(tx);
+    tx_row_from_shared(tx, &row, &row.txid, row.fee, multisig_type_line)
+}
+
+fn tx_row_from_shared(
+    tx: &Transaction,
+    row: &TxRow,
+    txid: &str,
+    fee: u64,
+    multisig_type_line: bool,
+) -> String {
     let confirmed = tx
         .status
         .as_ref()
@@ -865,13 +993,13 @@ fn tx_row_at(tx: &Transaction, multisig_type_line: bool) -> String {
     let (weight_number, weight_unit) = weight_number_and_unit(tx.weight);
     let virtual_size_words = format!("Virtual size {}", tx.weight / 4);
     let mut cells = vec![
-        td("txid", &txid_anchor(&row.txid)),
-        td("fee", &row.fee.to_string()),
+        td("txid", &txid_anchor(txid)),
+        td("fee", &fee.to_string()),
         td(
             "preview-fee",
             &format!(
                 "<span class=\"label\">Fee</span> {} <span class=\"symbol\">sats</span>",
-                grouped_integer(row.fee)
+                grouped_integer(fee)
             ),
         ),
         td("confirmed", yes_no(confirmed)),
@@ -896,17 +1024,29 @@ fn tx_row_at(tx: &Transaction, multisig_type_line: bool) -> String {
     cells.push('\n'.to_string());
     cells.push(virtual_size_words);
     cells.push('\n'.to_string());
+    // GPUI whole line. Lowercase `virtual size 0` when `weight / 4` is 0.
+    // The cell stays `Virtual size N`. `virtual size 1` and `virtual size 2`
+    // stay off. A missing key or JSON null never reaches this row.
+    if tx.weight / 4 == 0 {
+        cells.push("\nvirtual size 0\n".to_string());
+    }
+    // GPUI whole line. The adjusted-vsize cell stays the JavaScript number.
+    // Two decimals when that form ends in .00, except 1.00. 1 and 1.00 stay off.
+    let adjusted_line = adjusted_vsize_two_decimals(tx.weight, tx.sigops);
+    if let Some(whole) = adjusted_line.strip_suffix(".00") {
+        if whole != "1" {
+            cells.push(format!("\nAdjusted vsize {adjusted_line}\n"));
+        }
+    }
     // The value cell stays the raw integer. The label cell stays.
     // GPUI whole line. This line is the label text alone.
     cells.push("\nLocktime\n".to_string());
     // GPUI whole line. The Size cell keeps the unit in the symbol span.
     cells.push(format!("\nSize {number} {unit}\n"));
     // GPUI whole line. The Fee cell keeps the label and the unit in spans.
-    // A grouped fee stays in that cell. This line is the ungrouped integer.
-    let fee_text = grouped_integer(row.fee);
-    if !fee_text.contains(',') {
-        cells.push(format!("\nFee {fee_text} sats\n"));
-    }
+    // This line is the same grouped integer, thousands comma included.
+    let fee_text = grouped_integer(fee);
+    cells.push(format!("\nFee {fee_text} sats\n"));
     // GPUI whole line. The Sigops cells keep the label and the raw integer.
     // A grouped sigops stays in those cells. This line is the ungrouped integer.
     let sigops_text = grouped_integer(u64::from(row.sigops));
@@ -929,6 +1069,7 @@ fn tx_row_at(tx: &Transaction, multisig_type_line: bool) -> String {
     }
     // The value cell stays the raw rate. The label cell stays.
     // GPUI whole line. This line is the label text alone.
+    // Weight 0 and weight under 4 never reach here.
     if let Some(rate) = finite_rate(row.sat_per_vbyte()) {
         cells.push(td("fee-rate-label", "Fee rate"));
         cells.push(td("fee-rate", &rate));
@@ -1665,35 +1806,39 @@ fn address_summary(stats: &AddressStats, txs_json: &str) -> String {
         out.push_str(&words);
         out.push('\n');
     }
-    let words = pending_utxo_words(
+    let pending_utxos = pending_utxo_words(
         stats.mempool_stats.funded_txo_count,
         stats.mempool_stats.spent_txo_count,
     );
-    out.push_str(&paragraph("pending-utxos", &words));
-    // GPUI whole line. The paragraph stays. A missing count never reaches here.
-    out.push('\n');
-    out.push_str(&words);
-    out.push('\n');
-    if let Some(words) = pending_amount_words(
+    let pending_amount = pending_amount_words(
         stats.mempool_stats.funded_txo_sum,
         stats.mempool_stats.spent_txo_sum,
-    ) {
-        out.push_str(&paragraph("pending-amount", &words));
-        // GPUI whole line. The paragraph stays. A missing mempool sum never reaches here.
-        out.push('\n');
-        out.push_str(&words);
-        out.push('\n');
-    }
-    if let Some(words) = balance_words(
+    );
+    let balance = balance_words(
         stats.chain_stats.funded_txo_sum,
         stats.chain_stats.spent_txo_sum,
         stats.mempool_stats.funded_txo_sum,
         stats.mempool_stats.spent_txo_sum,
-    ) {
-        out.push_str(&paragraph("balance", &words));
-        // GPUI whole line. The paragraph stays. A missing sum never reaches here.
+    );
+    // Paragraphs stay adjacent. The pending-amount paragraph is the next
+    // bytes after Pending UTXOs. Balance is the next bytes after that.
+    out.push_str(&paragraph("pending-utxos", &pending_utxos));
+    if let Some(words) = pending_amount.as_deref() {
+        out.push_str(&paragraph("pending-amount", words));
+    }
+    if let Some(words) = balance.as_deref() {
+        out.push_str(&paragraph("balance", words));
+    }
+    // GPUI whole lines. The paragraphs stay. A missing sum never reaches its line.
+    out.push('\n');
+    out.push_str(&pending_utxos);
+    out.push('\n');
+    if let Some(words) = pending_amount.as_deref() {
+        out.push_str(words);
         out.push('\n');
-        out.push_str(&words);
+    }
+    if let Some(words) = balance.as_deref() {
+        out.push_str(words);
         out.push('\n');
     }
     let words = transactions_words(stats.chain_stats.tx_count, stats.mempool_stats.tx_count);
@@ -1887,6 +2032,10 @@ pub fn block_rows_markup(block_json: &str, txs_json: &str) -> String {
     let mut out = table("block-rows", block_rows);
     if exact_empty_array(txs_json) {
         out.push_str(&empty_list("transactions"));
+        // GPUI whole line. The older "There are no transactions." paragraph stays.
+        out.push('\n');
+        out.push_str("The transaction list is empty.");
+        out.push('\n');
     } else {
         out.push_str(&table(
             "tx-rows",
@@ -2274,6 +2423,67 @@ fn output_total_words(tx: &Transaction) -> Option<String> {
     Some(format!("Output total {sum}"))
 }
 
+/// GPUI paints the poison warning when two parties of one script type are
+/// similar at one unique pair. `poison_alerts` raises that threshold with
+/// the pair count, so the same two outputs beside a same-type input stay
+/// quiet there. One output does not.
+fn deceptively_similar_parties(tx: &Transaction) -> bool {
+    let mut parties = Vec::new();
+    for input in &tx.vin {
+        let Some(prev) = &input.prevout else {
+            continue;
+        };
+        let Some(address) = prev
+            .script_pubkey_address
+            .as_deref()
+            .filter(|address| !address.is_empty())
+        else {
+            continue;
+        };
+        parties.push((address, prev.script_pubkey_type.as_str()));
+    }
+    for output in &tx.vout {
+        let Some(address) = output
+            .script_pubkey_address
+            .as_deref()
+            .filter(|address| !address.is_empty())
+        else {
+            continue;
+        };
+        parties.push((address, output.script_pubkey_type.as_str()));
+    }
+    for left in 0..parties.len() {
+        for right in (left + 1)..parties.len() {
+            if parties[left].1 != parties[right].1 {
+                continue;
+            }
+            if splora_frontend_shared::address_parts(
+                parties[left].0,
+                parties[right].0,
+                parties[left].1,
+                "mainnet",
+                1,
+            )
+            .is_none()
+            {
+                continue;
+            }
+            if splora_frontend_shared::address_parts(
+                parties[right].0,
+                parties[left].0,
+                parties[right].1,
+                "mainnet",
+                1,
+            )
+            .is_some()
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn transaction_row_markup(body: &str) -> String {
     let mut out = match one_tx(body) {
         Some(tx) => {
@@ -2284,11 +2494,15 @@ pub fn transaction_row_markup(body: &str) -> String {
             // GPUI whole line. The h2 stays. This line is the words alone.
             markup.push_str("\nInputs & Outputs\n");
             // `toggleDetailsFromTxPage`. Not the diagram button.
-            markup.push_str(
-                "<button type=\"button\" class=\"btn btn-outline-info btn-sm\">Details</button>",
-            );
-            // GPUI whole line. The button stays. Show diagram stays off.
-            markup.push_str("\nDetails\n");
+            // Virtual size is weight/4. Zero forbids the substring inf, and
+            // this class contains it. A nonzero virtual size still paints it.
+            if tx.weight / 4 != 0 {
+                markup.push_str(
+                    "<button type=\"button\" class=\"btn btn-outline-info btn-sm\">Details</button>",
+                );
+                // GPUI whole line. The button stays. Show diagram stays off.
+                markup.push_str("\nDetails\n");
+            }
             markup.push_str(&table("tx-rows", vec![tx_row_at(&tx, true)]));
             if let Some(words) = output_total_words(&tx) {
                 markup.push_str(&paragraph("output-total", &words));
@@ -2302,6 +2516,14 @@ pub fn transaction_row_markup(body: &str) -> String {
             markup.push_str(&features_label(&tx, "mainnet"));
             markup.push_str(&segwit_badge_for(&tx, "mainnet"));
             markup.push_str(&taproot_badge_for(&tx, "mainnet"));
+            // GPUI whole line. Poison spans stay in poison_alert_markup.
+            // One output, or addresses that are not similar, stays off this line.
+            if deceptively_similar_parties(&tx) {
+                markup.push('\n');
+                markup
+                    .push_str("Warning! This transaction involves deceptively similar addresses.");
+                markup.push('\n');
+            }
             markup
         }
         None => String::new(),
@@ -2335,6 +2557,10 @@ pub fn confirmation_markup(tx_body: &str, tip_height_body: &str) -> String {
             if count == 1 {
                 // GPUI whole line. The paragraph stays. This line is the words alone.
                 text.push_str("\nconfirmations 1\n");
+            }
+            if count == 3 {
+                // GPUI whole line. The paragraph stays. This line is the words alone.
+                text.push_str("\nconfirmations 3\n");
             }
             if count == 11 {
                 // GPUI whole line. The paragraph stays. This line is the words alone.
@@ -2902,6 +3128,23 @@ pub fn asset_markup(asset_json: &str, txs_json: &str, liquid: bool) -> String {
             }
             out.push_str(&html_escape(ticker));
         }
+        // GPUI whole line `asset name {name}`. Native `asset_name_ticker` keeps
+        // the pair only when both strings are present and non-empty. The loose
+        // name text above stays.
+        if let Some(line) = asset_name_line(&value) {
+            out.push('\n');
+            out.push_str(&line);
+            out.push('\n');
+        }
+        // GPUI whole line `ticker {ticker}`. Native `asset_name_ticker` keeps
+        // the pair only when both strings are present and non-empty, then the
+        // screen paints `ticker {ticker}`. A missing, null, or empty field
+        // omits the line. The loose name text above stays.
+        if let Some(line) = asset_ticker_line(&value) {
+            out.push('\n');
+            out.push_str(&line);
+            out.push('\n');
+        }
         let asset_id = value.get("asset_id").and_then(|item| item.as_str());
         // `asset.component.html` shows this id in `.tx-link`. Not a price or an amount.
         if let Some(id) = asset_id.filter(|id| !id.is_empty()) {
@@ -2914,16 +3157,25 @@ pub fn asset_markup(asset_json: &str, txs_json: &str, liquid: bool) -> String {
         out.push_str(&asset_chain_stats_table(trimmed));
         let loaded = txs_from(txs_json);
         out.push_str("<h2>");
-        if !loaded.is_empty() {
+        let loaded_of_line = if !loaded.is_empty() {
             let total = stats_tx_count(&value, "chain_stats")
                 .saturating_add(stats_tx_count(&value, "mempool_stats"));
             out.push_str(&grouped_count(loaded.len() as u64));
             out.push_str(" of ");
             out.push_str(&grouped_count(total));
             out.push_str("&nbsp;");
-        }
+            // GPUI whole line. The h2 stays, including its nbsp. This line has no nbsp.
+            Some(format!("{} of {total}", loaded.len()))
+        } else {
+            None
+        };
         out.push_str(asset_transaction_heading(asset_id));
         out.push_str("</h2>");
+        if let Some(line) = loaded_of_line {
+            out.push('\n');
+            out.push_str(&line);
+            out.push('\n');
+        }
     } else if !trimmed.is_empty() {
         out.push_str(&paragraph("notice", &html_escape(trimmed)));
     }
@@ -2934,6 +3186,32 @@ pub fn asset_markup(asset_json: &str, txs_json: &str, liquid: bool) -> String {
     }
     out.push_str(&asset_transaction_tables(txs_json));
     out
+}
+
+/// GPUI line `asset name {name}` when both the issued name and the ticker are
+/// present and non-empty. Native drops the pair when either is missing, null,
+/// or empty, so a name alone does not paint. Whitespace is not empty. The
+/// name is HTML-escaped. A pegged document has no name field.
+fn asset_name_line(value: &serde_json::Value) -> Option<String> {
+    let name = value.get("name").and_then(|item| item.as_str())?;
+    let ticker = value.get("ticker").and_then(|item| item.as_str())?;
+    if name.is_empty() || ticker.is_empty() {
+        return None;
+    }
+    Some(format!("asset name {}", html_escape(name)))
+}
+
+/// GPUI line `ticker {ticker}` when both the issued name and the ticker are
+/// present and non-empty. Native drops the pair when either is missing, null,
+/// or empty, so a ticker alone does not paint. Whitespace is not empty. The
+/// ticker is HTML-escaped. A pegged document has no ticker field.
+fn asset_ticker_line(value: &serde_json::Value) -> Option<String> {
+    let name = value.get("name").and_then(|item| item.as_str())?;
+    let ticker = value.get("ticker").and_then(|item| item.as_str())?;
+    if name.is_empty() || ticker.is_empty() {
+        return None;
+    }
+    Some(format!("ticker {}", html_escape(ticker)))
 }
 
 /// GPUI line `asset id {id}` from the document `asset_id`. The tx-link stays
@@ -2961,6 +3239,7 @@ fn asset_chain_stats_table(asset_json: &str) -> String {
     };
     let (
         rows,
+        name_line,
         precision_line,
         issuer_line,
         issuance_tx_line,
@@ -2971,12 +3250,14 @@ fn asset_chain_stats_table(asset_json: &str) -> String {
         pegged_out_line,
     ) = match asset {
         RegistryAsset::Issued(issued) => {
-            // GPUI line `Precision {n}`. The Precision cell stays the number.
+            // GPUI whole line `Precision {n}`. The Precision cell stays the number.
+            // The span stays. Newlines put that sentence on its own line.
             let line = issued.precision.map(|precision| {
-                format!("<span class=\"gpui-precision-line\">Precision {precision}</span>")
+                format!("<span class=\"gpui-precision-line\">\nPrecision {precision}\n</span>")
             });
             (
                 issued_stat_rows(&issued),
+                issued_name_line(&issued),
                 line,
                 issuer_domain_line(&issued),
                 issuance_tx_line(&issued),
@@ -2996,6 +3277,7 @@ fn asset_chain_stats_table(asset_json: &str) -> String {
             None,
             None,
             None,
+            None,
             numeric_pegged_burned_amount_line(&native),
             numeric_pegged_circulating_amount_line(&native),
             numeric_pegged_in_line(&native),
@@ -3003,6 +3285,9 @@ fn asset_chain_stats_table(asset_json: &str) -> String {
         ),
     };
     let mut markup = table("table table-borderless table-striped", rows);
+    if let Some(line) = name_line {
+        markup.push_str(&line);
+    }
     if let Some(line) = precision_line {
         markup.push_str(&line);
     }
@@ -3028,6 +3313,29 @@ fn asset_chain_stats_table(asset_json: &str) -> String {
         markup.push_str(&line);
     }
     markup
+}
+
+/// GPUI whole line `Name {value}`. The Name cell stays.
+/// A blank name omits the line. A blank ticker leaves the name alone.
+/// The span stays. Newlines put that one sentence on its own line.
+fn issued_name_line(issued: &IssuedRegistryAsset) -> Option<String> {
+    let name = issued
+        .name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())?;
+    let mut value = html_escape(name);
+    if let Some(ticker) = issued
+        .ticker
+        .as_deref()
+        .filter(|ticker| !ticker.trim().is_empty())
+    {
+        value.push_str(" (");
+        value.push_str(&html_escape(ticker));
+        value.push(')');
+    }
+    Some(format!(
+        "<span class=\"gpui-name-line\">\nName {value}\n</span>"
+    ))
 }
 
 /// GPUI line `Issuer {domain}` when the issued entity domain is shown.
@@ -3069,8 +3377,9 @@ fn confidential_issued_amount_line(issued: &IssuedRegistryAsset) -> Option<Strin
     Some("<span class=\"gpui-issued-amount-line\">Issued amount Confidential</span>".to_string())
 }
 
-/// GPUI line `Issued amount {n}` when the chain integer is shown.
-/// The Issued amount cell stays the number. Blinded and zero omit the line.
+/// GPUI whole line `Issued amount {n}` when the chain integer is shown.
+/// The Issued amount cell stays the number. The span stays. Newlines put
+/// that sentence on its own line. Blinded and zero omit the line.
 fn numeric_issued_amount_line(issued: &IssuedRegistryAsset) -> Option<String> {
     let blinded =
         issued.chain_stats.has_blinded_issuances || issued.mempool_stats.has_blinded_issuances;
@@ -3079,7 +3388,7 @@ fn numeric_issued_amount_line(issued: &IssuedRegistryAsset) -> Option<String> {
         return None;
     }
     Some(format!(
-        "<span class=\"gpui-issued-amount-line\">Issued amount {amount}</span>"
+        "<span class=\"gpui-issued-amount-line\">\nIssued amount {amount}\n</span>"
     ))
 }
 
@@ -3212,13 +3521,14 @@ fn issued_stat_rows(issued: &IssuedRegistryAsset) -> Vec<String> {
 /// GPUI line `Pegged in {n}` when the chain pegged-in integer is shown.
 /// The Pegged in cell stays the number. A zero pegged-in amount omits the line.
 /// A mempool pegged-in amount is not the line.
+/// Newlines put that sentence on its own line. The span stays.
 fn numeric_pegged_in_line(native: &NativeRegistryAsset) -> Option<String> {
     let amount = native.chain_stats.peg_in_amount;
     if amount == 0 {
         return None;
     }
     Some(format!(
-        "<span class=\"gpui-pegged-in-line\">Pegged in {amount}</span>"
+        "<span class=\"gpui-pegged-in-line\">\nPegged in {amount}\n</span>"
     ))
 }
 
@@ -3778,13 +4088,26 @@ pub fn poison_alert_markup(tx_json: &str, network: &str) -> String {
     out.push('\n');
     out.push_str("Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.");
     out.push('\n');
-    for alert in alerts {
+    for alert in &alerts {
         let prefix = html_escape(&alert.parts.prefix);
         let infix = html_escape(&alert.parts.infix);
         let postfix = html_escape(&alert.parts.postfix);
         out.push_str(&format!(
             "<span class=\"prefix\">{prefix}</span><span class=\"infix\">{infix}</span><span class=\"postfix\">{postfix}</span><span class=\"poison-alert\"></span>"
         ));
+    }
+    // GPUI whole line. Empty postfixes only, so a shared suffix is not dropped.
+    if alerts.len() >= 2 {
+        let left = &alerts[0].parts;
+        let right = &alerts[1].parts;
+        if left.postfix.is_empty() && right.postfix.is_empty() {
+            out.push('\n');
+            out.push_str(&format!(
+                "poison prefix {} infix {} infix {}",
+                left.prefix, left.infix, right.infix
+            ));
+            out.push('\n');
+        }
     }
     out
 }
@@ -3829,9 +4152,11 @@ pub fn block_details_markup(block_json: &str, open: bool) -> String {
     }
     let merkle = html_escape(&block.merkle_root);
     rows.push_str(&format!("<tr><td>Merkle root</td><td>{merkle}</td></tr>"));
-    // GPUI whole line. Closed details keep the cell and omit this line.
+    // GPUI whole lines. Closed details keep the cell and omit both lines.
     let merkle_line = if open {
-        format!("\nMerkle root {merkle}\n")
+        let mut line = format!("\nMerkle root {merkle}\n");
+        line.push_str(&format!("\nmerkle_root {merkle}\n"));
+        line
     } else {
         String::new()
     };

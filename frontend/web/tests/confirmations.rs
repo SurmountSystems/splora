@@ -546,3 +546,82 @@ fn transaction_eleven_confirmations_paints_confirmations_11_as_its_own_line() {
         "a missing tip painted {LINE}: {missing_tip}"
     );
 }
+
+/// Whole line `confirmations 3` when the tip is 800000 and the block height is 799998.
+///
+/// GPUI `transaction_screen_paints_confirmation_count` requires one line whose
+/// entire text equals `confirmations 3`. The count is the tip minus the block
+/// height, plus one. The capital paragraph stays. A count of 1 still paints
+/// `confirmations 1` and does not paint this line. A count of 11 still paints
+/// `confirmations 11` and does not paint this line. `Confirmations 3` is not
+/// this line.
+#[test]
+fn transaction_three_confirmations_paints_confirmations_3_as_its_own_line() {
+    const LINE: &str = "confirmations 3";
+    let markup = confirmation_markup(
+        &tx(Some(r#"{"confirmed":true,"block_height":799998}"#)),
+        "800000",
+    );
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "height 799998 did not paint {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+    assert_one(&markup, 3);
+    assert!(
+        !markup.lines().any(|line| line == "Confirmations 3"),
+        "a capital whole line was painted: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "confirmations 1"),
+        "height 799998 painted confirmations 1: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "confirmations 11"),
+        "height 799998 painted confirmations 11: {markup}"
+    );
+
+    let one = confirmation_markup(
+        &tx(Some(r#"{"confirmed":true,"block_height":800000}"#)),
+        "800000",
+    );
+    assert!(
+        one.lines().any(|line| line == "confirmations 1"),
+        "a count of 1 did not paint confirmations 1: {one}"
+    );
+    assert_eq!(
+        one.lines()
+            .filter(|line| *line == "confirmations 1")
+            .count(),
+        1,
+        "confirmations 1 was not painted once: {one}"
+    );
+    assert!(
+        !one.lines().any(|line| line == LINE),
+        "a count of 1 painted {LINE}: {one}"
+    );
+    assert_one(&one, 1);
+
+    let eleven = confirmation_markup(&tx(Some(r#"{"confirmed":true,"block_height":90}"#)), "100");
+    assert!(
+        eleven.lines().any(|line| line == "confirmations 11"),
+        "a count of 11 did not paint confirmations 11: {eleven}"
+    );
+    assert_eq!(
+        eleven
+            .lines()
+            .filter(|line| *line == "confirmations 11")
+            .count(),
+        1,
+        "confirmations 11 was not painted once: {eleven}"
+    );
+    assert!(
+        !eleven.lines().any(|line| line == LINE),
+        "a count of 11 painted {LINE}: {eleven}"
+    );
+    assert_one(&eleven, 11);
+}

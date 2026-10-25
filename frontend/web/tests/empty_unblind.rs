@@ -157,3 +157,41 @@ fn empty_unblinded_tx_paints_output_address_lq1qqout2_confidential_line() {
     assert!(!blank.contains(OUTPUT2_LINE), "{blank}");
     assert!(!blank.contains("Confidential"), "{blank}");
 }
+
+/// A missing value with no commitment stays blank. The address is the
+/// published address. The amount after `value` stays empty.
+#[test]
+fn missing_value_without_commitment_stays_blank() {
+    let markup = paint(&tx_body(
+        &input_with(&blank_output("lq1qqvin")),
+        &blank_output("lq1qqout1"),
+    ));
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "input address lq1qqvin value "),
+        "{markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "output address lq1qqout1 value "),
+        "{markup}"
+    );
+}
+
+/// A published value stays that number. One space sits between the address
+/// and the word value. The amount is 9. It is not Confidential.
+#[test]
+fn explicit_value_is_not_confidential() {
+    let markup = paint(&tx_body(
+        &input_with(&clear_output("lq1qqvin", 10)),
+        &clear_output("lq1qqout1", 9),
+    ));
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "output address lq1qqout1 value 9"),
+        "{markup}"
+    );
+}

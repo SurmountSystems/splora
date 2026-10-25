@@ -146,8 +146,20 @@ fn empty_output_shows_uppercase_type_once() {
     assert_absent(&markup, "<span class=\"scriptpubkey-type\">EMPTY</span>");
     assert_eq!(
         markup.matches("empty").count(),
-        1,
-        "the lowercase indexer spelling must stay once, in the scriptpubkey-type span: {markup}"
+        2,
+        "lowercase empty must stay once in the scriptpubkey-type span and once on the line output script type empty: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "output script type empty"),
+        "output script type empty was dropped: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "empty" || line == "EMPTY"),
+        "a bare type token was painted: {markup}"
     );
     assert_one(&markup, "<td class=\"confirmed\">true</td>");
     assert_absent(&markup, "<td class=\"confirmed\">TRUE</td>");

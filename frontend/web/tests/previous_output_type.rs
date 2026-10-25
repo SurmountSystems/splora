@@ -94,7 +94,8 @@ fn class_span_values<'a>(markup: &'a str, class: &str) -> Vec<&'a str> {
 fn prevout_type_paints_the_label_and_the_uppercase_type() {
     let body = tx(&input(&prevout("v0_p2wpkh")), &output("p2pkh"));
     let markup = transaction_row_markup(&body);
-    assert_one(&markup, LABEL);
+    // The label span and the whole line `Previous output type V0_P2WPKH` each contain the token.
+    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, &label_spans("V0_P2WPKH"));
     assert_one(
         &markup,
@@ -133,7 +134,8 @@ fn two_prevouts_paint_the_label_twice() {
         input(&prevout("p2sh"))
     );
     let markup = transaction_row_markup(&tx(&vin, &output("p2pkh")));
-    assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
+    // Two label spans, plus the v0_p2wpkh whole line.
+    assert_eq!(markup.matches(LABEL).count(), 3, "{markup}");
     assert_one(&markup, &label_spans("V0_P2WPKH"));
     assert_one(&markup, &label_spans("P2SH"));
     assert_sentinels_stay_off(&markup);

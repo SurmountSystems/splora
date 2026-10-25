@@ -244,7 +244,7 @@ fn screen_parsers_return_shared_wire_structs() {
     let stats =
         parse_address(include_str!("../../shared/tests/fixtures/address.json")).expect("address");
     assert_eq!(stats.address.as_deref(), Some("xyz"));
-    assert_eq!(stats.chain_stats.funded_txo_sum, 500_000);
+    assert_eq!(stats.chain_stats.funded_txo_sum, Some(500_000));
     assert_eq!(stats.mempool_stats.tx_count, 3);
 
     let utxos = parse_utxos(include_str!(
@@ -895,6 +895,33 @@ fn test_transactions_post_txs_test_and_render_results() {
     assert!(src.contains("test_transactions_screen_request"));
     assert!(src.contains("test_transactions_payload"));
     assert!(src.contains("test_transactions_fields_text"));
+}
+
+/// GPUI `screen_paints_rejection_reason` requires this whole line from
+/// `POST /txs/test`. The served body is the same fixture. The painter is
+/// `test_transactions_fields_text`, which calls `test_line`.
+#[test]
+fn reject_reason_dust_paints_the_whole_line() {
+    let body = r#"[{"txid":"rejectedtxid888","wtxid":"rejectedwtxid888","allowed":false,"reject-reason":"dust"}]"#;
+    let text = test_transactions_fields_text(body);
+    assert!(
+        text.lines()
+            .any(|line| line == "test txid rejectedtxid888 allowed false reject-reason dust"),
+        "the reject-reason row was dropped: {text}"
+    );
+}
+
+/// GPUI `screen_paints_effective_fee_rate` requires this whole line from
+/// `POST /txs/test`. Fee follows the reject-reason. The rate token uses
+/// an underscore. The painter is `test_transactions_fields_text`.
+#[test]
+fn reject_reason_min_relay_paints_the_whole_line() {
+    let body = r#"[{"txid":"test-tx-1","wtxid":"test-wtxid-1","allowed":false,"vsize":141,"fees":{"base":0.00001,"effective-feerate":1.0,"effective-includes":["test-tx-1"]},"reject-reason":"min relay fee not met"}]"#;
+    let text = test_transactions_fields_text(body);
+    assert!(
+        text.lines().any(|line| line == "test txid test-tx-1 allowed false reject-reason min relay fee not met fee 0.00001 effective_feerate 1"),
+        "the effective_feerate row was dropped: {text}"
+    );
 }
 
 fn views_source() -> &'static str {

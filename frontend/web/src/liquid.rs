@@ -206,11 +206,17 @@ fn paint_registry_asset(asset: &RegistryAsset) -> String {
     match asset {
         RegistryAsset::Issued(row) => {
             let mut out = asset_anchor(&row.asset_id);
-            if let Some(name) = row.name.as_deref() {
-                push_text(&mut out, name);
+            if let Some(name) = row.name.as_deref().filter(|name| !name.is_empty()) {
+                // GPUI whole line. One copy, so the name substring count stays one.
+                out.push('\n');
+                out.push_str(&html_escape(name));
+                out.push('\n');
             }
-            if let Some(ticker) = row.ticker.as_deref() {
-                push_text(&mut out, ticker);
+            if let Some(ticker) = row.ticker.as_deref().filter(|ticker| !ticker.is_empty()) {
+                // GPUI whole line. One copy, so the ticker substring count stays one.
+                out.push('\n');
+                out.push_str(&html_escape(ticker));
+                out.push('\n');
             }
             if let Some(precision) = row.precision {
                 push_text(&mut out, &precision.to_string());
@@ -336,7 +342,9 @@ pub fn asset_search_markup(query: &str, body: &str, liquid: bool) -> Option<Stri
     if hits.is_empty() {
         return None;
     }
-    let mut out = String::from("<ngb-typeahead-window data-label=\"suggestion window\">");
+    // GPUI whole line. Empty hits, a blank query, and mainnet return above.
+    let mut out =
+        String::from("<ngb-typeahead-window data-label=\"suggestion window\">\nLiquid Asset\n");
     for hit in &hits {
         // First button is the Cypress click. `itemSelected` opens `/assets/asset/{id}`.
         out.push_str("<button type=\"button\" href=\"/assets/asset/");

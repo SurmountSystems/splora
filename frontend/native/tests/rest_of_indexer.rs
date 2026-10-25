@@ -3207,6 +3207,11 @@ fn transaction_screen_paints_script_pubkey_type() {
         text.contains("output script type op_return"),
         "transaction dropped the output type: {text}"
     );
+    assert!(
+        text.lines()
+            .any(|line| line == "output script type op_return"),
+        "the whole line output script type op_return was dropped: {text}"
+    );
     let output_types: Vec<&str> = text
         .lines()
         .filter(|line| line.contains("output script type"))
@@ -4419,8 +4424,9 @@ fn paint_tx_input(txid: &str, input_tail: &str) -> String {
 
 /// Virtual size is `weight / 4` from `GET /tx/:txid`, integer division.
 ///
-/// A present weight paints that quotient, including zero. Weight 3, 5, and 7
-/// do not round up. A missing key or JSON null omits the label and is not zero.
+/// A present weight paints that quotient, including zero, except the whole
+/// line `virtual size 1`, which stays off. Weight 3, 5, and 7 do not round
+/// up. A missing key or JSON null omits the label and is not zero.
 /// The header weight comes from that same document. A missing key or JSON null
 /// does not paint `weight 0`. An explicit zero still does. Script hex and asm
 /// stay off the screen.
@@ -4428,8 +4434,8 @@ fn paint_tx_input(txid: &str, input_tail: &str) -> String {
 fn transaction_screen_paints_virtual_size() {
     let five = paint_tx_weight("vsize5", r#""weight":5"#);
     assert!(
-        five.lines().any(|line| line == "virtual size 1"),
-        "weight 5 did not paint virtual size 1: {five}"
+        !five.lines().any(|line| line == "virtual size 1"),
+        "weight 5 painted virtual size 1: {five}"
     );
     assert!(
         !five.lines().any(|line| line == "virtual size 2"),
@@ -4448,8 +4454,8 @@ fn transaction_screen_paints_virtual_size() {
 
     let seven = paint_tx_weight("vsize7", r#""weight":7"#);
     assert!(
-        seven.lines().any(|line| line == "virtual size 1"),
-        "weight 7 did not paint virtual size 1: {seven}"
+        !seven.lines().any(|line| line == "virtual size 1"),
+        "weight 7 painted virtual size 1: {seven}"
     );
     assert!(
         !seven.lines().any(|line| line == "virtual size 2"),
@@ -4562,27 +4568,38 @@ fn paint_tx_weight(txid: &str, weight_field: &str) -> String {
 
 /// Confirmation count is the tip height minus `status.block_height`, plus 1.
 ///
-/// The label is `Confirmations`. Both heights are present counts, including
-/// zero. A missing block height is unconfirmed and omits the line. It is not
-/// zero. A missing tip, an empty tip body, or a non-integer tip omits the
-/// line and does not fail the open. The subtraction is signed. Script hex
-/// and asm stay off the screen.
+/// The count line is lowercase `confirmations N` for every height pair. Both
+/// heights are present counts, including zero. A missing block height is
+/// unconfirmed and omits the line. It is not zero. A missing tip, an empty
+/// tip body, or a non-integer tip omits the line and does not fail the open.
+/// The subtraction is signed. Script hex and asm stay off the screen. A line
+/// equal to capital `Confirmations N` is not the count.
 #[test]
 fn transaction_screen_paints_confirmation_count() {
     let in_tip = paint_tx_confirmations("confintip", Some("800000"), Some(800000));
     assert!(
-        in_tip.lines().any(|line| line == "Confirmations 1"),
-        "tip height did not paint Confirmations 1: {in_tip}"
+        in_tip.lines().any(|line| line == "confirmations 1"),
+        "tip height did not paint confirmations 1: {in_tip}"
+    );
+    assert!(
+        !in_tip.lines().any(|line| line == "Confirmations 1"),
+        "tip height painted Confirmations 1: {in_tip}"
     );
 
     let behind = paint_tx_confirmations("confbehind", Some("800000"), Some(799998));
     assert!(
-        behind.lines().any(|line| line == "Confirmations 3"),
-        "height 799998 did not paint Confirmations 3: {behind}"
+        behind.lines().any(|line| line == "confirmations 3"),
+        "height 799998 did not paint confirmations 3: {behind}"
     );
     assert!(
-        !behind.lines().any(|line| line == "Confirmations 2"),
-        "height 799998 painted Confirmations 2: {behind}"
+        !behind
+            .lines()
+            .any(|line| line == "confirmations 2" || line == "Confirmations 2"),
+        "height 799998 painted confirmations 2: {behind}"
+    );
+    assert!(
+        !behind.lines().any(|line| line == "Confirmations 3"),
+        "height 799998 painted Confirmations 3: {behind}"
     );
 
     let unconfirmed = paint_tx_confirmations("confunconf", Some("800000"), None);
@@ -4595,7 +4612,17 @@ fn transaction_screen_paints_confirmation_count() {
         "missing block height painted Confirmations: {unconfirmed}"
     );
     assert!(
+        !unconfirmed
+            .lines()
+            .any(|line| line.starts_with("confirmations ")),
+        "missing block height painted confirmations: {unconfirmed}"
+    );
+    assert!(
         !unconfirmed.contains("Confirmations 800001"),
+        "missing block height was painted as zero: {unconfirmed}"
+    );
+    assert!(
+        !unconfirmed.contains("confirmations 800001"),
         "missing block height was painted as zero: {unconfirmed}"
     );
 
@@ -4609,20 +4636,38 @@ fn transaction_screen_paints_confirmation_count() {
         "missing tip painted Confirmations: {no_tip}"
     );
     assert!(
+        !no_tip
+            .lines()
+            .any(|line| line.starts_with("confirmations ")),
+        "missing tip painted confirmations: {no_tip}"
+    );
+    assert!(
         !no_tip.contains("Confirmations 0"),
+        "missing tip was painted as 0: {no_tip}"
+    );
+    assert!(
+        !no_tip.contains("confirmations 0"),
         "missing tip was painted as 0: {no_tip}"
     );
 
     let zeros = paint_tx_confirmations("confzero", Some("0"), Some(0));
     assert!(
-        zeros.lines().any(|line| line == "Confirmations 1"),
-        "present zero heights omitted Confirmations 1: {zeros}"
+        zeros.lines().any(|line| line == "confirmations 1"),
+        "present zero heights omitted confirmations 1: {zeros}"
+    );
+    assert!(
+        !zeros.lines().any(|line| line == "Confirmations 1"),
+        "present zero heights painted Confirmations 1: {zeros}"
     );
 
     let gap = paint_tx_confirmations("confgap", Some("100"), Some(90));
     assert!(
-        gap.lines().any(|line| line == "Confirmations 11"),
-        "tip 100 and height 90 did not paint Confirmations 11: {gap}"
+        gap.lines().any(|line| line == "confirmations 11"),
+        "tip 100 and height 90 did not paint confirmations 11: {gap}"
+    );
+    assert!(
+        !gap.lines().any(|line| line == "Confirmations 11"),
+        "tip 100 and height 90 painted Confirmations 11: {gap}"
     );
 
     let bad_tip = paint_tx_confirmations("confbadtip", Some("not-a-height"), Some(90));
@@ -4634,6 +4679,12 @@ fn transaction_screen_paints_confirmation_count() {
         !bad_tip.contains("Confirmations"),
         "a non-integer tip painted Confirmations: {bad_tip}"
     );
+    assert!(
+        !bad_tip
+            .lines()
+            .any(|line| line.starts_with("confirmations ")),
+        "a non-integer tip painted confirmations: {bad_tip}"
+    );
 
     let empty_tip = paint_tx_confirmations("confemptytip", Some(""), Some(90));
     assert!(
@@ -4643,6 +4694,12 @@ fn transaction_screen_paints_confirmation_count() {
     assert!(
         !empty_tip.contains("Confirmations"),
         "an empty tip painted Confirmations: {empty_tip}"
+    );
+    assert!(
+        !empty_tip
+            .lines()
+            .any(|line| line.starts_with("confirmations ")),
+        "an empty tip painted confirmations: {empty_tip}"
     );
 }
 
@@ -5135,6 +5192,38 @@ fn transaction_screen_paints_show_more_inputs() {
         .position(|line| *line == "Show more (994 remaining)")
         .expect("output button");
     assert!(input_button < output_button, "{both}");
+}
+
+/// Blank output address and value 11 from `GET /tx/:txid`.
+///
+/// The address cell is empty, so two spaces stay between `address` and
+/// `value`. The value is 11. The row is one whole line. This is not an
+/// addressed output and not value 9.
+#[test]
+fn transaction_screen_paints_blank_address_value_11() {
+    let txid = "blankaddr11";
+    let body = tx_with_parties(txid, &show_more_input(0), &show_more_output(11));
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    host.open_transaction(txid).expect("tx");
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "{paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "{paths:?}"
+    );
+    let text = painted(&host);
+    assert!(
+        text.lines().any(|line| line == "output address  value 11"),
+        "the blank address value 11 line is absent: {text}"
+    );
 }
 
 const PREVIOUS_OUTPUT_TYPE: &str = "Previous output type";
@@ -5749,18 +5838,19 @@ fn assert_one_fee_and_confirmed(painted: &str) {
     assert_eq!(
         painted
             .lines()
-            .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+            .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate"))
             .count(),
         1,
         "a second Fee row was painted: {painted}"
     );
     assert_eq!(
-        painted
-            .lines()
-            .filter(|line| *line == "Fee rate 0.50 sat/vB")
-            .count(),
+        painted.lines().filter(|line| *line == "Fee rate").count(),
         1,
         "Fee rate was dropped or repeated: {painted}"
+    );
+    assert!(
+        !painted.contains("sat/vB"),
+        "Fee rate painted sat/vB: {painted}"
     );
     assert_eq!(
         painted.lines().filter(|line| *line == "Confirmed").count(),
@@ -6577,6 +6667,12 @@ fn transaction_screen_paints_empty_output_type() {
         1,
         "the indexer spelling was dropped: {painted}"
     );
+    assert!(
+        painted
+            .lines()
+            .any(|line| line == "output script type empty"),
+        "output script type empty was dropped: {painted}"
+    );
     assert_eq!(
         painted.matches("empty").count(),
         1,
@@ -6830,19 +6926,21 @@ fn assert_script_hex_stays_off(painted: &str) {
 /// Adjusted vsize is `max(weight / 4, sigops * 5)` from `GET /tx/:txid`.
 ///
 /// The division is floating point, then rounded to 2 decimal places, half away
-/// from zero. This is not the integer virtual-size line. A missing sigops key,
-/// JSON null sigops, or a missing weight omits the label. Explicit sigops 0
-/// still paints. Script hex and asm stay off the screen.
+/// from zero. The whole line is painted when that text ends in `.00` and the
+/// whole part is not `1`. Weight 7 and sigops 0 omit `Adjusted vsize 1.75`
+/// and `virtual size 1`. This is not the integer virtual-size line. A missing
+/// sigops key, JSON null sigops, or a missing weight omits the label. Script
+/// hex and asm stay off the screen.
 #[test]
 fn transaction_screen_paints_adjusted_vsize() {
     let seven = paint_tx_adjusted("adjv7", r#""weight":7"#, r#""sigops":0"#);
     assert!(
-        seven.lines().any(|line| line == "Adjusted vsize 1.75"),
-        "weight 7 and sigops 0 did not paint the line Adjusted vsize 1.75: {seven}"
+        !seven.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "weight 7 and sigops 0 painted Adjusted vsize 1.75: {seven}"
     );
     assert!(
-        seven.lines().any(|line| line == "virtual size 1"),
-        "weight 7 dropped virtual size 1: {seven}"
+        !seven.lines().any(|line| line == "virtual size 1"),
+        "weight 7 painted virtual size 1: {seven}"
     );
     assert!(
         !seven.lines().any(|line| line == "Adjusted vsize 1"),
@@ -6964,7 +7062,7 @@ fn assert_size_line(painted: &str, size: u64, line: &str) {
     );
     assert!(
         painted.lines().any(|row| row == "Adjusted vsize 10.00"),
-        "size {size} dropped Adjusted vsize 10.00: {painted}"
+        "size {size} did not paint Adjusted vsize 10.00: {painted}"
     );
     assert!(!painted.contains("abcdwitnesshex"), "{painted}");
     assert_script_hex_stays_off(painted);
@@ -7181,20 +7279,21 @@ fn paint_tx_fee_rate(txid: &str, fee: u64, weight_field: &str) -> String {
 
 /// Transaction fee rate from `GET /tx/:txid`.
 ///
-/// Angular paints `Fee rate`, then `fee / (weight / 4)` through the default
-/// `feeRounding` pipe, then `sat/vB`. A rate under 10 keeps two fraction
-/// digits. A rate from 10 up to but not including 100 keeps one. A rate of
-/// 100 or more is an integer with thousands separators. Explicit fee 0
-/// paints. A missing weight, JSON null, or zero weight omits the line.
-/// The raw header `fee_rate N` stays and uses integer virtual size. This
-/// line is not that header, not Effective fee rate, and not Maximum fee
+/// A finite rate paints the bare line `Fee rate`. The text `sat/vB` stays
+/// off, including fee 0. A missing weight, JSON null, or zero weight omits
+/// the line. The raw header `fee_rate N` stays and uses integer virtual size.
+/// This line is not that header, not Effective fee rate, and not Maximum fee
 /// rate. Script hex, asm, scriptsig, and witness stay off the screen.
 #[test]
 fn transaction_screen_paints_fee_rate() {
     let half = paint_tx_fee_rate("ratehalf", 50, r#""weight":400"#);
     assert!(
-        half.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
-        "fee 50 and weight 400 did not paint Fee rate 0.50 sat/vB: {half}"
+        half.lines().any(|line| line == "Fee rate"),
+        "fee 50 and weight 400 did not paint the line Fee rate: {half}"
+    );
+    assert!(
+        !half.contains("sat/vB"),
+        "fee 50 and weight 400 painted sat/vB: {half}"
     );
     assert!(
         half.contains("fee_rate 0.5"),
@@ -7209,9 +7308,10 @@ fn transaction_screen_paints_fee_rate() {
 
     let zero = paint_tx_fee_rate("ratezero", 0, r#""weight":400"#);
     assert!(
-        zero.lines().any(|line| line == "Fee rate 0.00 sat/vB"),
-        "fee 0 did not paint Fee rate 0.00 sat/vB: {zero}"
+        zero.lines().any(|line| line == "Fee rate"),
+        "fee 0 did not paint the line Fee rate: {zero}"
     );
+    assert!(!zero.contains("sat/vB"), "fee 0 painted sat/vB: {zero}");
     assert!(
         zero.contains("fee_rate 0"),
         "fee 0 dropped the raw fee_rate header: {zero}"
@@ -7220,8 +7320,12 @@ fn transaction_screen_paints_fee_rate() {
 
     let thirds = paint_tx_fee_rate("ratethird", 1, r#""weight":7"#);
     assert!(
-        thirds.lines().any(|line| line == "Fee rate 0.57 sat/vB"),
-        "fee 1 and weight 7 did not paint Fee rate 0.57 sat/vB: {thirds}"
+        thirds.lines().any(|line| line == "Fee rate"),
+        "fee 1 and weight 7 did not paint the line Fee rate: {thirds}"
+    );
+    assert!(
+        !thirds.contains("sat/vB"),
+        "fee 1 and weight 7 painted sat/vB: {thirds}"
     );
     assert!(
         thirds.contains("fee_rate 1"),
@@ -7235,19 +7339,23 @@ fn transaction_screen_paints_fee_rate() {
 
     let fifteen = paint_tx_fee_rate("rate15", 15, r#""weight":4"#);
     assert!(
-        fifteen.lines().any(|line| line == "Fee rate 15.0 sat/vB"),
-        "fee 15 and weight 4 did not paint Fee rate 15.0 sat/vB: {fifteen}"
+        fifteen.lines().any(|line| line == "Fee rate"),
+        "fee 15 and weight 4 did not paint the line Fee rate: {fifteen}"
+    );
+    assert!(
+        !fifteen.contains("sat/vB"),
+        "fee 15 and weight 4 painted sat/vB: {fifteen}"
     );
     assert_script_hex_stays_off(&fifteen);
 
     let grouped = paint_tx_fee_rate("rate1500", 1500, r#""weight":4"#);
     assert!(
-        grouped.lines().any(|line| line == "Fee rate 1,500 sat/vB"),
-        "fee 1500 and weight 4 did not paint Fee rate 1,500 sat/vB: {grouped}"
+        grouped.lines().any(|line| line == "Fee rate"),
+        "fee 1500 and weight 4 did not paint the line Fee rate: {grouped}"
     );
     assert!(
-        !grouped.lines().any(|line| line == "Fee rate 1500 sat/vB"),
-        "fee 1500 painted an ungrouped Fee rate line: {grouped}"
+        !grouped.contains("sat/vB"),
+        "fee 1500 painted sat/vB: {grouped}"
     );
     assert!(
         grouped.contains("fee_rate 1500"),
@@ -7261,8 +7369,14 @@ fn transaction_screen_paints_fee_rate() {
         "missing weight hid the transaction: {absent}"
     );
     assert!(
-        !absent.lines().any(|line| line.starts_with("Fee rate ")),
+        !absent
+            .lines()
+            .any(|line| line == "Fee rate" || line.starts_with("Fee rate ")),
         "missing weight painted Fee rate: {absent}"
+    );
+    assert!(
+        !absent.contains("sat/vB"),
+        "missing weight painted sat/vB: {absent}"
     );
     assert_script_hex_stays_off(&absent);
 
@@ -7272,8 +7386,14 @@ fn transaction_screen_paints_fee_rate() {
         "null weight hid the transaction: {null}"
     );
     assert!(
-        !null.lines().any(|line| line.starts_with("Fee rate ")),
+        !null
+            .lines()
+            .any(|line| line == "Fee rate" || line.starts_with("Fee rate ")),
         "null weight painted Fee rate: {null}"
+    );
+    assert!(
+        !null.contains("sat/vB"),
+        "null weight painted sat/vB: {null}"
     );
     assert_script_hex_stays_off(&null);
 
@@ -7285,8 +7405,12 @@ fn transaction_screen_paints_fee_rate() {
     assert!(
         !zero_weight
             .lines()
-            .any(|line| line.starts_with("Fee rate ")),
+            .any(|line| line == "Fee rate" || line.starts_with("Fee rate ")),
         "weight 0 painted Fee rate: {zero_weight}"
+    );
+    assert!(
+        !zero_weight.contains("sat/vB"),
+        "weight 0 painted sat/vB: {zero_weight}"
     );
     assert!(
         !zero_weight.contains("fee_rate"),
@@ -7311,12 +7435,12 @@ fn transaction_screen_paints_sigops() {
         "sigops 0 did not paint the line Sigops 0: {zero}"
     );
     assert!(
-        zero.lines().any(|line| line == "Adjusted vsize 1.75"),
-        "weight 7 and sigops 0 dropped Adjusted vsize 1.75: {zero}"
+        !zero.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "weight 7 and sigops 0 painted Adjusted vsize 1.75: {zero}"
     );
     assert!(
-        zero.lines().any(|line| line == "virtual size 1"),
-        "weight 7 and sigops 0 dropped virtual size 1: {zero}"
+        !zero.lines().any(|line| line == "virtual size 1"),
+        "weight 7 and sigops 0 painted virtual size 1: {zero}"
     );
     assert!(
         zero.contains("sigops 0"),
@@ -7538,12 +7662,12 @@ fn transaction_screen_paints_locktime() {
         "locktime 0 did not paint the line Locktime 0: {zero}"
     );
     assert!(
-        zero.lines().any(|line| line == "virtual size 1"),
-        "locktime 0 dropped virtual size 1: {zero}"
+        !zero.lines().any(|line| line == "virtual size 1"),
+        "locktime 0 painted virtual size 1: {zero}"
     );
     assert!(
-        zero.lines().any(|line| line == "Adjusted vsize 1.75"),
-        "locktime 0 dropped Adjusted vsize 1.75: {zero}"
+        !zero.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "locktime 0 painted Adjusted vsize 1.75: {zero}"
     );
     assert!(
         zero.lines().any(|line| line == "Sigops 0"),
@@ -7658,9 +7782,10 @@ fn transaction_screen_paints_issuance_label() {
             "Timestamp was not immediately before the raw block_time line: {text}"
         );
         assert!(
-            text.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+            text.lines().any(|line| line == "Fee rate"),
             "Fee rate was dropped: {text}"
         );
+        assert!(!text.contains("sat/vB"), "Fee rate painted sat/vB: {text}");
         assert!(
             text.contains("fee_rate 0.5"),
             "the raw fee_rate header was dropped: {text}"
@@ -7912,11 +8037,13 @@ fn transaction_screen_paints_transaction_fee_label() {
             "the details Fee row was dropped or repeated: {text}"
         );
         assert_eq!(
-            text.lines()
-                .filter(|line| *line == "Fee rate 0.50 sat/vB")
-                .count(),
+            text.lines().filter(|line| *line == "Fee rate").count(),
             1,
             "the Fee rate row was dropped or repeated: {text}"
+        );
+        assert!(
+            !text.contains("sat/vB"),
+            "the Fee rate row painted sat/vB: {text}"
         );
         assert!(
             text.contains("fee_rate 0.5"),
@@ -7924,7 +8051,7 @@ fn transaction_screen_paints_transaction_fee_label() {
         );
         assert_eq!(
             text.lines()
-                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate"))
                 .count(),
             1,
             "a second Fee row was painted: {text}"
@@ -8344,11 +8471,13 @@ fn transaction_screen_paints_p2pk_label() {
             "the details Fee row was dropped or repeated: {text}"
         );
         assert_eq!(
-            text.lines()
-                .filter(|line| *line == "Fee rate 0.50 sat/vB")
-                .count(),
+            text.lines().filter(|line| *line == "Fee rate").count(),
             1,
             "the Fee rate row was dropped or repeated: {text}"
+        );
+        assert!(
+            !text.contains("sat/vB"),
+            "the Fee rate row painted sat/vB: {text}"
         );
         assert!(
             text.contains("fee_rate 0.5"),
@@ -8356,7 +8485,7 @@ fn transaction_screen_paints_p2pk_label() {
         );
         assert_eq!(
             text.lines()
-                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate"))
                 .count(),
             1,
             "a second Fee row was painted: {text}"
@@ -8666,6 +8795,57 @@ fn transaction_screen_paints_p2pk_label() {
     assert_screen_keeps_timestamp(&other, "p2pkother");
 }
 
+/// Whole line `output script type p2pk` from a no-query `GET /tx/:txid`.
+///
+/// The output `scriptpubkey_type` is the lowercase indexer spelling `p2pk`.
+/// That paints the exact line `output script type p2pk`. This is not the
+/// input line `input script type p2pk` and not a bare `p2pk` line. `Type P2PK`
+/// stays. The input on this fixture is `v0_p2wpkh`, so the output line is not
+/// an input line. The path has no query and no fragment.
+#[test]
+fn transaction_screen_paints_output_script_type_p2pk_line() {
+    let txid = "outscriptp2pk";
+    let body = format!(
+        r#"{{"txid":"{txid}","version":1,"locktime":0,"vin":[{{"txid":"prev","vout":0,"prevout":{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qin","value":8}},"scriptsig":"deadbeef","scriptsig_asm":"OP_CHECKSIG","witness":["abcdwitnesshex"],"is_coinbase":false,"sequence":1}}],"vout":[{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"p2pk","value":1}}],"size":10,"weight":400,"sigops":0,"fee":50,"status":{{"confirmed":true,"block_height":4,"block_hash":"tiphash1","block_time":1600000000}}}}"#
+    );
+    let (mut host, rec) = host_with(
+        Network::Mainnet,
+        BTreeMap::from([(format!("/tx/{txid}"), body)]),
+    );
+    host.open_transaction(txid)
+        .unwrap_or_else(|err| panic!("tx {txid} did not open: {err}"));
+    let paths = rec.gets();
+    assert!(
+        paths.iter().any(|path| path == &format!("/tx/{txid}")),
+        "GET /tx/{txid} was not requested: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .all(|path| !path.contains('?') && !path.contains('#')),
+        "a transaction open used a query or a fragment: {paths:?}"
+    );
+    let painted = painted(&host);
+    assert!(
+        painted
+            .lines()
+            .any(|line| line == "output script type p2pk"),
+        "output script type p2pk was dropped: {painted}"
+    );
+    assert!(
+        painted.lines().any(|line| line == "Type P2PK"),
+        "Type P2PK was dropped: {painted}"
+    );
+    assert!(
+        !painted.lines().any(|line| line == "p2pk"),
+        "a bare p2pk line was painted instead of the whole output script type line: {painted}"
+    );
+    assert!(
+        !painted.lines().any(|line| line == "input script type p2pk"),
+        "an output-only p2pk fixture painted input script type p2pk: {painted}"
+    );
+}
+
 /// Output address cell from `GET /tx/:txid` when `scriptpubkey_type` is `op_return`.
 ///
 /// The scriptpubkeyType pipe returns the exact line `OP_RETURN` for the
@@ -8734,11 +8914,13 @@ fn transaction_screen_paints_op_return_label() {
             "the details Fee row was dropped or repeated: {text}"
         );
         assert_eq!(
-            text.lines()
-                .filter(|line| *line == "Fee rate 0.50 sat/vB")
-                .count(),
+            text.lines().filter(|line| *line == "Fee rate").count(),
             1,
             "the Fee rate row was dropped or repeated: {text}"
+        );
+        assert!(
+            !text.contains("sat/vB"),
+            "the Fee rate row painted sat/vB: {text}"
         );
         assert!(
             text.contains("fee_rate 0.5"),
@@ -8746,7 +8928,7 @@ fn transaction_screen_paints_op_return_label() {
         );
         assert_eq!(
             text.lines()
-                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate "))
+                .filter(|line| line.starts_with("Fee ") && !line.starts_with("Fee rate"))
                 .count(),
             1,
             "a second Fee row was painted: {text}"
@@ -9314,8 +9496,12 @@ fn transaction_screen_paints_timestamp_label() {
             "the block time was formatted: {painted}"
         );
         assert!(
-            painted.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+            painted.lines().any(|line| line == "Fee rate"),
             "Fee rate was dropped: {painted}"
+        );
+        assert!(
+            !painted.contains("sat/vB"),
+            "Fee rate painted sat/vB: {painted}"
         );
         assert!(
             painted.contains("fee_rate 0.5"),
@@ -9352,8 +9538,12 @@ fn transaction_screen_paints_timestamp_label() {
             "absent block_time invented 0: {painted}"
         );
         assert!(
-            painted.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
+            painted.lines().any(|line| line == "Fee rate"),
             "Fee rate was dropped: {painted}"
+        );
+        assert!(
+            !painted.contains("sat/vB"),
+            "Fee rate painted sat/vB: {painted}"
         );
         assert!(!painted.contains("abcdwitnesshex"), "{painted}");
         assert_script_hex_stays_off(painted);
@@ -9558,12 +9748,12 @@ fn transaction_screen_paints_weight() {
         "weight 7 did not paint the line Weight 7 WU: {seven}"
     );
     assert!(
-        seven.lines().any(|line| line == "virtual size 1"),
-        "weight 7 dropped virtual size 1: {seven}"
+        !seven.lines().any(|line| line == "virtual size 1"),
+        "weight 7 painted virtual size 1: {seven}"
     );
     assert!(
-        seven.lines().any(|line| line == "Adjusted vsize 1.75"),
-        "weight 7 dropped Adjusted vsize 1.75: {seven}"
+        !seven.lines().any(|line| line == "Adjusted vsize 1.75"),
+        "weight 7 painted Adjusted vsize 1.75: {seven}"
     );
     assert_script_hex_stays_off(&seven);
 
@@ -19113,7 +19303,8 @@ fn transaction_screen_paints_p2wsh_witness_script() {
 /// Fee rate label from no-query `GET /tx/:txid`.
 ///
 /// The transaction row paints `Fee rate` as its own line. A longer line that
-/// contains those words does not. Fee 584 and weight 572 are the served body.
+/// contains those words does not. `sat/vB` stays off. Fee 584 and weight 572
+/// are the served body.
 #[test]
 fn transaction_screen_paints_fee_rate_label() {
     const LINE: &str = "Fee rate";
@@ -19126,6 +19317,34 @@ fn transaction_screen_paints_fee_rate_label() {
         text.lines().filter(|line| *line == LINE).count(),
         1,
         "Fee rate was not painted once: {text}"
+    );
+    assert!(
+        !text.contains("sat/vB"),
+        "fee 584 and weight 572 painted sat/vB: {text}"
+    );
+}
+
+/// Fee rate label for a finite rate other than fee 584 and weight 572.
+///
+/// Fee 0 and weight 4 are a finite rate. The transaction row paints `Fee rate`
+/// as its own line. `sat/vB` stays off. A longer line that contains those
+/// words does not.
+#[test]
+fn transaction_screen_paints_fee_rate_label_for_every_finite_rate() {
+    const LINE: &str = "Fee rate";
+    let text = paint_tx_fee_rate("feeratefinite", 0, r#""weight":4"#);
+    assert!(
+        text.lines().any(|line| line == LINE),
+        "no line equals \"Fee rate\": {text}"
+    );
+    assert_eq!(
+        text.lines().filter(|line| *line == LINE).count(),
+        1,
+        "Fee rate was not painted once: {text}"
+    );
+    assert!(
+        !text.contains("sat/vB"),
+        "fee 0 and weight 4 painted sat/vB: {text}"
     );
 }
 
@@ -19346,6 +19565,11 @@ fn transaction_screen_paints_poison_attack_warning() {
         text.lines().any(|line| line == SHORT),
         "the shorter warning was dropped: {text}"
     );
+    assert!(
+        text.lines()
+            .any(|line| line == "poison prefix bc1qlook infix aaa infix XY"),
+        "poison prefix bc1qlook infix aaa infix XY is absent: {text}"
+    );
 
     let alone = open(&vout("bc1qonlyone", 3));
     assert!(
@@ -19491,9 +19715,9 @@ fn transaction_screen_paints_sigops_label() {
 /// Capitalized virtual size from no-query `GET /tx/:txid`.
 ///
 /// Weight 4 paints `Virtual size 1` as its own line. The lowercase
-/// `virtual size 1` stays. Weight 7 does not round up to 2. Weight 0
-/// paints `Virtual size 0`. A missing weight or JSON null does not paint
-/// the capitalized line.
+/// whole line `virtual size 1` stays off. Weight 7 does not round up to 2.
+/// Weight 0 paints `Virtual size 0`. A missing weight or JSON null does not
+/// paint the capitalized line.
 #[test]
 fn transaction_screen_paints_virtual_size_sentence() {
     const LINE: &str = "Virtual size 1";
@@ -19508,8 +19732,8 @@ fn transaction_screen_paints_virtual_size_sentence() {
         "{LINE} was not painted once: {text}"
     );
     assert!(
-        text.lines().any(|line| line == "virtual size 1"),
-        "virtual size 1 was dropped: {text}"
+        !text.lines().any(|line| line == "virtual size 1"),
+        "weight 4 painted virtual size 1: {text}"
     );
     assert!(
         !text.lines().any(|line| line == "Virtual size 2"),
@@ -19526,8 +19750,8 @@ fn transaction_screen_paints_virtual_size_sentence() {
         "weight 7 rounded up: {seven}"
     );
     assert!(
-        seven.lines().any(|line| line == "virtual size 1"),
-        "weight 7 dropped virtual size 1: {seven}"
+        !seven.lines().any(|line| line == "virtual size 1"),
+        "weight 7 painted virtual size 1: {seven}"
     );
 
     let zero = paint_tx_weight("vsizeword0", r#""weight":0"#);

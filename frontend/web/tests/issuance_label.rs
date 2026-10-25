@@ -86,7 +86,12 @@ fn assert_no_amount(markup: &str) {
 }
 
 fn assert_field_lines(markup: &str) {
-    assert_one(markup, &format!("issuance asset {ASSET_ID}"));
+    let asset = format!("issuance asset {ASSET_ID}");
+    assert_eq!(
+        markup.matches(&asset).count(),
+        2,
+        "expected two {asset} in {markup}"
+    );
     assert_one(markup, "issuance reissuance false");
     assert_one(markup, &format!("issuance entropy {ASSET_ENTROPY}"));
 }

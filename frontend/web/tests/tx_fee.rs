@@ -146,7 +146,8 @@ fn fee_zero_paints_fee_0_sats_as_its_own_line() {
 ///
 /// GPUI `assert_one_fee_and_confirmed` requires one line whose entire text
 /// equals `Fee 50 sats`. The Fee cell keeps the label and the unit apart.
-/// A grouped fee does not use this sentence. `Fee rate 0.50 sat/vB` stays off.
+/// A grouped fee does not use this sentence. Fee 50 and weight 400 keep the
+/// bare line `Fee rate` and do not paint `sat/vB`.
 #[test]
 fn fee_fifty_paints_fee_50_sats_as_its_own_line() {
     const LINE: &str = "Fee 50 sats";
@@ -163,8 +164,32 @@ fn fee_fifty_paints_fee_50_sats_as_its_own_line() {
     assert_one(&markup, &preview_cell("50"));
     assert_one(&markup, "<td class=\"fee\">50</td>");
     assert!(
-        !markup.lines().any(|line| line == "Fee rate 0.50 sat/vB"),
-        "Fee rate 0.50 sat/vB was painted: {markup}"
+        !markup.contains("sat/vB"),
+        "fee 50 and weight 400 painted sat/vB: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "Fee rate"),
+        "bare Fee rate was dropped: {markup}"
     );
     assert_scripts_stay_off(&markup);
+}
+
+/// Whole line `Fee 1,500 sats`. Fee 1500 and weight 40, same as GPUI `paint_tx_fee`.
+#[test]
+fn gpui_whole_line_fee_1_500_sats() {
+    let markup = transaction_row_markup(&tx(1500, 40));
+    assert!(
+        markup.lines().any(|line| line == "Fee 1,500 sats"),
+        "fee 1500 and weight 40 did not paint Fee 1,500 sats: {markup}"
+    );
+}
+
+/// Whole line `Fee 1,000,000 sats`. Fee 1000000 and weight 40, same as GPUI `paint_tx_fee`.
+#[test]
+fn gpui_whole_line_fee_1_000_000_sats() {
+    let markup = transaction_row_markup(&tx(1_000_000, 40));
+    assert!(
+        markup.lines().any(|line| line == "Fee 1,000,000 sats"),
+        "fee 1000000 and weight 40 did not paint Fee 1,000,000 sats: {markup}"
+    );
 }

@@ -20,6 +20,12 @@ fn issued_row(asset_id: &str, name: &str, ticker: &str) -> String {
     )
 }
 
+fn issued_row_with_domain(asset_id: &str, name: &str, ticker: &str, domain: &str) -> String {
+    format!(
+        r#"{{"asset_id":"{asset_id}","name":"{name}","ticker":"{ticker}","entity":{{"domain":"{domain}"}},"precision":2,"issuance_txin":{{"txid":"{ISSUANCE_TX}","vin":0}},"issuance_prevout":{{"txid":"{ISSUANCE_TX}","vout":0}},"reissuance_token":"{ISSUANCE_TX}","status":{{"confirmed":true}},"chain_stats":{{"tx_count":1,"issuance_count":1,"issued_amount":1,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}},"mempool_stats":{{"tx_count":0,"issuance_count":0,"issued_amount":0,"burned_amount":0,"has_blinded_issuances":false,"burned_reissuance_tokens":0}}}}"#
+    )
+}
+
 fn one_row() -> String {
     format!("[{}]", issued_row(ASSET, "Test Asset", "TEST"))
 }
@@ -110,6 +116,10 @@ fn issued_row_paints_the_ticker_header_once() {
     assert_one(&markup, "Test Asset");
     assert_one(&markup, "TEST");
     assert!(
+        markup.lines().any(|line| line == "TEST"),
+        "no line equals TEST: {markup}"
+    );
+    assert!(
         markup.find(HEADER).unwrap() < markup.find("Test Asset").unwrap(),
         "the header belongs before the row: {markup}"
     );
@@ -155,4 +165,37 @@ fn empty_list_omits_the_ticker_header() {
     assert!(notice.contains("not-served"), "{notice}");
     assert_absent(&notice, "Ticker");
     assert_absent(&notice, "<th>");
+}
+
+/// Whole line `Test Asset` on the assets list when registry rows parse.
+///
+/// GPUI requires one line whose entire text is Test Asset. That is not
+/// `asset name Test Asset` and not `Name Test Asset (TEST)`. The th spans
+/// stay. The same `registry_list_markup` row covers the asset-id header
+/// fixture and the issuer-domain fixture.
+#[test]
+fn issued_row_paints_test_asset_as_its_own_line() {
+    const LINE: &str = "Test Asset";
+    let markup = registry_list_markup(&one_row(), true);
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+
+    let with_domain = registry_list_markup(
+        &format!(
+            "[{}]",
+            issued_row_with_domain(ASSET, "Test Asset", "TEST", "example.com")
+        ),
+        true,
+    );
+    assert!(
+        with_domain.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {with_domain}"
+    );
 }

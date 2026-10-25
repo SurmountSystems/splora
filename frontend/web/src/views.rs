@@ -519,7 +519,7 @@ pub fn mempool_summary_text(body: &str) -> String {
     lines.join("\n")
 }
 
-fn dashboard_tip_fees_text(tip_hash: &str, tip_height: &str, fees: &str) -> String {
+pub fn dashboard_tip_fees_text(tip_hash: &str, tip_height: &str, fees: &str) -> String {
     let mut lines = Vec::new();
     if !skip_closed_or_empty(tip_hash, &mut lines) {
         match parse_blocks_tip_hash(tip_hash) {

@@ -504,3 +504,71 @@ fn block_rows_still_do_not_put_transaction_hex_on_the_row() {
     );
     assert!(!markup.contains("tx-hex"), "{markup}");
 }
+
+/// Empty block transactions paint the GPUI whole line.
+///
+/// `block_rows_markup` already paints `There are no transactions.` when the
+/// transaction array is empty, including whitespace inside the brackets. The
+/// whole line is `The transaction list is empty.` A loaded transaction, a
+/// blank body, and invalid JSON do not paint that line. The older paragraph
+/// stays.
+#[test]
+fn empty_block_transaction_list_paints_the_whole_line() {
+    const OLD: &str = "<p class=\"empty\">There are no transactions.</p>";
+    let block = format!(
+        r#"{{"id":"{BLOCK}","height":1,"version":1,"timestamp":1,"tx_count":0,"size":1,"weight":4,"merkle_root":"m","mediantime":1,"nonce":1,"bits":1,"difficulty":1}}"#
+    );
+
+    let empty = block_rows_markup(&block, "[]");
+    assert!(
+        empty
+            .lines()
+            .any(|line| line == "The transaction list is empty."),
+        "The transaction list is empty. is absent: {empty}"
+    );
+    assert_eq!(
+        empty
+            .lines()
+            .filter(|line| *line == "The transaction list is empty.")
+            .count(),
+        1,
+        "The transaction list is empty. was not painted once: {empty}"
+    );
+    assert!(empty.contains(OLD), "{empty}");
+
+    let spaced = block_rows_markup(&block, " [ ] ");
+    assert!(
+        spaced
+            .lines()
+            .any(|line| line == "The transaction list is empty."),
+        "The transaction list is empty. is absent for spaced brackets: {spaced}"
+    );
+    assert!(spaced.contains(OLD), "{spaced}");
+
+    let one = format!(
+        r#"[{{"txid":"{TX}","version":1,"locktime":0,"vin":[],"vout":[],"size":1,"weight":4,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}]"#
+    );
+    let loaded = block_rows_markup(&block, &one);
+    assert!(
+        !loaded
+            .lines()
+            .any(|line| line == "The transaction list is empty."),
+        "The transaction list is empty. was painted on a loaded list: {loaded}"
+    );
+    assert!(loaded.contains(TX), "{loaded}");
+
+    let blank = block_rows_markup(&block, "");
+    assert!(
+        !blank
+            .lines()
+            .any(|line| line == "The transaction list is empty."),
+        "The transaction list is empty. was painted for a blank body: {blank}"
+    );
+    let invalid = block_rows_markup(&block, "not-json");
+    assert!(
+        !invalid
+            .lines()
+            .any(|line| line == "The transaction list is empty."),
+        "The transaction list is empty. was painted for invalid JSON: {invalid}"
+    );
+}

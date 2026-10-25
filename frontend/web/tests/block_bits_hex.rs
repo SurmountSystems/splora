@@ -74,6 +74,10 @@ fn bits_zero_paints_eight_zero_digits_and_the_decimal() {
         open.contains("<tr><td>Bits</td><td>0</td><td class=\"bits-hex\">0x00000000</td></tr>"),
         "{open}"
     );
+    assert!(
+        open.lines().any(|line| line == "bits 0 0x00000000"),
+        "bits 0 0x00000000 is absent: {open}"
+    );
 }
 
 #[test]

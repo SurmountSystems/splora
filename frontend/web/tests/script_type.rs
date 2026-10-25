@@ -1,6 +1,12 @@
 //! `scriptpubkey_type` on the transaction row from `GET /tx/:txid`.
 //!
 //! `transaction_row_markup` paints the indexer spelling. Script hex and asm stay off the page.
+//! A `v0_p2wpkh` output also paints one whole line `output script type v0_p2wpkh`.
+//! That line is not `input script type v0_p2wsh` and not `Previous output type V0_P2WSH`.
+//! A `p2pk` output also paints one whole line `output script type p2pk`.
+//! That line is not `input script type p2pk`, not `output script type op_return`,
+//! not `output script type empty`, and not `output script type v0_p2wpkh`.
+//! The bare token `p2pk` is not its own line. The scriptpubkey-type span stays.
 
 use splora_web::transaction_row_markup;
 
@@ -120,6 +126,160 @@ fn op_return_keeps_the_existing_span() {
         1,
         "OP_RETURN span is not once: {markup}"
     );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "output script type op_return")
+    );
     assert_absent(&markup, "OPRETHEXDEAD");
     assert_absent(&markup, "OPRETASMDEAD");
+}
+
+#[test]
+fn v0_p2wpkh_output_paints_output_script_type_v0_p2wpkh_as_its_own_line() {
+    let body = tx(
+        &format!(
+            "{},{},{}",
+            input(&prevout("P2PKPREVHEXDEAD", "P2PKPREVASMDEAD", "p2pk")),
+            input(&prevout(
+                "OPRETURNPREVHEXDEAD",
+                "OPRETURNPREVASMDEAD",
+                "op_return",
+            )),
+            input(&prevout(
+                "V0P2WSHPREVHEXDEAD",
+                "V0P2WSHPREVASMDEAD",
+                "v0_p2wsh",
+            )),
+        ),
+        &output("V0P2WPKHPUBHEXDEAD", "V0P2WPKHASMDEAD", "v0_p2wpkh"),
+    );
+    let markup = transaction_row_markup(&body);
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "output script type v0_p2wpkh"),
+        "no line equals output script type v0_p2wpkh: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"scriptpubkey-type\">v0_p2wpkh</span>"),
+        "the scriptpubkey-type span was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "input script type p2pk"),
+        "input script type p2pk was dropped: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "input script type op_return"),
+        "input script type op_return was dropped: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WSH"),
+        "Previous output type V0_P2WSH was dropped: {markup}"
+    );
+    for bare in [
+        "p2pk",
+        "op_return",
+        "v0_p2wsh",
+        "V0_P2WSH",
+        "MULTISIG",
+        "multisig",
+        "EMPTY",
+    ] {
+        assert!(
+            !markup.lines().any(|line| line == bare),
+            "a bare token was painted as a substitute: {bare}: {markup}"
+        );
+    }
+    assert_absent(&markup, "V0P2WPKHPUBHEXDEAD");
+    assert_absent(&markup, "V0P2WPKHASMDEAD");
+    assert_absent(&markup, "P2PKPREVHEXDEAD");
+    assert_absent(&markup, "P2PKPREVASMDEAD");
+    assert_absent(&markup, "OPRETURNPREVHEXDEAD");
+    assert_absent(&markup, "OPRETURNPREVASMDEAD");
+    assert_absent(&markup, "V0P2WSHPREVHEXDEAD");
+    assert_absent(&markup, "V0P2WSHPREVASMDEAD");
+    assert_absent(&markup, "SCRIPTSIGHEXDEAD");
+    assert_absent(&markup, "SCRIPTSIGASMDEAD");
+}
+
+#[test]
+fn p2pk_output_paints_output_script_type_p2pk_as_its_own_line() {
+    let body = tx(
+        &input(&prevout(
+            "V0P2WPKHPREVHEXDEAD",
+            "V0P2WPKHPREVASMDEAD",
+            "v0_p2wpkh",
+        )),
+        &output("P2PKPUBHEXDEAD", "P2PKASMDEAD", "p2pk"),
+    );
+    let markup = transaction_row_markup(&body);
+    assert!(
+        markup.lines().any(|line| line == "output script type p2pk"),
+        "no line equals output script type p2pk: {markup}"
+    );
+    assert_eq!(
+        markup
+            .lines()
+            .filter(|line| *line == "output script type p2pk")
+            .count(),
+        1,
+        "output script type p2pk was dropped or repeated: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "output script type p2pk" && !line.contains('<')),
+        "output script type p2pk was inside a span: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"scriptpubkey-type\">p2pk</span>"),
+        "the scriptpubkey-type span was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "Type P2PK"),
+        "Type P2PK was dropped: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "p2pk"),
+        "a bare token was painted as a substitute: p2pk: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "input script type p2pk"),
+        "an output-only p2pk fixture painted input script type p2pk: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "output script type op_return"),
+        "output script type op_return was painted on a p2pk output: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "output script type empty"),
+        "output script type empty was painted on a p2pk output: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "output script type v0_p2wpkh"),
+        "output script type v0_p2wpkh was painted on a p2pk output: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WPKH"),
+        "Previous output type V0_P2WPKH was dropped: {markup}"
+    );
+    assert_absent(&markup, "P2PKPUBHEXDEAD");
+    assert_absent(&markup, "P2PKASMDEAD");
+    assert_absent(&markup, "V0P2WPKHPREVHEXDEAD");
+    assert_absent(&markup, "V0P2WPKHPREVASMDEAD");
+    assert_absent(&markup, "SCRIPTSIGHEXDEAD");
+    assert_absent(&markup, "SCRIPTSIGASMDEAD");
 }

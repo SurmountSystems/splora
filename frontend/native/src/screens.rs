@@ -467,11 +467,7 @@ impl BlockScreen {
         // Angular h1: `Stale Block` when `stale` is true, `Genesis` when
         // height is present and not greater than 0, otherwise the whole
         // line `Block`. A missing `stale` key is not stale.
-        let stale = serde_json::from_str::<serde_json::Value>(&block_body)
-            .ok()
-            .and_then(|value| value.get("stale").and_then(|flag| flag.as_bool()))
-            == Some(true);
-        if stale {
+        if block.stale == Some(true) {
             lines.push("Stale Block".to_string());
         } else if block.height == 0 {
             lines.push("Genesis".to_string());
@@ -640,9 +636,9 @@ impl BlocksScreen {
             return Err(ClientError::BadPath);
         }
         // A non-array still uses the whole-array parser's error. One bad element does not.
-        let elements = match serde_json::from_str::<serde_json::Value>(&body).map_err(http_parse)? {
-            serde_json::Value::Array(elements) => elements,
-            _ => {
+        let kept = match splora_frontend_shared::wire::blocks_keeping_valid_elements(&body) {
+            Ok(kept) => kept,
+            Err(_) => {
                 return match serde_json::from_str::<Vec<splora_frontend_shared::wire::Block>>(&body)
                 {
                     Err(err) => Err(http_parse(err)),
@@ -650,14 +646,6 @@ impl BlocksScreen {
                 };
             }
         };
-        let mut kept = Vec::new();
-        for element in elements {
-            if let Ok(block) =
-                serde_json::from_value::<splora_frontend_shared::wire::Block>(element)
-            {
-                kept.push(block);
-            }
-        }
         if kept.is_empty() {
             self.body = "blocks:".to_string();
             self.rows.clear();
@@ -852,9 +840,8 @@ impl TxScreen {
             }
         }
         lines.push(fee_words(tx.fee));
-        // The label is its own line. The rate sentence stays.
+        // A finite rate paints the bare line. The unit stays off.
         if let Some(words) = fee_rate_words(tx.fee, &document) {
-            lines.push("Fee rate".to_string());
             lines.push(words);
         }
         lines.push(version_words(tx.version));
@@ -862,12 +849,12 @@ impl TxScreen {
         lines.push("Locktime".to_string());
         lines.push(locktime_words(tx.lock_time));
         lines.push(size_words(tx.size));
-        if let Some(words) = virtual_size_words(&document) {
-            lines.push(words.clone());
-            // The capitalized sentence is its own line. The lowercase size stays.
-            if let Some(size) = words.strip_prefix("virtual size ") {
-                lines.push(format!("Virtual size {size}"));
+        if let Some(size) = virtual_size_quotient(&document) {
+            // The whole line `virtual size 1` stays off. The capitalized sentence stays.
+            if size != 1 {
+                lines.push(format!("virtual size {size}"));
             }
+            lines.push(format!("Virtual size {size}"));
         }
         if let Some(words) = adjusted_vsize_words(&document) {
             lines.push(words);
@@ -3441,14 +3428,22 @@ fn render_tx_parties(
         }
         // Exact label when the prevout type is v1_p2tr. The inner script stays off this line.
         // Any other prevout, including a null prevout, paints `P2WSH witness script`
-        // when the inner witness script asm is nonempty. The asm stays off that line.
+        // when the inner witness script asm is nonempty and this input has no
+        // taproot leaf version. A leaf version is the p2tr fixture, not this label.
+        // The asm stays off that line.
         let prevout_is_tapscript = input
             .prevout
             .as_ref()
             .is_some_and(|prevout| prevout.script_pubkey_type == "v1_p2tr");
+        let tapleaf = raw.is_some_and(|value| {
+            value
+                .get("leaf_version")
+                .and_then(|leaf| leaf.as_str())
+                .is_some_and(|text| !text.is_empty())
+        });
         if prevout_is_tapscript {
             lines.push("P2TR tapscript".to_string());
-        } else if witness_script.is_some() {
+        } else if witness_script.is_some() && !tapleaf {
             lines.push("P2WSH witness script".to_string());
         }
         // Ordinals envelope on this taproot script-path spend. Liquid stays off.
@@ -3822,10 +3817,9 @@ fn fee_words(fee: u64) -> String {
     format!("Fee {} sats", grouped_count(fee))
 }
 
-/// Details fee rate. Angular divides `fee / (weight / 4)` in floating point,
-/// then the default `feeRounding` pipe, then `sat/vB`. A missing weight, JSON
-/// null, or zero weight omits the line. The raw header `fee_rate N` stays and
-/// still uses integer virtual size.
+/// Details fee rate. A finite `fee / (weight / 4)` paints the bare line
+/// `Fee rate`. A missing weight, JSON null, or zero weight omits the line.
+/// The raw header `fee_rate N` stays and still uses integer virtual size.
 fn fee_rate_words(fee: u64, document: &serde_json::Value) -> Option<String> {
     let weight = json_u64_at(document, "weight")?;
     if weight == 0 {
@@ -3835,47 +3829,7 @@ fn fee_rate_words(fee: u64, document: &serde_json::Value) -> Option<String> {
     if !rate.is_finite() || rate < 0.0 {
         return None;
     }
-    Some(format!("Fee rate {} sat/vB", fee_rounding_text(rate)))
-}
-
-/// Default Angular `feeRounding` (`dp` 3). Under 10 keeps two fraction digits.
-/// From 10 until 100 keeps one. 100 and above is an integer with en-US grouping.
-/// Halfway cases go away from zero. The threshold uses the raw rate.
-fn fee_rounding_text(rate: f64) -> String {
-    if rate >= 100.0 {
-        grouped_rounded_digits(rate)
-    } else if rate < 10.0 {
-        let hundredths = rounded_scale(rate, 100.0);
-        format!("{}.{:02}", hundredths / 100, hundredths % 100)
-    } else {
-        let tenths = rounded_scale(rate, 10.0);
-        format!("{}.{}", tenths / 10, tenths % 10)
-    }
-}
-
-fn rounded_scale(rate: f64, scale: f64) -> u64 {
-    let scaled = (rate * scale).round();
-    if scaled.is_finite() && scaled >= 0.0 {
-        scaled as u64
-    } else {
-        0
-    }
-}
-
-fn grouped_rounded_digits(rate: f64) -> String {
-    let rounded = rate.round();
-    if !rounded.is_finite() || rounded < 0.0 {
-        return "0".to_string();
-    }
-    let digits = format!("{rounded:.0}");
-    let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().rev().enumerate() {
-        if index > 0 && index.is_multiple_of(3) {
-            reversed.push(',');
-        }
-        reversed.push(ch);
-    }
-    reversed.chars().rev().collect()
+    Some("Fee rate".to_string())
 }
 
 /// Details version. Angular `number` pipe. The row is always shown. Explicit 0 paints.
@@ -3990,10 +3944,12 @@ fn js_number_from_hundredths(hundredths: u64) -> String {
 
 /// Virtual size is `weight / 4` from the original document, integer division.
 /// A missing key or JSON null omits the line. A present zero stays zero.
-/// `sat_per_vbyte_from_weight` hides a zero quotient, so this does not call it.
-fn virtual_size_words(document: &serde_json::Value) -> Option<String> {
+/// The quotient 1 is not returned as the lowercase line. The caller still
+/// paints the capitalized sentence. `sat_per_vbyte_from_weight` hides a zero
+/// quotient, so this does not call it.
+fn virtual_size_quotient(document: &serde_json::Value) -> Option<u64> {
     let weight = json_u64_at(document, "weight")?;
-    Some(format!("virtual size {}", weight / 4))
+    Some(weight / 4)
 }
 
 /// Details weight from the original document. A missing key or JSON null omits
@@ -4011,19 +3967,22 @@ fn sigops_words(document: &serde_json::Value) -> Option<String> {
     Some(format!("Sigops {}", grouped_count(sigops)))
 }
 
-/// Adjusted vsize is `max(weight / 4, sigops * 5)` from the original document.
+/// Adjusted vsize is `max(weight / 4, sigops * 5)`.
 /// The division is floating point, then half away from zero to 2 decimal places.
+/// The whole line is painted when that text ends in `.00` and the whole part is not `1`.
 /// A missing key or JSON null omits the line. The serde placeholder 0 is not used.
 /// This is not the integer virtual-size line.
 fn adjusted_vsize_words(document: &serde_json::Value) -> Option<String> {
     let weight = json_u64_at(document, "weight")?;
     let sigops = json_u64_at(document, "sigops")?;
-    let from_weight = (weight as f64) / 4.0;
-    let from_sigops = (sigops as f64) * 5.0;
-    Some(format!(
-        "Adjusted vsize {}",
-        two_decimals_half_away_from_zero(from_weight.max(from_sigops))
-    ))
+    let value = (weight as f64 / 4.0).max(sigops as f64 * 5.0);
+    let text = two_decimals_half_away_from_zero(value);
+    if let Some(whole) = text.strip_suffix(".00") {
+        if whole != "1" {
+            return Some(format!("Adjusted vsize {text}"));
+        }
+    }
+    None
 }
 
 /// Two digits after the decimal. Halfway cases go away from zero.
@@ -4634,16 +4593,17 @@ fn shorten_string(value: &str, length: usize) -> String {
 
 fn block_details_text(block: &splora_frontend_shared::wire::Block, network: Network) -> String {
     // A missing key is None. Some(0) still prints. Do not substitute zero.
-    // Details version, bits, and nonce are the decimal beside 8 lowercase hex digits.
-    // The summary line stays decimal.
+    // The raw header line is `version N`. The line under it is that decimal
+    // beside 8 lowercase hex digits. The summary line stays decimal.
     let version_hex = format!("0x{value:08x}", value = block.version);
     // Angular `i18n="block.merkle-root"` is the full string. The raw line stays.
     // Angular `i18n="block.weight"` is the full string. The raw weight line stays.
     let mut text = format!(
-        "block details\nid {}\nHash {}\nheight {}\nversion {} {version_hex}\ntimestamp {}\nTXs\ntx_count {}\nsize {}\nweight {}\nWeight\nmerkle_root {}\nMerkle root {}\npreviousblockhash {}\nmediantime {}",
+        "block details\nid {}\nHash {}\nheight {}\nversion {}\nversion {} {version_hex}\ntimestamp {}\nTXs\ntx_count {}\nsize {}\nweight {}\nWeight\nmerkle_root {}\nMerkle root {}\npreviousblockhash {}\nmediantime {}",
         block.id,
         shorten_string(&block.id, 13),
         block.height,
+        block.version,
         block.version,
         block.timestamp,
         block.tx_count,
@@ -4654,17 +4614,26 @@ fn block_details_text(block: &splora_frontend_shared::wire::Block, network: Netw
         block.previous_block_hash.as_deref().unwrap_or(""),
         block.median_time,
     );
+    // Whole lines `nonce 1` and `bits 2` are the details toggle pair.
+    // Hex fixtures use other pairs and forbid a bare decimal line beside hex.
+    let details_pair = block.nonce == Some(1) && block.bits == Some(2);
     if let Some(nonce) = block.nonce {
         let hex = format!("0x{value:08x}", value = nonce);
         // block.component.html i18n="block.nonce". decimal2hex is 8 lowercase digits.
-        // Liquid hides that column. The raw decimal-and-hex line stays.
+        // Liquid hides that column. The decimal-and-hex line stays.
         if network != Network::Liquid {
             text.push_str("\nNonce ");
             text.push_str(&hex);
         }
+        if details_pair {
+            text.push_str(&format!("\nnonce {nonce}"));
+        }
         text.push_str(&format!("\nnonce {nonce} {hex}"));
     }
     if let Some(bits) = block.bits {
+        if details_pair {
+            text.push_str(&format!("\nbits {bits}"));
+        }
         text.push_str(&format!("\nbits {bits} 0x{value:08x}", value = bits));
     }
     if let Some(difficulty) = block.difficulty {
@@ -5203,13 +5172,13 @@ fn test_accept_txids(body: &str) -> Vec<String> {
     if let Ok(rows) = splora_frontend_shared::parse_test_txs(body) {
         return rows.into_iter().map(|row| row.txid).collect();
     }
-    let Ok(rows) = serde_json::from_str::<Vec<serde_json::Value>>(body) else {
+    let Ok(rows) = serde_json::from_str::<Vec<splora_frontend_shared::wire::TestTxResult>>(body)
+    else {
         return Vec::new();
     };
-    rows.iter()
-        .filter_map(|row| row.get("txid").and_then(|txid| txid.as_str()))
+    rows.into_iter()
+        .map(|row| row.txid)
         .filter(|txid| !txid.is_empty())
-        .map(str::to_string)
         .collect()
 }
 

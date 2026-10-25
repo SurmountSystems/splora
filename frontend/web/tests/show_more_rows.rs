@@ -313,3 +313,133 @@ fn block_and_address_lists_use_the_same_button() {
         assert_visible_addresses(markup, "vout", 12, 1012);
     }
 }
+
+/// One input whose previous txid is `prev` and whose previous output index is `index`.
+/// `prevout` stays null, matching the show-more input that GPUI paints as an outpoint line.
+fn outpoint_input(index: u32) -> String {
+    format!(
+        r#"{{"txid":"prev","vout":{index},"prevout":null,"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":1}}"#
+    )
+}
+
+/// Index 0 stays in the list and paints `input outpoint prev:0`.
+/// Index 11 paints `input outpoint prev:11`.
+fn prev_11_body() -> String {
+    let vin = format!("{},{}", outpoint_input(0), outpoint_input(11));
+    format!(
+        r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{vin}],"vout":[{{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"","value":1}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+    )
+}
+
+/// Whole line `input outpoint prev:11` from `GET /tx/:txid`.
+///
+/// GPUI `transaction_screen_paints_show_more_inputs` requires one line whose
+/// entire text is `input outpoint prev:11`. The previous output index is 11
+/// and the previous txid is `prev`. The index 0 input stays in the list and
+/// paints `input outpoint prev:0` as its own line. The txid anchor and the
+/// vout span stay. This calls `transaction_row_markup`.
+#[test]
+fn input_outpoint_prev_11_is_its_own_line() {
+    let requests = transaction_requests(TXID);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, format!("/tx/{TXID}"));
+    assert_no_query(&requests[0].path);
+
+    let markup = transaction_row_markup(&prev_11_body());
+    assert!(
+        markup.lines().any(|line| line == "input outpoint prev:11"),
+        "no line equals input outpoint prev:11: {markup}"
+    );
+    assert_eq!(
+        markup
+            .lines()
+            .filter(|line| *line == "input outpoint prev:11")
+            .count(),
+        1,
+        "input outpoint prev:11 was dropped or repeated: {markup}"
+    );
+    assert!(
+        markup.contains("<a href=\"/tx/prev\">prev</a>"),
+        "the previous txid anchor was dropped: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"vout\">11</span>"),
+        "vout 11 was dropped: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"vout\">0</span>"),
+        "the index 0 input was dropped: {markup}"
+    );
+    assert!(
+        markup.lines().any(|line| line == "input outpoint prev:0"),
+        "no line equals input outpoint prev:0: {markup}"
+    );
+    assert_eq!(
+        markup
+            .lines()
+            .filter(|line| *line == "input outpoint prev:0")
+            .count(),
+        1,
+        "input outpoint prev:0 was dropped or repeated: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "output script type op_return"),
+        "output script type op_return was painted: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "output address lq1qqout1 value 9"),
+        "output address lq1qqout1 value 9 was painted: {markup}"
+    );
+}
+
+/// Whole line `input outpoint prev:0` from `GET /tx/:txid`.
+///
+/// Same fixture shape as `prev_11_body`, but the previous output index is 0,
+/// not 11. The previous txid is `prev`. This sentence is distinct from
+/// `input outpoint prev:11`. This calls `transaction_row_markup`.
+fn prev_0_body() -> String {
+    let vin = outpoint_input(0);
+    format!(
+        r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{vin}],"vout":[{{"scriptpubkey":"","scriptpubkey_asm":"","scriptpubkey_type":"","value":1}}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+    )
+}
+
+#[test]
+fn input_outpoint_prev_0_is_its_own_line() {
+    let requests = transaction_requests(TXID);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, format!("/tx/{TXID}"));
+    assert_no_query(&requests[0].path);
+
+    let markup = transaction_row_markup(&prev_0_body());
+    assert!(
+        markup.lines().any(|line| line == "input outpoint prev:0"),
+        "no line equals input outpoint prev:0: {markup}"
+    );
+    assert_eq!(
+        markup
+            .lines()
+            .filter(|line| *line == "input outpoint prev:0")
+            .count(),
+        1,
+        "input outpoint prev:0 was dropped or repeated: {markup}"
+    );
+    assert!(
+        markup.contains("<a href=\"/tx/prev\">prev</a>"),
+        "the previous txid anchor was dropped: {markup}"
+    );
+    assert!(
+        markup.contains("<span class=\"vout\">0</span>"),
+        "vout 0 was dropped: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "input outpoint prev:11"),
+        "input outpoint prev:11 was painted on the index 0 fixture: {markup}"
+    );
+}

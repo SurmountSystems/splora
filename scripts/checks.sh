@@ -62,3 +62,8 @@ if [ $INCLUDE_TESTS ]; then
     echo "$TESTNAME"
     cargo test $@ -q --lib --all-features
 fi
+
+# The native GPUI crate is its own manifest. This script does not run it.
+# Its one window test uses gpui_platform::headless(), so bare cargo test
+# does not map a window on the real display:
+#   cargo test --manifest-path frontend/native/Cargo.toml

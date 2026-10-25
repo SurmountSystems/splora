@@ -5,7 +5,7 @@
 use splora_web::{
     address_fields_text, address_rows_markup, block_fields_text, block_rows_markup,
     blocks_rows_markup, broadcast_fields_text, dashboard_fields_text, dashboard_rows_markup,
-    transaction_fields_text, transaction_row_markup,
+    dashboard_tip_fees_text, transaction_fields_text, transaction_row_markup,
 };
 
 const BLOCK_HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -335,6 +335,13 @@ fn views_keep_fee_targets_and_the_missing_incoming_rate_sentence() {
     assert!(
         src.contains("fee target"),
         "views.rs dropped the fee target line"
+    );
+    // Same body as GPUI `screen_paints_transaction_fees_heading`: `{"2":1.1}`.
+    // The whole line is the painter output, not a substring of `Fee rate`.
+    let painted = dashboard_tip_fees_text("abc", "1", r#"{"2":1.1}"#);
+    assert!(
+        painted.lines().any(|line| line == "fee target 2 rate 1.1"),
+        "no line equals fee target 2 rate 1.1: {painted}"
     );
     let block_page = view_fn_body("BlockPage");
     assert!(

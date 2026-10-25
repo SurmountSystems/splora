@@ -147,3 +147,41 @@ fn open_block_details_paint_hash_012345_shortened() {
     assert_one(&rows, HASH_LABEL);
     assert_one(&rows, &short_cell("012345...9abcdef"));
 }
+
+/// Twelve-character id paints the whole line `Hash abcdefghijkl` when details are open.
+///
+/// Length 12 is not shortened. This line is not `Hash abcdefghijklm` and not
+/// `Hash abcdef...hijklmn`. Closed details omit the line.
+#[test]
+fn open_block_details_paint_hash_twelve_abcdefghijkl() {
+    const ID: &str = "abcdefghijkl";
+    const LINE: &str = "Hash abcdefghijkl";
+    assert_eq!(ID.len(), 12);
+    let body = details_json(ID);
+    let open = block_details_markup(&body, true);
+    assert!(
+        open.lines().any(|line| line == "Hash abcdefghijkl"),
+        "{LINE} is absent: {open}"
+    );
+    assert_eq!(
+        open.lines()
+            .filter(|line| *line == "Hash abcdefghijkl")
+            .count(),
+        1,
+        "{LINE} was not one line: {open}"
+    );
+    assert!(
+        !open.lines().any(|line| line == "Hash abcdefghijklm"),
+        "painted the 13-character hash line: {open}"
+    );
+    assert!(
+        !open.lines().any(|line| line == "Hash abcdef...hijklmn"),
+        "painted the 14-character shortened hash line: {open}"
+    );
+
+    let closed = block_details_markup(&body, false);
+    assert!(
+        !closed.lines().any(|line| line == LINE),
+        "closed details painted {LINE}: {closed}"
+    );
+}

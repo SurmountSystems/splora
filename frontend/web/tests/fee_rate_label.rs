@@ -1,10 +1,11 @@
 //! Fee rate label on the transaction row from `GET /tx/:txid`.
 //!
 //! Angular paints the label Fee rate beside `tx.fee / (tx.weight / 4)`.
-//! The value cell stays the existing rate. Weight under 4 has virtual
-//! size 0, so the rate and the label stay off. A missing fee key or JSON
-//! null fails the transaction parse and does not paint Fee rate. Script
-//! hex, asm, scriptsig, and witness stay off the page.
+//! The value cell stays the existing rate. A finite rate paints the bare
+//! whole line `Fee rate` and does not paint `sat/vB`. Weight under 4 has
+//! virtual size 0, so the rate and the label stay off. A missing fee key
+//! or JSON null fails the transaction parse and does not paint Fee rate.
+//! Script hex, asm, scriptsig, and witness stay off the page.
 
 use splora_web::transaction_row_markup;
 
@@ -58,12 +59,22 @@ fn assert_scripts_stay_off(markup: &str) {
     assert_absent(markup, "sat/vB");
 }
 
+fn assert_sat_per_vb_stays_off(markup: &str) {
+    assert_absent(markup, "sat/vB");
+}
+
 #[test]
 fn finite_rate_paints_the_label_beside_the_number() {
     let markup = transaction_row_markup(&tx(r#","fee":584"#, 572));
     let number = rate_cell(584, 572);
+    assert_absent(&markup, "sat/vB");
     assert_one(&markup, LABEL);
     assert_one(&markup, &number);
+    assert!(
+        markup.lines().any(|line| line == "Fee rate"),
+        "bare Fee rate was dropped: {markup}"
+    );
+    // The label cell and the bare line each contain the words.
     assert_eq!(markup.matches("Fee rate").count(), 2, "{markup}");
     assert_absent(&number, "Fee rate");
     assert_scripts_stay_off(&markup);
@@ -72,8 +83,14 @@ fn finite_rate_paints_the_label_beside_the_number() {
 #[test]
 fn fee_zero_still_paints_the_label() {
     let markup = transaction_row_markup(&tx(r#","fee":0"#, 4));
+    assert_absent(&markup, "sat/vB");
     assert_one(&markup, LABEL);
     assert_one(&markup, &rate_cell(0, 4));
+    assert!(
+        markup.lines().any(|line| line == "Fee rate"),
+        "bare Fee rate was dropped: {markup}"
+    );
+    // The label cell and the bare line each contain the words.
     assert_eq!(markup.matches("Fee rate").count(), 2, "{markup}");
     assert_scripts_stay_off(&markup);
 }
@@ -84,6 +101,7 @@ fn weight_zero_omits_the_label() {
     assert!(markup.contains("<tr class=\"tx-row\">"), "{markup}");
     assert_absent(&markup, "Fee rate");
     assert_absent(&markup, "fee-rate");
+    assert_sat_per_vb_stays_off(&markup);
     assert_scripts_stay_off(&markup);
 }
 
@@ -93,6 +111,7 @@ fn weight_under_four_omits_the_label() {
     assert!(markup.contains("<tr class=\"tx-row\">"), "{markup}");
     assert_absent(&markup, "Fee rate");
     assert_absent(&markup, "fee-rate");
+    assert_sat_per_vb_stays_off(&markup);
     assert_scripts_stay_off(&markup);
 }
 
@@ -102,6 +121,7 @@ fn missing_fee_key_omits_the_label() {
     assert_absent(&markup, "Fee rate");
     assert_absent(&markup, "fee-rate");
     assert_absent(&markup, "<tr class=\"tx-row\">");
+    assert_sat_per_vb_stays_off(&markup);
     assert_scripts_stay_off(&markup);
 }
 
@@ -111,6 +131,7 @@ fn null_fee_omits_the_label() {
     assert_absent(&markup, "Fee rate");
     assert_absent(&markup, "fee-rate");
     assert_absent(&markup, "<tr class=\"tx-row\">");
+    assert_sat_per_vb_stays_off(&markup);
     assert_scripts_stay_off(&markup);
 }
 
@@ -129,5 +150,42 @@ fn fee_rate_paints_fee_rate_as_its_own_line() {
         markup.lines().filter(|line| *line == LINE).count(),
         1,
         "Fee rate was not painted once: {markup}"
+    );
+    assert_absent(&markup, "sat/vB");
+}
+
+/// Fee 1 and weight 7 is a finite rate. The bare line `Fee rate` stays.
+/// `sat/vB` stays off.
+#[test]
+fn gpui_whole_line_fee_rate_0_57_sat_per_vb() {
+    let markup = transaction_row_markup(&tx(r#","fee":1"#, 7));
+    assert_absent(&markup, "sat/vB");
+    assert!(
+        markup.lines().any(|line| line == "Fee rate"),
+        "bare Fee rate was dropped: {markup}"
+    );
+}
+
+/// Fee 15 and weight 4 is a finite rate. The bare line `Fee rate` stays.
+/// `sat/vB` stays off.
+#[test]
+fn gpui_whole_line_fee_rate_15_0_sat_per_vb() {
+    let markup = transaction_row_markup(&tx(r#","fee":15"#, 4));
+    assert_absent(&markup, "sat/vB");
+    assert!(
+        markup.lines().any(|line| line == "Fee rate"),
+        "bare Fee rate was dropped: {markup}"
+    );
+}
+
+/// Fee 1500 and weight 4 is a finite rate. The bare line `Fee rate` stays.
+/// `sat/vB` stays off.
+#[test]
+fn gpui_whole_line_fee_rate_1_500_sat_per_vb() {
+    let markup = transaction_row_markup(&tx(r#","fee":1500"#, 4));
+    assert_absent(&markup, "sat/vB");
+    assert!(
+        markup.lines().any(|line| line == "Fee rate"),
+        "bare Fee rate was dropped: {markup}"
     );
 }

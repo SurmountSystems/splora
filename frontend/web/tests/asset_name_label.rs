@@ -157,3 +157,99 @@ fn non_liquid_markup_omits_the_name_row() {
     assert!(markup.is_empty(), "{markup}");
     assert_no_name_row(&markup);
 }
+
+/// GPUI whole line `asset name Test Asset` on the issued asset screen.
+///
+/// Native `asset_screen_paints_name` requires that line when
+/// `issued_name_document` sets name `Test Asset` and ticker `TEST`.
+/// This calls `asset_markup` with that same issued document.
+#[test]
+fn asset_name_test_asset_whole_line_is_required() {
+    let document = issued_document(Field::Text("Test Asset"), Field::Text("TEST"));
+    let markup = asset_markup(&document, "[]", true);
+    assert!(
+        markup.lines().any(|line| line == "asset name Test Asset"),
+        "no line equals asset name Test Asset: {markup}"
+    );
+}
+
+/// GPUI whole line `ticker TEST` on the issued asset screen.
+///
+/// Native `asset_screen_paints_name` requires that line when
+/// `issued_name_document` sets name `Test Asset` and ticker `TEST`
+/// (`AssetNameField::Text` for both). `asset_name_ticker` keeps the pair
+/// only when both strings are present and non-empty, and the screen paints
+/// `ticker {ticker}` only then. A missing, null, or empty ticker, a missing
+/// name, a pegged asset, and a non-liquid call omit the line.
+#[test]
+fn ticker_test_whole_line_is_required() {
+    let document = issued_document(Field::Text("Test Asset"), Field::Text("TEST"));
+    let markup = asset_markup(&document, "[]", true);
+    let opened = page(ISSUED, &document);
+    assert_eq!(opened, markup);
+    assert!(
+        markup.lines().any(|line| line == "ticker TEST"),
+        "no line equals ticker TEST: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == "ticker TEST").count(),
+        1,
+        "ticker TEST was not one line: {markup}"
+    );
+
+    let whitespace_name = issued_document(Field::Text("   "), Field::Text("TEST"));
+    let whitespace_name_paint = asset_markup(&whitespace_name, "[]", true);
+    assert!(
+        whitespace_name_paint
+            .lines()
+            .any(|line| line == "ticker TEST"),
+        "a non-empty whitespace name dropped ticker TEST: {whitespace_name_paint}"
+    );
+
+    for (name, ticker) in [
+        (Field::Text("OnlyName"), Field::Omit),
+        (Field::Text("OnlyName"), Field::Null),
+        (Field::Text("OnlyName"), Field::Text("")),
+        (Field::Text("OnlyName"), Field::Text("   ")),
+        (Field::Omit, Field::Text("TEST")),
+        (Field::Null, Field::Text("TEST")),
+        (Field::Text(""), Field::Text("TEST")),
+    ] {
+        let host = issued_document(name, ticker);
+        let paint = asset_markup(&host, "[]", true);
+        assert!(
+            !paint.lines().any(|line| line == "ticker TEST"),
+            "ticker TEST painted without a non-empty name and ticker TEST: {paint}"
+        );
+    }
+
+    let pegged = asset_markup(&pegged_document(), "[]", true);
+    assert!(
+        !pegged.lines().any(|line| line == "ticker TEST"),
+        "a pegged asset painted ticker TEST: {pegged}"
+    );
+    assert!(
+        asset_markup(&document, "[]", false)
+            .lines()
+            .all(|line| line != "ticker TEST"),
+        "a non-liquid call painted ticker TEST"
+    );
+}
+
+/// GPUI whole line `Name Test Asset (TEST)` on the issued asset screen.
+///
+/// Native `asset_screen_paints_name` requires that line when
+/// `issued_name_document` sets name `Test Asset` and ticker `TEST`.
+/// This calls `asset_markup` with that same issued document.
+/// The line is that one sentence.
+#[test]
+fn name_test_asset_test_whole_line_is_required() {
+    let document = issued_document(Field::Text("Test Asset"), Field::Text("TEST"));
+    let markup = asset_markup(&document, "[]", true);
+    let opened = page(ISSUED, &document);
+    assert_eq!(opened, markup);
+    assert!(
+        markup.lines().any(|line| line == "Name Test Asset (TEST)"),
+        "no line equals Name Test Asset (TEST): {markup}"
+    );
+}

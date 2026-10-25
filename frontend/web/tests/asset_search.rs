@@ -62,6 +62,7 @@ fn typing_tether_usd_requests_the_query_and_opens_one_suggestion_window() {
     let one = asset_search_markup(query, &tether_hit(), true).expect("one suggestion window");
     assert_eq!(windows(&one), 1, "{one}");
     assert_eq!(one.matches("suggestion window").count(), 1, "{one}");
+    assert!(one.lines().any(|line| line == "Liquid Asset"), "{one}");
     assert!(one.contains("Tether USD"), "{one}");
     assert!(one.contains("USDt"), "{one}");
     assert!(!one.contains("Liquid AUD"), "{one}");

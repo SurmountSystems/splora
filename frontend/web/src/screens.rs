@@ -860,6 +860,33 @@ fn test_line(result: &TestTxResult) -> String {
             line.push_str(reason);
         }
     }
+    // GPUI whole line. The piece line above stays. Reject-reason comes
+    // before fee, and the rate token uses an underscore.
+    line.push('\n');
+    line.push_str(&gpui_test_line(result));
+    line
+}
+
+/// One whole line for every test-transaction result. Same fields as
+/// `test_line`, in the GPUI order: `test txid`, allowed, reject-reason, then
+/// `fee` and `effective_feerate`.
+fn gpui_test_line(result: &TestTxResult) -> String {
+    let allowed = result.allowed.map(yes_no).unwrap_or("");
+    let mut line = format!("test txid {} allowed {allowed}", result.txid);
+    if let Some(reason) = result
+        .reject_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    {
+        line.push_str(" reject-reason ");
+        line.push_str(reason);
+    }
+    if let Some(fees) = &result.fees {
+        line.push_str(" fee ");
+        line.push_str(&plain_number(fees.base));
+        line.push_str(" effective_feerate ");
+        line.push_str(&plain_number(fees.effective_feerate));
+    }
     line
 }
 

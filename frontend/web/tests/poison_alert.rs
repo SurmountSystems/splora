@@ -2,7 +2,7 @@
 //!
 //! The split lives in the shared crate. This page only paints the spans.
 
-use splora_web::poison_alert_markup;
+use splora_web::{poison_alert_markup, transaction_row_markup};
 
 const WARNING: &str = "Warning! This transaction involves deceptively similar addresses. It may be an address poisoning attack.";
 
@@ -146,7 +146,6 @@ fn bech32_input_and_output_show_postfix_6p6e3r() {
     );
 }
 
-#[test]
 /// Whole line from the Angular poison warning on no-query `GET /tx/:txid`.
 ///
 /// GPUI `transaction_screen_paints_poison_attack_warning` requires one line
@@ -190,6 +189,74 @@ fn similar_addresses_paint_the_poison_warning_as_its_own_line() {
             .lines()
             .any(|line| line == WARNING),
         "dissimilar addresses painted {WARNING}"
+    );
+}
+
+/// Whole line from GPUI `transaction_screen_paints_poison_attack_warning`.
+///
+/// Two lookalike outputs paint one line equal to
+/// `poison prefix bc1qlook infix aaa infix XY`. That line is not the
+/// warning sentence.
+#[test]
+fn lookalike_outputs_paint_the_poison_prefix_as_its_own_line() {
+    let body = transaction(
+        "look",
+        &input(&output("p2pkh", "1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF")),
+        &format!(
+            "{},{}",
+            output("v0_p2wpkh", "bc1qlookaaa"),
+            output("v0_p2wpkh", "bc1qlookXY"),
+        ),
+    );
+    let markup = poison_alert_markup(&body, "mainnet");
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "poison prefix bc1qlook infix aaa infix XY"),
+        "poison prefix bc1qlook infix aaa infix XY is absent: {markup}"
+    );
+}
+
+/// Shorter poison warning from GPUI `transaction_screen_paints_poison_attack_warning`.
+///
+/// Two lookalike outputs (`bc1qlookaaa`, `bc1qlookXY`) and one unrelated
+/// input paint one line equal to that sentence. One output does not.
+/// This calls `transaction_row_markup`. The alert spans stay on
+/// `poison_alert_markup`.
+#[test]
+fn transaction_row_paints_poison_attack_warning() {
+    const LINE: &str = "Warning! This transaction involves deceptively similar addresses.";
+    const TXID: &str = "poisonwarn";
+
+    fn vout(address: &str, value: u64) -> String {
+        format!(
+            r#"{{"scriptpubkey":"0014aa","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"{address}","value":{value}}}"#
+        )
+    }
+
+    fn body(vout_json: &str) -> String {
+        let vin = r#"{"txid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","vout":0,"prevout":{"scriptpubkey":"0014bb","scriptpubkey_asm":"OP_0","scriptpubkey_type":"v0_p2wpkh","scriptpubkey_address":"bc1qunrelated","value":8},"scriptsig":"","scriptsig_asm":"","is_coinbase":false,"sequence":4294967295}"#;
+        format!(
+            r#"{{"txid":"{TXID}","version":1,"locktime":0,"vin":[{vin}],"vout":[{vout_json}],"size":10,"weight":40,"sigops":0,"fee":1,"status":{{"confirmed":false}}}}"#
+        )
+    }
+
+    let pair = format!("{},{}", vout("bc1qlookaaa", 3), vout("bc1qlookXY", 4));
+    let markup = transaction_row_markup(&body(&pair));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not painted once: {markup}"
+    );
+
+    let alone = transaction_row_markup(&body(&vout("bc1qonlyone", 3)));
+    assert!(
+        !alone.lines().any(|line| line == LINE),
+        "one output painted {LINE}: {alone}"
     );
 }
 

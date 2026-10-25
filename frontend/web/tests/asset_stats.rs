@@ -323,6 +323,10 @@ fn issued_asset_paints_issued_amount_5000() {
     let markup = page(ISSUED, &document);
     assert_eq!(markup.matches(LINE).count(), 1, "{markup}");
     assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert!(
         markup.contains("<tr><td>Issued amount</td><td>5000</td></tr>"),
         "{markup}"
     );
@@ -847,6 +851,10 @@ fn pegged_asset_paints_pegged_in_1000() {
     let document = pegged_document(1000, 200, 50, 777_777, 666_666, 555_555);
     let markup = page(NATIVE_ASSET, &document);
     assert_eq!(markup.matches(LINE).count(), 1, "{markup}");
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
     assert!(
         markup.contains("<tr><td>Pegged in</td><td>1000</td></tr>"),
         "{markup}"

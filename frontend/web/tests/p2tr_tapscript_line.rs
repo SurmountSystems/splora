@@ -1,8 +1,11 @@
 //! Whole line `P2TR tapscript` on the transaction input from `GET /tx/:txid`.
 //!
 //! GPUI requires one line whose entire text is `P2TR tapscript` when
-//! `vin.prevout.scriptpubkey_type` is `v1_p2tr`. The span stays. Any other
-//! prevout type, a missing prevout, and a P2SH redeem input omit that line.
+//! `vin.prevout.scriptpubkey_type` is `v1_p2tr`. The same input also requires
+//! one line whose entire text is `Previous output type V1_P2TR`. That line is
+//! not `Previous output type V0_P2WSH`, and not a bare `V1_P2TR`, `p2tr`, or
+//! `MULTISIG`. The spans stay. Any other prevout type, a missing prevout, and
+//! a P2SH redeem input omit both lines.
 
 use splora_web::{transaction_requests, transaction_row_markup};
 
@@ -59,11 +62,41 @@ fn v1_p2tr_input_paints_p2tr_tapscript_as_its_own_line() {
         "{LINE} was inside a span: {markup}"
     );
     assert_eq!(markup.matches(LABEL_SPAN).count(), 1, "{markup}");
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == "Previous output type V1_P2TR"),
+        "Previous output type was dropped: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WSH"),
+        "a v1_p2tr prevout painted Previous output type V0_P2WSH: {markup}"
+    );
+    for bare in ["V1_P2TR", "p2tr", "MULTISIG"] {
+        assert!(
+            !markup.lines().any(|line| line == bare),
+            "a bare token was painted as a substitute: {bare}: {markup}"
+        );
+    }
 
     let other = paint(&tx(&prevout("v0_p2wsh"), "p2pkh", ""));
     assert!(
         !other.lines().any(|line| line == LINE),
         "a v0_p2wsh prevout painted {LINE}: {other}"
+    );
+    assert!(
+        other
+            .lines()
+            .any(|line| line == "Previous output type V0_P2WSH"),
+        "Previous output type V0_P2WSH was dropped: {other}"
+    );
+    assert!(
+        !other
+            .lines()
+            .any(|line| line == "Previous output type V1_P2TR"),
+        "a v0_p2wsh prevout painted Previous output type V1_P2TR: {other}"
     );
 
     let redeem = format!(r#","inner_redeemscript_asm":"OP_DUP OP_HASH160""#);
@@ -83,5 +116,37 @@ fn v1_p2tr_input_paints_p2tr_tapscript_as_its_own_line() {
     assert!(
         !output_only.lines().any(|line| line == LINE),
         "a v1_p2tr output painted {LINE}: {output_only}"
+    );
+    assert!(
+        !output_only
+            .lines()
+            .any(|line| line == "Previous output type V1_P2TR"),
+        "a p2pkh prevout painted Previous output type V1_P2TR: {output_only}"
+    );
+}
+
+/// Whole line `Type V1_P2TR` when `vout.scriptpubkey_type` is `v1_p2tr`.
+///
+/// Native `paint_p2tr("p2trout", Some("v0_p2wpkh"), true, None, "v1_p2tr")`
+/// requires one line equal to `Type V1_P2TR`. The prevout type `v1_p2tr`
+/// is `Previous output type V1_P2TR` and `P2TR tapscript`, not this line.
+/// The address badge `Type P2TR` is a `bc1p` string with no type field.
+/// An output whose script type is the word `p2tr` does not get this line.
+#[test]
+fn v1_p2tr_output_paints_type_v1_p2tr_whole_line() {
+    let markup = paint(&tx(&prevout("v0_p2wpkh"), "v1_p2tr", ""));
+    assert!(
+        markup.lines().any(|line| line == "Type V1_P2TR"),
+        "the output type line was dropped: {markup}"
+    );
+    let p2tr_output = paint(&tx(&prevout("v0_p2wpkh"), "p2tr", ""));
+    assert!(
+        !p2tr_output.lines().any(|line| line == "Type V1_P2TR"),
+        "a p2tr output painted Type V1_P2TR: {p2tr_output}"
+    );
+    let input_only = paint(&tx(&prevout("v1_p2tr"), "p2pkh", ""));
+    assert!(
+        !input_only.lines().any(|line| line == "Type V1_P2TR"),
+        "a v1_p2tr input painted Type V1_P2TR: {input_only}"
     );
 }

@@ -44,6 +44,10 @@ fn issued_asset_paints_precision_2() {
     let markup = paint(Some(2));
     assert_eq!(markup.matches(LINE).count(), 1, "{markup}");
     assert!(
+        markup.lines().any(|line| line == LINE),
+        "no line equals {LINE}: {markup}"
+    );
+    assert!(
         markup.contains("<tr><td>Precision</td><td>2</td></tr>"),
         "{markup}"
     );

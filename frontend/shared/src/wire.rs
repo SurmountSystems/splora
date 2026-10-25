@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 /// value is the JSON object the indexer already emits. There is no elements
 /// crate and no unblinding. `nonce`, `bits`, and `difficulty` are omitted on
 /// a liquid build. A missing key or JSON null is `None`, not zero. Explicit
-/// `0` / `0.0` stays `Some`.
+/// `0` / `0.0` stays `Some`. `stale` is omitted on an ordinary block. A
+/// missing key or JSON null is not stale. JSON `true` is the stale heading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Block {
     pub id: String,
@@ -40,6 +41,23 @@ pub struct Block {
     pub difficulty: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ext: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale: Option<bool>,
+}
+
+/// JSON array of blocks. An element that does not deserialize is dropped.
+///
+/// A missing `height`, JSON null, or any other mismatch drops that element
+/// and keeps the rest. A body that is not a JSON array returns the strict
+/// `Vec<Block>` error.
+pub fn blocks_keeping_valid_elements(body: &str) -> Result<Vec<Block>, serde_json::Error> {
+    match serde_json::from_str::<serde_json::Value>(body)? {
+        serde_json::Value::Array(elements) => Ok(elements
+            .into_iter()
+            .filter_map(|element| serde_json::from_value(element).ok())
+            .collect()),
+        _ => serde_json::from_str(body),
+    }
 }
 
 /// `TransactionStatus` in `src/util/transaction.rs`.
@@ -332,10 +350,13 @@ pub struct TestTxFees {
 ///
 /// `MempoolAcceptResult` in `src/daemon.rs`. `reject-reason` is optional:
 /// an allowed row often omits it, and a missing key still deserializes.
+/// `wtxid` is optional the same way. A missing key is `None`, not a copy
+/// of `txid`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TestTxResult {
     pub txid: String,
-    pub wtxid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wtxid: Option<String>,
     #[serde(default)]
     pub allowed: Option<bool>,
     #[serde(default)]
@@ -631,7 +652,7 @@ mod tests {
         let rows: Vec<TestTxResult> = assert_round_trip(&fixture("test_tx.json"));
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].txid, "test-tx-1");
-        assert_eq!(rows[0].wtxid, "test-wtxid-1");
+        assert_eq!(rows[0].wtxid.as_deref(), Some("test-wtxid-1"));
         assert_eq!(rows[0].allowed, Some(false));
         assert_eq!(rows[0].vsize, Some(141));
         assert_eq!(
@@ -652,5 +673,11 @@ mod tests {
             serde_json::from_str(r#"{"txid":"bad-tx","wtxid":"bad-wtxid","allowed":false}"#)
                 .expect("absent reject-reason still deserializes");
         assert_eq!(rejected_without_reason.reject_reason, None);
+        assert_eq!(rejected_without_reason.wtxid.as_deref(), Some("bad-wtxid"));
+
+        let txid_only: TestTxResult =
+            serde_json::from_str(r#"{"txid":"only-txid"}"#).expect("missing wtxid");
+        assert_eq!(txid_only.txid, "only-txid");
+        assert_eq!(txid_only.wtxid, None);
     }
 }

@@ -159,7 +159,12 @@ fn issuance_without_prevout_does_not_paint_unknown() {
     );
     let markup = transaction_row_markup(&tx(&null_prevout(false, &extra)));
     assert_absent(&markup, "UNKNOWN");
-    assert_one(&markup, &format!("issuance asset {ASSET_ID}"));
+    let asset = format!("issuance asset {ASSET_ID}");
+    assert_eq!(
+        markup.matches(&asset).count(),
+        2,
+        "expected two {asset} in {markup}"
+    );
     assert_sentinels_stay_off(&markup);
 }
 

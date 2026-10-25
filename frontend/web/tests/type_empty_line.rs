@@ -1,15 +1,18 @@
 //! Output script type `empty` from `GET /tx/:txid`.
 //!
 //! A nonempty `vout.scriptpubkey_type` of `empty` paints one markup line
-//! whose entire text is `Type EMPTY`. An empty string, a missing key, and
-//! JSON null omit that line. The Type cell stays `EMPTY`. The path has no
-//! query string. A span that contains the words is not that line.
+//! whose entire text is `Type EMPTY`, and one markup line whose entire text
+//! is `output script type empty`. An empty string, a missing key, and JSON
+//! null omit those lines. The Type cell stays `EMPTY`. The path has no query
+//! string. A span that contains the words is not that line. The bare lines
+//! `empty` and `EMPTY` stay off.
 
 use splora_web::{transaction_requests, transaction_row_markup};
 
 const TXID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PREV: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const LINE: &str = "Type EMPTY";
+const SCRIPT_LINE: &str = "output script type empty";
 const TYPE_VALUE: &str = "<span class=\"output-type\">EMPTY</span>";
 const TYPE_LABEL: &str = "<span class=\"output-type-label\">Type</span>";
 
@@ -50,6 +53,27 @@ fn empty_output_type_paints_type_empty_as_its_own_line() {
     assert_eq!(markup.matches(LINE).count(), 1, "{markup}");
     assert_eq!(markup.matches(TYPE_VALUE).count(), 1, "{markup}");
     assert_eq!(markup.matches(TYPE_LABEL).count(), 1, "{markup}");
+    assert!(
+        markup.lines().any(|line| line == SCRIPT_LINE),
+        "no line equals output script type empty: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == SCRIPT_LINE).count(),
+        1,
+        "scriptpubkey_type empty did not paint the exact line output script type empty once: {markup}"
+    );
+    assert!(
+        markup
+            .lines()
+            .any(|line| line == SCRIPT_LINE && !line.contains('<')),
+        "output script type empty was inside a span: {markup}"
+    );
+    assert!(
+        !markup
+            .lines()
+            .any(|line| line == "empty" || line == "EMPTY"),
+        "a bare type token was painted: {markup}"
+    );
 
     let blank = paint(&tx(&output(r#""scriptpubkey_type":"","#)));
     assert!(
@@ -57,6 +81,10 @@ fn empty_output_type_paints_type_empty_as_its_own_line() {
         "a blank type painted {LINE}: {blank}"
     );
     assert!(!blank.contains(LINE), "{blank}");
+    assert!(
+        !blank.lines().any(|line| line == SCRIPT_LINE),
+        "a blank type painted {SCRIPT_LINE}: {blank}"
+    );
 
     let missing = paint(&tx(&output("")));
     assert!(
@@ -64,6 +92,10 @@ fn empty_output_type_paints_type_empty_as_its_own_line() {
         "a missing type painted {LINE}: {missing}"
     );
     assert!(!missing.contains(LINE), "{missing}");
+    assert!(
+        !missing.lines().any(|line| line == SCRIPT_LINE),
+        "a missing type painted {SCRIPT_LINE}: {missing}"
+    );
 
     let null = paint(&tx(&output(r#""scriptpubkey_type":null,"#)));
     assert!(
@@ -71,4 +103,8 @@ fn empty_output_type_paints_type_empty_as_its_own_line() {
         "a JSON null type painted {LINE}: {null}"
     );
     assert!(!null.contains(LINE), "{null}");
+    assert!(
+        !null.lines().any(|line| line == SCRIPT_LINE),
+        "a JSON null type painted {SCRIPT_LINE}: {null}"
+    );
 }

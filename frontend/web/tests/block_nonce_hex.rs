@@ -199,3 +199,65 @@ fn open_block_details_paint_nonce_label_hex() {
         "{closed}"
     );
 }
+
+/// Whole line `Nonce 0x00000000` from no-query `GET /block/:hash` when details are open.
+///
+/// Capital N. This is not `nonce 0 0x00000000` and not `bits 0 0x00000000`.
+/// The decimal stays in the Nonce cell and on the raw nonce line. Closed details omit this line.
+#[test]
+fn open_block_details_paint_nonce_0_label_hex() {
+    const RAW: &str = "nonce 0 0x00000000";
+    let id = "noncelabel0";
+    assert!(!id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    assert!(!id.contains('?') && !id.contains('#'), "{id}");
+    let plan = block_load_plan(id, None);
+    assert!(
+        plan.iter()
+            .any(|req| req.method == "GET" && req.path == format!("/block/{id}")),
+        "{plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .all(|req| !req.path.contains('?') && !req.path.contains('#')),
+        "{plan:?}"
+    );
+
+    let open = block_details_markup(&block_json("0"), true);
+    assert!(
+        open.lines().any(|line| line == "Nonce 0x00000000"),
+        "nonce 0 did not paint Nonce 0x00000000: {open}"
+    );
+    assert_eq!(
+        open.lines()
+            .filter(|line| *line == "Nonce 0x00000000")
+            .count(),
+        1,
+        "Nonce 0x00000000 was not one line: {open}"
+    );
+    assert!(
+        open.lines().any(|line| line == RAW),
+        "raw {RAW} was dropped: {open}"
+    );
+    assert!(
+        !open.lines().any(|line| line == "bits 0 0x00000000"),
+        "bits 0 was painted in place of Nonce: {open}"
+    );
+    assert!(
+        open.lines().any(|line| line == "bits 386547056 0x170a3d70"),
+        "bits 386547056 0x170a3d70 was dropped: {open}"
+    );
+    assert!(
+        open.contains("<tr><td>Nonce</td><td>0</td><td class=\"nonce-hex\">0x00000000</td></tr>"),
+        "{open}"
+    );
+
+    let closed = block_details_markup(&block_json("0"), false);
+    assert!(
+        !closed.lines().any(|line| line == "Nonce 0x00000000"),
+        "closed details painted Nonce 0x00000000: {closed}"
+    );
+    assert!(
+        closed.contains("<tr><td>Nonce</td><td>0</td><td class=\"nonce-hex\">0x00000000</td></tr>"),
+        "{closed}"
+    );
+}

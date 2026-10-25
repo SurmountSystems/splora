@@ -429,17 +429,15 @@ mod opened_window {
 
     #[test]
     fn open_window_shows_shared_fixture_fields() {
-        gpui_platform::application().run(|cx| {
+        // Test-only. Shipping main() still calls application() and maps a real window.
+        gpui_platform::headless().run(|cx| {
             let keys = nostr::key::Keys::generate();
             let npub = nostr::nips::nip19::ToBech32::to_bech32(&keys.public_key())
                 .expect("public key encodes");
             let handle = open_shell(cx, npub, ExplorerClient::new(splora_api::Network::Mainnet, FixtureExplorer::new()))
                 .expect("open window");
-            let compositor = gpui::guess_compositor();
-            assert!(
-                compositor == "X11" || compositor == "Wayland",
-                "shell opened on {compositor}"
-            );
+            let compositor = cx.compositor_name();
+            assert_eq!(compositor, "headless", "shell opened on {compositor}");
             assert!(handle.read(cx).is_ok());
             handle
                 .update(cx, |shell, _window, _cx| {

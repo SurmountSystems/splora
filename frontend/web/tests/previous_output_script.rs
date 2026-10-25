@@ -102,7 +102,12 @@ fn prevout_paints_the_words_once() {
     let markup = paint(&body);
     assert_eq!(markup.matches(LABEL).count(), 2, "{markup}");
     assert_one(&markup, LABEL_SPAN);
-    assert_one(&markup, "Previous output type");
+    // The label span and the whole line each contain this token.
+    assert_eq!(
+        markup.matches("Previous output type").count(),
+        2,
+        "{markup}"
+    );
     assert_sentinels_stay_off(&markup);
 }
 

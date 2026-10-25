@@ -84,6 +84,10 @@ fn weight_over_four_larger_paints_one_hundred() {
 fn sigops_times_five_larger_paints_fifteen() {
     let markup = transaction_row_markup(&tx(8, Sigops::Present(3)));
     assert_one(&markup, &adjusted_cell("15"));
+    assert!(
+        markup.lines().any(|line| line == "Adjusted vsize 15.00"),
+        "Adjusted vsize 15.00 is absent: {markup}"
+    );
     assert_one(&markup, &virtual_cell(2));
     assert_absent(&markup, "Adjusted vsize 2");
     assert_scripts_stay_off(&markup);
@@ -138,5 +142,28 @@ fn weight_twenty_sigops_two_paints_adjusted_vsize_10_00_line() {
         !markup.lines().any(|line| line == "Adjusted vsize 5.00"),
         "weight 20 painted the weight side: {markup}"
     );
+    assert_scripts_stay_off(&markup);
+}
+
+/// Whole line `Adjusted vsize 15.00` from weight 8 and sigops 3.
+///
+/// `max(8 / 4, 3 * 5)` is 15, then two decimal places. The adjusted-vsize
+/// cell stays `Adjusted vsize 15`.
+#[test]
+fn weight_eight_sigops_three_paints_adjusted_vsize_15_00_line() {
+    const LINE: &str = "Adjusted vsize 15.00";
+    let markup = transaction_row_markup(&tx(8, Sigops::Present(3)));
+    assert!(
+        markup.lines().any(|line| line == LINE),
+        "{LINE} is absent: {markup}"
+    );
+    assert_eq!(
+        markup.lines().filter(|line| *line == LINE).count(),
+        1,
+        "{LINE} was not one line: {markup}"
+    );
+    assert_one(&markup, &adjusted_cell("15"));
+    assert_one(&markup, &virtual_cell(2));
+    assert_absent(&markup, "Adjusted vsize 2");
     assert_scripts_stay_off(&markup);
 }

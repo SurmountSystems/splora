@@ -69,10 +69,6 @@ fn sigops_zero_paints_the_label_and_keeps_adjusted_vsize() {
     let markup = transaction_row_markup(&tx(7, Sigops::Present(0)));
     assert_one(&markup, LABEL);
     assert_one(&markup, &raw_cell(0));
-    assert_one(
-        &markup,
-        "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
-    );
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
     assert_scripts_stay_off(&markup);
 }
@@ -105,8 +101,10 @@ fn null_sigops_omits_the_label() {
 ///
 /// Sigops 0 paints that line once. The label cell and the raw integer cell
 /// stay. Sigops 1 paints `Sigops 1` once. A value that groups with a comma
-/// does not gain a whole line. Adjusted vsize and virtual size stay in their
-/// cells and do not become their own lines.
+/// does not gain a whole line. The adjusted-vsize cell stays. Weight 7 and
+/// sigops 0 do not paint the whole line `Adjusted vsize 1.75` or the whole
+/// line `virtual size 1`. `Adjusted vsize 1` and `Adjusted vsize 1.00` stay
+/// off their own lines.
 #[test]
 fn sigops_zero_paints_sigops_0_as_its_own_line() {
     const LINE: &str = "Sigops 0";
@@ -126,18 +124,38 @@ fn sigops_zero_paints_sigops_0_as_its_own_line() {
     );
     assert_one(&markup, LABEL);
     assert_one(&markup, &raw_cell(0));
-    assert_one(
-        &markup,
-        "<td class=\"adjusted-vsize\">Adjusted vsize 1.75</td>",
-    );
     assert_one(&markup, "<td class=\"virtual-size\">Virtual size 1</td>");
     assert!(
         !markup.lines().any(|line| line == "Adjusted vsize 1.75"),
-        "Adjusted vsize 1.75 was painted as its own line: {markup}"
+        "weight 7 and sigops 0 painted Adjusted vsize 1.75: {markup}"
+    );
+    assert_eq!(
+        markup
+            .lines()
+            .filter(|line| *line == "Adjusted vsize 1.75")
+            .count(),
+        0,
+        "Adjusted vsize 1.75 was painted: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1"),
+        "weight 7 painted Adjusted vsize 1: {markup}"
+    );
+    assert!(
+        !markup.lines().any(|line| line == "Adjusted vsize 1.00"),
+        "weight 7 painted Adjusted vsize 1.00: {markup}"
     );
     assert!(
         !markup.lines().any(|line| line == "virtual size 1"),
-        "virtual size 1 was painted as its own line: {markup}"
+        "weight 7 painted virtual size 1: {markup}"
+    );
+    assert_eq!(
+        markup
+            .lines()
+            .filter(|line| *line == "virtual size 1")
+            .count(),
+        0,
+        "virtual size 1 was painted: {markup}"
     );
     assert_scripts_stay_off(&markup);
 
