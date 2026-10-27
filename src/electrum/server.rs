@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use bitcoin::hashes::{Hash, sha256d::Hash as Sha256dHash};
 use error_chain::ChainedError;
 use hex;
 use ppp::PartialResult;
@@ -471,7 +471,8 @@ impl Connection {
     }
 
     fn blockchain_transaction_get(&self, params: &[Value]) -> Result<Value> {
-        let tx_hash = Txid::from(hash_from_value(params.first()).chain_err(|| "bad tx_hash")?);
+        let hash = hash_from_value(params.first()).chain_err(|| "bad tx_hash")?;
+        let tx_hash = Txid::from_byte_array(hash.to_byte_array());
         let verbose = match params.get(1) {
             Some(value) => value.as_bool().chain_err(|| "non-bool verbose value")?,
             None => false,
@@ -490,7 +491,8 @@ impl Connection {
     }
 
     fn blockchain_transaction_get_merkle(&self, params: &[Value]) -> Result<Value> {
-        let txid = Txid::from(hash_from_value(params.first()).chain_err(|| "bad tx_hash")?);
+        let hash = hash_from_value(params.first()).chain_err(|| "bad tx_hash")?;
+        let txid = Txid::from_byte_array(hash.to_byte_array());
         let height = usize_from_value(params.get(1), "height")?;
         let blockid = self
             .query
@@ -932,12 +934,12 @@ impl Connection {
                     "request line too large ({} bytes, max is {})",
                     line.len(),
                     max_line_size
-                )
+                );
             } else {
                 if line.starts_with(&[22, 3, 1]) {
                     // (very) naive SSL handshake detection
                     let _ = tx.send(Message::Done);
-                    bail!("invalid request - maybe SSL-encrypted data?: {:?}", line)
+                    bail!("invalid request - maybe SSL-encrypted data?: {:?}", line);
                 }
                 match String::from_utf8(line) {
                     Ok(req) => tx
@@ -945,7 +947,7 @@ impl Connection {
                         .chain_err(|| "channel closed")?,
                     Err(err) => {
                         let _ = tx.send(Message::Done);
-                        bail!("invalid UTF8: {}", err)
+                        bail!("invalid UTF8: {}", err);
                     }
                 }
             }
@@ -1061,7 +1063,9 @@ fn handle_http_jsonrpc_value(query: &Query, value: Value) -> Value {
                     }
                 }
                 "blockchain.transaction.get" => {
-                    match hash_from_value(params.first()).map(Txid::from) {
+                    match hash_from_value(params.first())
+                        .map(|hash| Txid::from_byte_array(hash.to_byte_array()))
+                    {
                         Ok(tx_hash) => query
                             .lookup_raw_txn(&tx_hash)
                             .map(|tx| json!(hex::encode(tx)))

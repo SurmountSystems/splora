@@ -1058,6 +1058,7 @@ fn bech32_shape(s: &str, hrp: fn(u8) -> bool, data: fn(u8) -> bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::hashes::Hash;
 
     fn genesis_addr() -> &'static str {
         "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
@@ -1443,10 +1444,9 @@ mod tests {
     }
 
     fn test_block_hash(n: u8) -> BlockHash {
-        use crate::chain::hashes::Hash;
         let mut bytes = [0u8; 32];
         bytes[0] = n;
-        BlockHash::from_raw_hash(crate::chain::hashes::sha256d::Hash::from_byte_array(bytes))
+        BlockHash::from_byte_array(bytes)
     }
 
     fn tracked_tx(txid_byte: &str, height: u64) -> Value {

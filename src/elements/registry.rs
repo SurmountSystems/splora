@@ -119,10 +119,10 @@ impl AssetRegistry {
                     .modified()
                     .chain_err(|| "metadata modified failed")?;
 
-                if let Some((last_update, _)) = self.assets_cache.get(&asset_id) {
-                    if *last_update == modified {
-                        continue;
-                    }
+                if let Some((last_update, _)) = self.assets_cache.get(&asset_id)
+                    && *last_update == modified
+                {
+                    continue;
                 }
 
                 let metadata: AssetMeta = serde_json::from_str(
@@ -207,14 +207,18 @@ impl AssetSorting {
             Some("name") => AssetSortField::Name,
             Some("domain") => AssetSortField::Domain,
             Some("ticker") => AssetSortField::Ticker,
-            _ => bail!("invalid sort field"),
+            _ => {
+                bail!("invalid sort field");
+            }
         };
 
         let dir = match query.get("sort_dir").map(String::as_str) {
             None => AssetSortDir::Ascending,
             Some("asc") => AssetSortDir::Ascending,
             Some("desc") => AssetSortDir::Descending,
-            _ => bail!("invalid sort direction"),
+            _ => {
+                bail!("invalid sort direction");
+            }
         };
 
         Ok(Self(field, dir))

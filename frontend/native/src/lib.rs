@@ -21,5 +21,5 @@ pub use screens::{
     TestTransactionsScreen, TxScreen, known_doc_lines, network_label, notice_from_error,
     open_doc_route, painted_rows, painted_shell_text, resolve_doc_route, transaction_id_in_row,
 };
-pub use signer::{SignedAuth, SignerError, sign_http};
+pub use signer::{IndexerAuthCall, SignedAuth, SignerError, call_indexer_with_signer, sign_http};
 pub use theme::{ACCENT, ACCENT_RGB, BACKGROUND, BACKGROUND_RGB, TEXT, TEXT_RGB};

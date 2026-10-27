@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
-use bitcoin::hashes::{Hash, sha256};
 use elements::confidential::{Asset, Value};
 use elements::encode::{deserialize, serialize};
-use elements::secp256k1_zkp::ZERO_TWEAK;
-use elements::{AssetId, AssetIssuance, OutPoint, Transaction, TxIn, issuance::ContractHash};
+use elements::{
+    AssetId, AssetIssuance, OutPoint, Transaction, TxIn,
+    issuance::{AssetEntropy, ContractHash},
+};
 
 use crate::chain::{BNetwork, BlockHash, Network, Txid};
 use crate::elements::peg::{PeginInfo, PegoutInfo, get_pegin_data, get_pegout_data};
@@ -33,7 +34,8 @@ lazy_static! {
 }
 
 fn parse_asset_id(sl: &[u8]) -> AssetId {
-    AssetId::from_slice(sl).expect("failed to parse AssetId")
+    let bytes: [u8; 32] = sl.try_into().expect("failed to parse AssetId");
+    AssetId::from_byte_array(bytes)
 }
 
 #[derive(Serialize)]
@@ -97,8 +99,10 @@ impl IssuedAsset {
 
         let reissuance_token = parse_asset_id(&asset.reissuance_token);
 
-        let contract_hash = if issuance.asset_entropy != [0u8; 32] {
-            Some(ContractHash::from_byte_array(issuance.asset_entropy))
+        let contract_hash = if issuance.asset_entropy != AssetEntropy::NEW_ISSUANCE {
+            Some(ContractHash::from_byte_array(
+                issuance.asset_entropy.to_byte_array(),
+            ))
         } else {
             None
         };
@@ -201,7 +205,7 @@ pub fn index_confirmed_tx_assets(
     // and once separately under i<asset> for asset lookup with some more associated metadata.
     // reissuances are only kept under the history index.
     rows.extend(issuances.into_iter().map(|(asset_id, asset_row)| DBRow {
-        key: [b"i", &asset_id.into_inner()[..]].concat(),
+        key: [b"i", &asset_id.as_byte_array()[..]].concat(),
         value: bincode_util::serialize_little(&asset_row).unwrap(),
     }));
 }
@@ -251,7 +255,7 @@ fn index_tx_assets(
     let mut history = vec![];
     let mut issuances = vec![];
 
-    let txid = full_hash(&tx.txid()[..]);
+    let txid = full_hash(tx.txid().as_byte_array());
 
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if let Some(pegout) = get_pegout_data(txo, network, parent_network) {
@@ -263,26 +267,26 @@ fn index_tx_assets(
                     value: pegout.value,
                 }),
             ));
-        } else if txo.script_pubkey.is_provably_unspendable_() && !txo.is_fee() {
-            if let (Asset::Explicit(asset_id), Value::Explicit(value)) = (txo.asset, txo.value) {
-                if value > 0 {
-                    history.push((
-                        asset_id,
-                        TxHistoryInfo::Burning(BurningInfo {
-                            txid,
-                            vout: txo_index as u32,
-                            value,
-                        }),
-                    ));
-                }
-            }
+        } else if txo.script_pubkey.is_provably_unspendable_()
+            && !txo.is_fee()
+            && let (Asset::Explicit(asset_id), Value::Explicit(value)) = (txo.asset, txo.value)
+            && value > 0
+        {
+            history.push((
+                asset_id,
+                TxHistoryInfo::Burning(BurningInfo {
+                    txid,
+                    vout: txo_index as u32,
+                    value,
+                }),
+            ));
         }
     }
 
     for (txi_index, txi) in tx.input.iter().enumerate() {
         if let Some(pegin) = get_pegin_data(txi, network) {
             history.push((
-                pegin.asset,
+                pegin.asset_id,
                 TxHistoryInfo::Pegin(PeginInfo {
                     txid,
                     vin: txi_index as u32,
@@ -290,7 +294,7 @@ fn index_tx_assets(
                 }),
             ));
         } else if txi.has_issuance() {
-            let is_reissuance = txi.asset_issuance.asset_blinding_nonce != ZERO_TWEAK;
+            let is_reissuance = !txi.asset_issuance.asset_blinding_nonce.is_null();
 
             let asset_entropy = get_issuance_entropy(txi).expect("invalid issuance");
             let asset_id = AssetId::from_entropy(asset_entropy);
@@ -328,10 +332,10 @@ fn index_tx_assets(
                     AssetRow {
                         issuance_txid: txid,
                         issuance_vin: txi_index as u32,
-                        prev_txid: full_hash(&txi.previous_output.txid[..]),
+                        prev_txid: full_hash(txi.previous_output.txid.as_byte_array()),
                         prev_vout: txi.previous_output.vout,
                         issuance: serialize(&txi.asset_issuance),
-                        reissuance_token: full_hash(&reissuance_token.into_inner()[..]),
+                        reissuance_token: full_hash(reissuance_token.as_byte_array()),
                     },
                 ));
             }
@@ -349,7 +353,7 @@ fn asset_history_row(
 ) -> TxHistoryRow {
     let key = TxHistoryKey {
         code: b'I',
-        hash: full_hash(&asset_id.into_inner()[..]),
+        hash: full_hash(asset_id.as_byte_array()),
         confirmed_height,
         tx_position,
         txinfo,
@@ -383,7 +387,7 @@ pub fn lookup_asset(
     let mempool_issuances = &mempool.asset_issuance;
 
     let chain_row = history_db
-        .get(&[b"i", &asset_id.into_inner()[..]].concat())
+        .get(&[b"i", &asset_id.as_byte_array()[..]].concat())
         .map(|row| {
             bincode_util::deserialize_little::<AssetRow>(&row).expect("failed parsing AssetRow")
         });
@@ -413,20 +417,19 @@ pub fn lookup_asset(
     })
 }
 
-pub fn get_issuance_entropy(txin: &TxIn) -> Result<sha256::Midstate> {
+pub fn get_issuance_entropy(txin: &TxIn) -> Result<AssetEntropy> {
     if !txin.has_issuance() {
         bail!("input has no issuance");
     }
 
-    let is_reissuance = txin.asset_issuance.asset_blinding_nonce != ZERO_TWEAK;
+    let is_reissuance = !txin.asset_issuance.asset_blinding_nonce.is_null();
 
     Ok(if !is_reissuance {
-        let contract_hash = ContractHash::from_slice(&txin.asset_issuance.asset_entropy)
-            .chain_err(|| "invalid entropy (contract hash)")?;
+        let contract_hash =
+            ContractHash::from_byte_array(txin.asset_issuance.asset_entropy.to_byte_array());
         AssetId::generate_asset_entropy(txin.previous_output, contract_hash)
     } else {
-        sha256::Midstate::from_slice(&txin.asset_issuance.asset_entropy)
-            .chain_err(|| "invalid entropy (reissuance)")?
+        txin.asset_issuance.asset_entropy
     })
 }
 
@@ -459,7 +462,7 @@ pub struct PeggedAssetStats {
 type AssetStatApplyFn<T> = fn(&TxHistoryInfo, &mut T, &mut HashSet<Txid>);
 
 fn asset_cache_key(asset_id: &AssetId) -> Bytes {
-    [b"z", &asset_id.into_inner()[..]].concat()
+    [b"z", &asset_id.as_byte_array()[..]].concat()
 }
 
 fn asset_cache_row<T>(asset_id: &AssetId, stats: &T, blockhash: &BlockHash) -> DBRow
@@ -546,7 +549,7 @@ fn chain_asset_stats_delta<T>(
     apply_fn: AssetStatApplyFn<T>,
 ) -> (T, Option<BlockHash>) {
     let history_iter = chain
-        .history_iter_scan(b'I', &asset_id.into_inner()[..], start_height)
+        .history_iter_scan(b'I', &asset_id.as_byte_array()[..], start_height)
         .map(TxHistoryRow::from_row)
         .filter_map(|history| {
             chain

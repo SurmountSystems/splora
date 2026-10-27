@@ -1,14 +1,14 @@
-use elements::hex::ToHex;
+use bitcoin::hashes::Hash;
 use elements::{PeginData, PegoutData, TxIn, TxOut, confidential::Asset};
 
 use crate::chain::{BNetwork, Network, bitcoin_genesis_hash};
 use crate::util::FullHash;
 
-pub fn get_pegin_data(txout: &TxIn, network: Network) -> Option<PeginData<'_>> {
+pub fn get_pegin_data(txout: &TxIn, network: Network) -> Option<PeginData> {
     let pegged_asset_id = network.pegged_asset()?;
     txout.pegin_data().and_then(|pegin| {
-        if pegin.asset == *pegged_asset_id {
-            Some(pegin)
+        if pegin.asset_id == *pegged_asset_id {
+            Some(pegin.clone())
         } else {
             None
         }
@@ -21,20 +21,14 @@ pub fn get_pegout_data(
     parent_network: BNetwork,
 ) -> Option<PegoutData<'_>> {
     let pegged_asset_id = network.pegged_asset()?;
-    txout.pegout_data().and_then(|pegout| {
-        if pegout.asset == Asset::Explicit(*pegged_asset_id)
-            && pegout.genesis_hash
-                == bitcoin_genesis_hash(match parent_network {
-                    BNetwork::Bitcoin => Network::Liquid,
-                    BNetwork::Testnet | BNetwork::Testnet4 => Network::LiquidTestnet,
-                    BNetwork::Signet => return None,
-                    BNetwork::Regtest => Network::LiquidRegtest,
-                })
-        {
-            Some(pegout)
-        } else {
-            None
-        }
+    let genesis_hash = bitcoin_genesis_hash(match parent_network {
+        BNetwork::Bitcoin => Network::Liquid,
+        BNetwork::Testnet | BNetwork::Testnet4 => Network::LiquidTestnet,
+        BNetwork::Signet => return None,
+        BNetwork::Regtest => Network::LiquidRegtest,
+    });
+    txout.pegout_data().filter(|pegout| {
+        pegout.asset == Asset::Explicit(*pegged_asset_id) && pegout.genesis_hash == genesis_hash
     })
 }
 
@@ -57,7 +51,7 @@ impl PegoutValue {
         let address = bitcoin::Address::from_script(&scriptpubkey, parent_network).ok();
 
         Some(PegoutValue {
-            genesis_hash: pegoutdata.genesis_hash.to_hex(),
+            genesis_hash: hex::encode(pegoutdata.genesis_hash.as_byte_array()),
             scriptpubkey_asm: scriptpubkey.to_asm_string(),
             scriptpubkey_address: address.map(|s| s.to_string()),
             scriptpubkey,

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
+#[cfg(not(feature = "liquid"))]
 use bitcoin::hashes::Hash;
-use bitcoin::hashes::sha256d;
 pub use electrum_client::ServerFeaturesRes;
 pub use electrum_client::client::Client;
 
@@ -20,9 +20,7 @@ impl TryFrom<ServerFeaturesRes> for ServerFeatures {
         Ok(ServerFeatures {
             // electrum-client doesn't retain the hosts map data, but we already have it from the add_peer request
             hosts: HashMap::new(),
-            genesis_hash: BlockHash::from_raw_hash(sha256d::Hash::from_byte_array(
-                features.genesis_hash,
-            )),
+            genesis_hash: BlockHash::from_byte_array(features.genesis_hash),
             server_version: features.server_version,
             protocol_min: features
                 .protocol_min

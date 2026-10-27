@@ -162,14 +162,14 @@ impl DiscoveryManager {
                 }
                 // ensure the server address matches the ip that advertised it to us.
                 // onion hosts are exempt.
-                if let ServerAddr::Clearnet(ip) = addr {
-                    if ip != added_by {
-                        warn!(
-                            "server ip does not match source ip ({}, {} != {})",
-                            hostname, ip, added_by
-                        );
-                        return None;
-                    }
+                if let ServerAddr::Clearnet(ip) = addr
+                    && ip != added_by
+                {
+                    warn!(
+                        "server ip does not match source ip ({}, {} != {})",
+                        hostname, ip, added_by
+                    );
+                    return None;
                 }
                 Some((addr, hostname, ports))
             })
@@ -346,11 +346,8 @@ impl DiscoveryManager {
         self.verify_compatibility(&features)?;
 
         if self.announce {
-            // XXX should we require the other side to reciprocate?
-            ensure!(
-                client.server_add_peer(&self.our_features)?,
-                "server does not reciprocate"
-            );
+            // electrum-client 0.25 has no server.add_peer method.
+            bail!("server.add_peer is not on this electrum-client");
         }
 
         Ok(features)

@@ -7,8 +7,10 @@ use nostr::event::FinalizeEvent;
 use nostr::key::Keys;
 use nostr::nips::nip98::{HttpData, HttpMethod, Sha256Hash};
 
+use crate::api::ClientError;
+
 /// A signed HTTP auth event plus the `Authorization` header value.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SignedAuth {
     event: Event,
     event_json: String,
@@ -49,6 +51,14 @@ impl SignedAuth {
     }
 }
 
+/// One indexer HTTP call. `authorization` is the kind-27235 header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexerAuthCall {
+    pub method: String,
+    pub url: String,
+    pub authorization: String,
+}
+
 /// Signing failed. Variants do not carry key material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignerError {
@@ -58,6 +68,10 @@ pub enum SignerError {
     Sign,
     Verify,
     Header,
+    /// No key was supplied. The indexer transport was not called.
+    MissingSigner,
+    /// The indexer transport returned an error after the header was built.
+    Indexer,
 }
 
 /// Sign an absolute URL. A non-empty body adds a `payload` tag of its SHA-256 hex.
@@ -93,6 +107,47 @@ pub fn sign_http(
         event,
         event_json,
         authorization,
+    })
+}
+
+/// Sign `url` and call `transport`. A missing signer returns before `transport`.
+///
+/// `url` must be an `https` URL under this project's `api_root`. A nostr relay
+/// is `SignerError::Url` and does not call `transport`.
+pub fn call_indexer_with_signer(
+    keys: Option<&Keys>,
+    url: &str,
+    method: &str,
+    body: Option<&[u8]>,
+    transport: &mut dyn FnMut(&IndexerAuthCall) -> Result<String, ClientError>,
+) -> Result<(SignedAuth, String), SignerError> {
+    let Some(keys) = keys else {
+        return Err(SignerError::MissingSigner);
+    };
+    if !this_project_indexer_url(url) {
+        return Err(SignerError::Url);
+    }
+    let signed = sign_http(keys, url, method, body)?;
+    let call = IndexerAuthCall {
+        method: method.to_string(),
+        url: url.to_string(),
+        authorization: signed.authorization().to_string(),
+    };
+    let response = transport(&call).map_err(|_| SignerError::Indexer)?;
+    Ok((signed, response))
+}
+
+/// True for `https://splora.surmount.systems` plus a network `api_root` path.
+fn this_project_indexer_url(url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
+    splora_api::Network::ALL.iter().any(|network| {
+        let root = splora_api::api_root(*network);
+        let Some(rest) = url.strip_prefix(root.as_str()) else {
+            return false;
+        };
+        rest.starts_with('/') && !rest.contains("//") && !rest.contains('?') && !rest.contains('#')
     })
 }
 

@@ -1,3 +1,5 @@
+#[cfg(not(feature = "liquid"))]
+use bitcoin::hashes::Hash;
 use itertools::Itertools;
 
 #[cfg(not(feature = "liquid"))]
@@ -512,7 +514,7 @@ impl Mempool {
                     continue;
                 }
             };
-            let txid_bytes = full_hash(&txid[..]);
+            let txid_bytes = full_hash(txid.as_byte_array());
 
             // Get feeinfo for caching and recent tx overview
             let feeinfo = TxFeeInfo::new(tx, &prevouts, self.config.network_type);
@@ -547,7 +549,7 @@ impl Mempool {
                     TxHistoryInfo::Spending(SpendingInfo {
                         txid: txid_bytes,
                         vin: input_index,
-                        prev_txid: full_hash(&txi.previous_output.txid[..]),
+                        prev_txid: full_hash(txi.previous_output.txid.as_byte_array()),
                         prev_vout: txi.previous_output.vout,
                         value,
                     }),

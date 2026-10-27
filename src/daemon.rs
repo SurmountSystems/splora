@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
+#[cfg(not(feature = "liquid"))]
 use bitcoin::hashes::Hash;
 use glob;
 use hex;
@@ -84,16 +85,16 @@ fn classify_daemon_http_status(
         warn!("HTTP status: {}", status);
         Ok(contents)
     } else if status.starts_with("HTTP/1.1 503") {
-        bail!(ErrorKind::DaemonBusy(contents))
+        bail!(ErrorKind::DaemonBusy(contents));
     } else if status.starts_with("HTTP/1.1 504") {
-        bail!(ErrorKind::DaemonUnavailable(contents))
+        bail!(ErrorKind::DaemonUnavailable(contents));
     } else {
         bail!(
             "request failed {:?}: {:?} = {:?}",
             status,
             headers,
             contents
-        )
+        );
     }
 }
 
@@ -105,8 +106,12 @@ fn parse_jsonrpc_reply(mut reply: Value, method: &str, expected_id: u64) -> Resu
         {
             match code {
                 // RPC_IN_WARMUP -> retry by later reconnection
-                -28 => bail!(ErrorKind::Connection(err.to_string())),
-                _ => bail!("{} RPC error: {}", method, err),
+                -28 => {
+                    bail!(ErrorKind::Connection(err.to_string()));
+                }
+                _ => {
+                    bail!("{} RPC error: {}", method, err);
+                }
             }
         }
         let id = reply_obj
@@ -409,7 +414,7 @@ impl Daemon {
             bail!(
                 "{} is not supported - please use bitcoind 0.16+",
                 network_info.subversion,
-            )
+            );
         }
         // Insert the subversion (/Satoshi xx.xx.xx(comment)/) string from bitcoind
         _ = BITCOIND_SUBVER.set(network_info.subversion);
@@ -417,7 +422,7 @@ impl Daemon {
         let blockchain_info = daemon.getblockchaininfo()?;
         info!("{:?}", blockchain_info);
         if blockchain_info.pruned {
-            bail!("pruned node is not supported (use '-prune=0' bitcoind flag)".to_owned())
+            bail!("pruned node is not supported (use '-prune=0' bitcoind flag)".to_owned());
         }
         loop {
             let info = daemon.getblockchaininfo()?;
@@ -806,7 +811,7 @@ impl Daemon {
             result.append(&mut headers);
         }
 
-        let mut blockhash = BlockHash::all_zeros();
+        let mut blockhash = BlockHash::from_byte_array([0u8; 32]);
         for header in &result {
             assert_eq!(header.prev_blockhash, blockhash);
             blockhash = header.block_hash();
@@ -832,7 +837,7 @@ impl Daemon {
             bestblockhash,
         );
         let mut new_headers = vec![];
-        let null_hash = BlockHash::all_zeros();
+        let null_hash = BlockHash::from_byte_array([0u8; 32]);
         let mut blockhash = *bestblockhash;
         while blockhash != null_hash {
             if indexed_headers.header_by_blockhash(&blockhash).is_some() {

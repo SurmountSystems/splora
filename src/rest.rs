@@ -25,6 +25,7 @@ use bitcoin::consensus::encode;
 use std::str::FromStr;
 
 use bitcoin::blockdata::opcodes;
+#[cfg(not(feature = "liquid"))]
 use bitcoin::hashes::Hash;
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -147,7 +148,7 @@ impl BlockValue {
             size: blockhm.meta.size,
             weight: blockhm.meta.weight,
             merkle_root: header.merkle_root.to_string(),
-            previousblockhash: if header.prev_blockhash != BlockHash::all_zeros() {
+            previousblockhash: if header.prev_blockhash != BlockHash::from_byte_array([0u8; 32]) {
                 Some(header.prev_blockhash.to_string())
             } else {
                 None
@@ -582,12 +583,9 @@ impl From<Utxo> for UtxoValue {
                 _ => None,
             },
             #[cfg(feature = "liquid")]
-            surjection_proof: utxo
-                .witness
-                .surjection_proof
-                .map_or(vec![], |p| (*p).serialize()),
+            surjection_proof: utxo.witness.surjection_proof.to_vec(),
             #[cfg(feature = "liquid")]
-            range_proof: utxo.witness.rangeproof.map_or(vec![], |p| (*p).serialize()),
+            range_proof: utxo.witness.rangeproof.to_vec(),
         }
     }
 }
@@ -971,7 +969,7 @@ async fn run_mwck_socket(
             maybe_out = rx.recv() => {
                 match maybe_out {
                     Some(v) => {
-                        if sink.send(WsMessage::Text(v.to_string())).await.is_err() {
+                        if sink.send(WsMessage::Text(v.to_string().into())).await.is_err() {
                             break;
                         }
                     }
@@ -991,7 +989,7 @@ async fn run_mwck_socket(
                         let reply = hub.handle_socket(&allow, &pubkey, &mut state, msg).await;
                         hub.set_client_state(id, state.clone());
                         if let Some(out) = reply
-                            && sink.send(WsMessage::Text(out.to_string())).await.is_err()
+                            && sink.send(WsMessage::Text(out.to_string().into())).await.is_err()
                         {
                             break;
                         }
@@ -1332,7 +1330,9 @@ fn handle_request(
             http_message(StatusCode::OK, header.hash().to_string(), ttl)
         }
         (&Method::GET, Some(&"block"), Some(hash), None, None, None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let blockhm = query
                 .chain()
                 .get_block_with_meta(&hash)
@@ -1341,13 +1341,17 @@ fn handle_request(
             json_response(block_value, TTL_LONG)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"status"), None, None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let status = query.chain().get_block_status(&hash);
             let ttl = ttl_by_depth(status.height, query);
             json_response(status, ttl)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txids"), None, None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let txids = query
                 .chain()
                 .get_block_txids(&hash)
@@ -1355,7 +1359,9 @@ fn handle_request(
             json_response(txids, TTL_LONG)
         }
         (&Method::GET, Some(&INTERNAL_PREFIX), Some(&"block"), Some(hash), Some(&"txs"), None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let block_id = query.chain().blockid_by_hash(&hash);
             let txs = query
                 .chain()
@@ -1369,7 +1375,9 @@ fn handle_request(
             json_response(prepare_txs(txs, query, config), ttl)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"header"), None, None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let header = query
                 .chain()
                 .get_block_header(&hash)
@@ -1379,7 +1387,9 @@ fn handle_request(
             http_message(StatusCode::OK, header_hex, TTL_LONG)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"raw"), None, None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let raw = query
                 .chain()
                 .get_block_raw(&hash)
@@ -1393,7 +1403,9 @@ fn handle_request(
                 .unwrap())
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txid"), Some(index), None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let index: usize = index.parse()?;
             let txids = query
                 .chain()
@@ -1405,7 +1417,9 @@ fn handle_request(
             http_message(StatusCode::OK, txids[index].to_string(), TTL_LONG)
         }
         (&Method::GET, Some(&"block"), Some(hash), Some(&"txs"), start_index, None) => {
-            let hash = hash.parse::<BlockHash>()?;
+            let hash = hash
+                .parse::<BlockHash>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let txids = query
                 .chain()
                 .get_block_txids(&hash)
@@ -1867,7 +1881,9 @@ fn handle_request(
             json_response(results, TTL_SHORT)
         }
         (&Method::GET, Some(&"tx"), Some(hash), None, None, None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let tx = query
                 .lookup_txn(&hash)
                 .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
@@ -1911,7 +1927,9 @@ fn handle_request(
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(out_type @ &"hex"), None, None)
         | (&Method::GET, Some(&"tx"), Some(hash), Some(out_type @ &"raw"), None, None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let rawtx = query
                 .lookup_raw_txn(&hash)
                 .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
@@ -1931,14 +1949,18 @@ fn handle_request(
                 .unwrap())
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"status"), None, None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let status = query.get_tx_status(&hash);
             let ttl = ttl_by_depth(status.block_height, query);
             json_response(status, ttl)
         }
 
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"merkle-proof"), None, None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let blockid = query.chain().tx_confirming_block(&hash).ok_or_else(|| {
                 HttpError::not_found("Transaction not found or is unconfirmed".to_string())
             })?;
@@ -1953,7 +1975,9 @@ fn handle_request(
         }
         #[cfg(not(feature = "liquid"))]
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"merkleblock-proof"), None, None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
 
             let merkleblock = query.chain().get_merkleblock_proof(&hash).ok_or_else(|| {
                 HttpError::not_found("Transaction not found or is unconfirmed".to_string())
@@ -1970,7 +1994,9 @@ fn handle_request(
             )
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"outspend"), Some(index), None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let outpoint = OutPoint {
                 txid: hash,
                 vout: index.parse::<u32>()?,
@@ -1985,7 +2011,9 @@ fn handle_request(
             json_response(spend, ttl)
         }
         (&Method::GET, Some(&"tx"), Some(hash), Some(&"outspends"), None, None) => {
-            let hash = hash.parse::<Txid>()?;
+            let hash = hash
+                .parse::<Txid>()
+                .map_err(|err| HttpError::from(err.to_string()))?;
             let tx = query
                 .lookup_txn(&hash)
                 .ok_or_else(|| HttpError::not_found("Transaction not found".to_string()))?;
@@ -2342,7 +2370,8 @@ fn handle_request(
 
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"assets"), Some(&"registry"), Some(asset_str), None, None) => {
-            let asset_id = AssetId::from_str(asset_str)?;
+            let asset_id =
+                AssetId::from_str(asset_str).map_err(|err| HttpError::from(err.to_string()))?;
             let registry_entry = query
                 .lookup_registry_asset(&asset_id)
                 .map_err(|e| {
@@ -2357,7 +2386,8 @@ fn handle_request(
 
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"asset"), Some(asset_str), None, None, None) => {
-            let asset_id = AssetId::from_str(asset_str)?;
+            let asset_id =
+                AssetId::from_str(asset_str).map_err(|err| HttpError::from(err.to_string()))?;
             let asset_entry = query
                 .lookup_asset(&asset_id)?
                 .ok_or_else(|| HttpError::not_found("Asset id not found".to_string()))?;
@@ -2367,7 +2397,8 @@ fn handle_request(
 
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"asset"), Some(asset_str), Some(&"txs"), None, None) => {
-            let asset_id = AssetId::from_str(asset_str)?;
+            let asset_id =
+                AssetId::from_str(asset_str).map_err(|err| HttpError::from(err.to_string()))?;
 
             let mut txs = vec![];
 
@@ -2411,7 +2442,8 @@ fn handle_request(
             Some(&"chain"),
             last_seen_txid,
         ) => {
-            let asset_id = AssetId::from_str(asset_str)?;
+            let asset_id =
+                AssetId::from_str(asset_str).map_err(|err| HttpError::from(err.to_string()))?;
             let last_seen_txid = last_seen_txid.and_then(|txid| txid.parse::<Txid>().ok());
 
             let mut txs = query
@@ -2446,7 +2478,8 @@ fn handle_request(
 
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"asset"), Some(asset_str), Some(&"txs"), Some(&"mempool"), None) => {
-            let asset_id = AssetId::from_str(asset_str)?;
+            let asset_id =
+                AssetId::from_str(asset_str).map_err(|err| HttpError::from(err.to_string()))?;
 
             let txs = query
                 .mempool()
@@ -2460,7 +2493,8 @@ fn handle_request(
 
         #[cfg(feature = "liquid")]
         (&Method::GET, Some(&"asset"), Some(asset_str), Some(&"supply"), param, None) => {
-            let asset_id = AssetId::from_str(asset_str)?;
+            let asset_id =
+                AssetId::from_str(asset_str).map_err(|err| HttpError::from(err.to_string()))?;
             let asset_entry = query
                 .lookup_asset(&asset_id)?
                 .ok_or_else(|| HttpError::not_found("Asset id not found".to_string()))?;
@@ -2597,7 +2631,7 @@ fn blocks(
         }
         values.push(value);
 
-        if current_hash[..] == zero[..] {
+        if current_hash.as_byte_array() == &zero {
             break;
         }
     }
@@ -2612,7 +2646,9 @@ fn to_scripthash(
     match script_type {
         "address" => address_to_scripthash(script_str, network),
         "scripthash" => parse_scripthash(script_str),
-        _ => bail!("Invalid script type".to_string()),
+        _ => {
+            bail!("Invalid script type".to_string());
+        }
     }
 }
 

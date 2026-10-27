@@ -488,7 +488,7 @@ pub fn run(bind: SocketAddr, queue_path: PathBuf, caps: QueueCaps) -> Result<(),
     let server = Server::http(bind).map_err(|e| QueueError::Io(e.to_string()))?;
     for mut request in server.incoming_requests() {
         let method = request.method().clone();
-        let ip = request.remote_addr().ip();
+        let ip = request.remote_addr().map(|addr| addr.ip());
         if method != Method::Post {
             let _ = request.respond(json_status(405, "method not allowed"));
             continue;
@@ -505,7 +505,7 @@ pub fn run(bind: SocketAddr, queue_path: PathBuf, caps: QueueCaps) -> Result<(),
             .unwrap_or(0);
         let response = match parsed {
             Err(_) => json_status(400, "invalid json"),
-            Ok(p) => match store.submit(Some(ip), &p.npub, &p.email, now) {
+            Ok(p) => match store.submit(ip, &p.npub, &p.email, now) {
                 Ok(row) => {
                     let s = serde_json::to_string(&row).unwrap_or_else(|_| "{}".into());
                     Response::from_string(s).with_header(

@@ -1,6 +1,6 @@
 #[cfg(not(feature = "liquid"))]
 use bitcoin::VarInt;
-use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use bitcoin::hashes::{Hash, sha256d::Hash as Sha256dHash};
 #[cfg(not(feature = "liquid"))]
 use bitcoin::merkle_tree::MerkleBlock;
 use itertools::Itertools;
@@ -510,7 +510,7 @@ impl ChainQuery {
         } else {
             self.store
                 .txstore_db
-                .get(&BlockRow::txids_key(full_hash(&hash[..])))
+                .get(&BlockRow::txids_key(full_hash(hash.as_byte_array())))
                 .map(|val| {
                     bincode_util::deserialize_little(&val).expect("failed to parse block txids")
                 })
@@ -527,7 +527,7 @@ impl ChainQuery {
         } else {
             self.store
                 .txstore_db
-                .get(&BlockRow::txids_key(full_hash(&hash[..])))
+                .get(&BlockRow::txids_key(full_hash(hash.as_byte_array())))
                 .map(|val| {
                     bincode_util::deserialize_little(&val).expect("failed to parse block txids")
                 })
@@ -556,7 +556,7 @@ impl ChainQuery {
         } else {
             self.store
                 .txstore_db
-                .get(&BlockRow::meta_key(full_hash(&hash[..])))
+                .get(&BlockRow::meta_key(full_hash(hash.as_byte_array())))
                 .map(|val| {
                     bincode_util::deserialize_little(&val).expect("failed to parse BlockMeta")
                 })
@@ -1229,7 +1229,7 @@ impl ChainQuery {
                 .ok()?;
             Some(hex::decode(txhex.as_str().unwrap()).unwrap())
         } else {
-            self.store.txstore_db.get(&TxRow::key(&txid[..]))
+            self.store.txstore_db.get(&TxRow::key(txid.as_byte_array()))
         }
     }
 
@@ -1268,7 +1268,7 @@ impl ChainQuery {
         let headers = self.store.indexed_headers.read().unwrap();
         self.store
             .txstore_db
-            .iter_scan(&TxConfRow::filter(&txid[..]))
+            .iter_scan(&TxConfRow::filter(txid.as_byte_array()))
             .map(TxConfRow::from_row)
             // header_by_blockhash only returns blocks that are part of the best chain,
             // or None for orphaned blocks.
@@ -1320,18 +1320,12 @@ impl ChainQuery {
         last_seen_txid: Option<&'a Txid>,
         limit: usize,
     ) -> impl rayon::iter::ParallelIterator<Item = Result<(Transaction, BlockId, u16)>> + 'a {
-        self._history(
-            b'I',
-            &asset_id.into_inner()[..],
-            last_seen_txid,
-            None,
-            limit,
-        )
+        self._history(b'I', asset_id.as_byte_array(), last_seen_txid, None, limit)
     }
 
     #[cfg(feature = "liquid")]
     pub fn asset_history_txids(&self, asset_id: &AssetId, limit: usize) -> Vec<(Txid, BlockId)> {
-        self._history_txids(b'I', &asset_id.into_inner()[..], limit)
+        self._history_txids(b'I', asset_id.as_byte_array(), limit)
     }
 }
 
@@ -1371,10 +1365,10 @@ where
 
         // abort if the utxo set size excedees the limit at any point in time
         if utxos.len() > limit {
-            bail!(ErrorKind::TooManyUtxos(limit))
+            bail!(ErrorKind::TooManyUtxos(limit));
         }
         if processed_items > tx_history_limit {
-            bail!(ErrorKind::TooManyTxs(tx_history_limit))
+            bail!(ErrorKind::TooManyTxs(tx_history_limit));
         }
     }
 
@@ -1412,7 +1406,7 @@ fn add_blocks(block_entries: &[BlockEntry], iconfig: &IndexerConfig) -> Vec<DBRo
         .par_iter() // serialization is CPU-intensive
         .map(|b| {
             let mut rows = vec![];
-            let blockhash = full_hash(&b.entry.hash()[..]);
+            let blockhash = full_hash(b.entry.hash().as_byte_array());
             let txids: Vec<Txid> = b.block.txdata.iter().map(|tx| tx.get_txid()).collect();
             for tx in &b.block.txdata {
                 add_transaction(tx, blockhash, &mut rows, iconfig);
@@ -1443,7 +1437,7 @@ fn add_transaction(
         rows.push(TxRow::new(tx).into_row());
     }
 
-    let txid = full_hash(&tx.get_txid()[..]);
+    let txid = full_hash(tx.get_txid().as_byte_array());
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) {
             rows.push(TxOutRow::new(&txid, txo_index, txo).into_row());
@@ -1536,7 +1530,7 @@ fn index_blocks(
                     op,
                 );
             }
-            rows.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
+            rows.push(BlockRow::new_done(full_hash(b.entry.hash().as_byte_array())).into_row()); // mark block as "indexed"
             rows
         })
         .flatten()
@@ -1558,7 +1552,7 @@ fn index_transaction(
     //      H{funding-scripthash}{funding-height}{funding-block-pos}F{funding-txid:vout} → ""
     // persist "edges" for fast is-this-TXO-spent check
     //      S{funding-txid:vout}{spending-txid:vin} → ""
-    let txid = full_hash(&tx.get_txid()[..]);
+    let txid = full_hash(tx.get_txid().as_byte_array());
     let script_callback = |script_hash| {
         if let Operation::DeleteBlocksWithHistory(tx) = op {
             tx.send(script_hash).expect("unbounded channel won't fail");
@@ -1610,7 +1604,7 @@ fn index_transaction(
             TxHistoryInfo::Spending(SpendingInfo {
                 txid,
                 vin: txi_index as u32,
-                prev_txid: full_hash(&txi.previous_output.txid[..]),
+                prev_txid: full_hash(txi.previous_output.txid.as_byte_array()),
                 prev_vout: txi.previous_output.vout,
                 value: prev_value,
             }),
@@ -1619,7 +1613,7 @@ fn index_transaction(
         rows.push(history.into_row());
 
         let edge = TxEdgeRow::new(
-            full_hash(&txi.previous_output.txid[..]),
+            full_hash(txi.previous_output.txid.as_byte_array()),
             txi.previous_output.vout,
             txid,
             txi_index as u32,
@@ -1663,7 +1657,7 @@ pub fn compute_script_hash(script: &Script) -> FullHash {
 }
 
 pub fn parse_hash(hash: &FullHash) -> Sha256dHash {
-    deserialize(hash).expect("failed to parse Sha256dHash")
+    Sha256dHash::from_byte_array(*hash)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1679,7 +1673,7 @@ struct TxRow {
 
 impl TxRow {
     fn new(txn: &Transaction) -> TxRow {
-        let txid = full_hash(&txn.get_txid()[..]);
+        let txid = full_hash(txn.get_txid().as_byte_array());
         TxRow {
             key: TxRowKey { code: b'T', txid },
             value: serialize(txn),
@@ -1712,7 +1706,7 @@ struct TxConfRow {
 
 impl TxConfRow {
     fn new(txn: &Transaction, blockhash: FullHash) -> TxConfRow {
-        let txid = full_hash(&txn.get_txid()[..]);
+        let txid = full_hash(txn.get_txid().as_byte_array());
         TxConfRow {
             key: TxConfKey {
                 code: b'C',
@@ -1766,7 +1760,7 @@ impl TxOutRow {
     fn key(outpoint: &OutPoint) -> Bytes {
         bincode_util::serialize_little(&TxOutKey {
             code: b'O',
-            txid: full_hash(&outpoint.txid[..]),
+            txid: full_hash(outpoint.txid.as_byte_array()),
             vout: outpoint.vout,
         })
         .unwrap()
@@ -1796,7 +1790,7 @@ impl BlockRow {
         BlockRow {
             key: BlockKey {
                 code: b'B',
-                hash: full_hash(&block_entry.entry.hash()[..]),
+                hash: full_hash(block_entry.entry.hash().as_byte_array()),
             },
             value: serialize(&block_entry.block.header),
         }
@@ -2070,8 +2064,12 @@ impl TxEdgeRow {
 
     fn filter(outpoint: &OutPoint) -> Bytes {
         // TODO build key without using bincode? [ b"S", &outpoint.txid[..], outpoint.vout?? ].concat()
-        bincode_util::serialize_little(&(b'S', full_hash(&outpoint.txid[..]), outpoint.vout))
-            .unwrap()
+        bincode_util::serialize_little(&(
+            b'S',
+            full_hash(outpoint.txid.as_byte_array()),
+            outpoint.vout,
+        ))
+        .unwrap()
     }
 
     fn into_row(self) -> DBRow {
@@ -2372,7 +2370,7 @@ mod utxo_delta_tests {
     fn dummy_blockid() -> BlockId {
         BlockId {
             height: 1,
-            hash: BlockHash::all_zeros(),
+            hash: BlockHash::from_byte_array([0u8; 32]),
             time: 0,
         }
     }

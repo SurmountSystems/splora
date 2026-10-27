@@ -307,6 +307,8 @@ js-sys / wasm-bindgen remain in the lockfile as wasm target deps of
 error-chain 0.12.4 was not in the 2026-08-31 audit output. Do not rewrite the
 error stack unless a later audit fails closed on it.
 
+On 2026-10-26, `.cargo/audit.toml` does not ignore RUSTSEC-2026-0382 or RUSTSEC-2026-0381, because the native GUI reaches certificate verification through ureq, and the Operator has not approved an acceptance reason. Waiting does not clear them. Vendoring is not used. A crates.io fetch that skips the Menhera delay is not used. Installed cargo-audit 0.22.1 stores ignore ids only, so an ignore is not recorded here. [RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382) (accessed: 2026-10-26) is rustls-webpki 0.103.15. The Menhera index (`sparse+https://index.crates.menhera.org/7d/`, registry `menhera-cooldown`) lists 0.103.15 and 0.104.0-alpha.7. It does not list 0.103.16 or 0.104.0-alpha.8. 0.104.0-alpha.7 is outside the advisory fix range `>=0.103.16, <0.104.0-alpha.1 OR >=0.104.0-alpha.8`. [RUSTSEC-2026-0381](https://rustsec.org/advisories/RUSTSEC-2026-0381) (accessed: 2026-10-26) is webpki-roots 0.25.4. The advisory fix is `>=1.0.10`. The installed electrum-client 0.25.1 manifest requires webpki-roots version 0.25, which does not include 1.0.10. The Menhera probe did not attempt that resolve. Menhera cargo info could not find electrum-client 0.25.2. Yanked checks stay on. Unsound and notice warnings stay visible. Unmaintained warnings may remain.
+
 ## How to add a crate
 
 1. Pick a version that is at least 7 days old on crates.io so the Menhera

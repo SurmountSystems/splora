@@ -334,14 +334,13 @@ pub(super) mod sigops {
         for (input, prevout) in tx.input.iter().zip(previous_outputs.iter()) {
             #[cfg(feature = "liquid")]
             if input.is_pegin {
-                // Elements GetTransactionSigOpCost uses pegin_witness stack[3]
-                // (claim_script) as scriptPubKey for CountWitnessSigOps when
-                // the stack has at least four items. rust-elements 0.26 still
-                // stores that claim at pegin_witness[3].
-                if input.witness.pegin_witness.len() < 4 {
+                // Elements GetTransactionSigOpCost uses the pegin claim script
+                // as scriptPubKey. rust-elements 0.27 stores that script on
+                // PeginData instead of a witness stack index.
+                let Some(data) = input.witness.pegin_witness.data() else {
                     continue;
-                }
-                let claim_script = script::Script::from(input.witness.pegin_witness[3].clone());
+                };
+                let claim_script = script::Script::from(data.claim_script.as_bytes().to_vec());
                 n += count_with_prevout(&claim_script, &input.script_sig, &input.witness);
                 continue;
             }
@@ -400,7 +399,7 @@ pub(super) mod sigops {
                 #[cfg(feature = "liquid")]
                 {
                     last_witness
-                        .map(|sl| script::Script::from(sl.clone()))
+                        .map(|sl| script::Script::from(sl.to_vec()))
                         .map(|s| count_sigops(&s, true))
                         .unwrap_or_default()
                 }
@@ -418,9 +417,7 @@ pub(super) mod sigops {
 #[cfg(all(test, feature = "liquid"))]
 mod pegin_sigop_cost_tests {
     use super::sigops::transaction_sigop_count;
-    use crate::chain::{
-        OutPoint, Script, Transaction, TxIn, TxOut, Txid, Witness, hashes::Hash, opcodes,
-    };
+    use crate::chain::{OutPoint, Script, Transaction, TxIn, TxOut, Txid, Witness, opcodes};
     use elements::{LockTime, Sequence};
     use std::collections::HashMap;
 
@@ -451,10 +448,26 @@ mod pegin_sigop_cost_tests {
             sequence: Sequence::MAX,
             asset_issuance: Default::default(),
             witness: Witness {
-                amount_rangeproof: None,
-                inflation_keys_rangeproof: None,
-                script_witness,
-                pegin_witness: vec![Vec::new(), Vec::new(), Vec::new(), claim_script.to_bytes()],
+                amount_rangeproof: elements::RangeProof::EMPTY,
+                inflation_keys_rangeproof: elements::RangeProof::EMPTY,
+                script_witness: elements::Witness::from_slice(&script_witness),
+                pegin_witness: elements::PeginWitness::new(elements::PeginData {
+                    value: 0,
+                    asset_id: elements::AssetId::from_byte_array([0u8; 32]),
+                    genesis_hash: bitcoin::BlockHash::from_raw_hash(
+                        <bitcoin::hashes::sha256d::Hash as bitcoin::hashes::Hash>::from_byte_array(
+                            [0u8; 32],
+                        ),
+                    ),
+                    claim_script: bitcoin::ScriptBuf::from(claim_script.to_bytes()),
+                    transaction: Vec::new(),
+                    merkle_proof: Vec::new(),
+                    referenced_block: bitcoin::BlockHash::from_raw_hash(
+                        <bitcoin::hashes::sha256d::Hash as bitcoin::hashes::Hash>::from_byte_array(
+                            [0u8; 32],
+                        ),
+                    ),
+                }),
             },
         }
     }
@@ -467,10 +480,10 @@ mod pegin_sigop_cost_tests {
             sequence: Sequence::MAX,
             asset_issuance: Default::default(),
             witness: Witness {
-                amount_rangeproof: None,
-                inflation_keys_rangeproof: None,
-                script_witness,
-                pegin_witness: Vec::new(),
+                amount_rangeproof: elements::RangeProof::EMPTY,
+                inflation_keys_rangeproof: elements::RangeProof::EMPTY,
+                script_witness: elements::Witness::from_slice(&script_witness),
+                pegin_witness: elements::PeginWitness::EMPTY,
             },
         }
     }

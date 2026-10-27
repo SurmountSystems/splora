@@ -1,0 +1,12 @@
+# cargo-audit 0.22.1 ignore list. This version accepts advisory ids only.
+# Reasons live in doc/supply-chain.md. Yanked checks stay on.
+# Unsound and notice warnings stay visible.
+# RUSTSEC-2026-0382 and RUSTSEC-2026-0381 are not ignored.
+# The native GUI calls ureq::get and ureq::post. ureq's tls feature
+# verifies the server certificate with rustls against webpki-roots.
+# The advisory text names no function. The Operator has not approved
+# an acceptance reason.
+
+[advisories]
+ignore = [
+]

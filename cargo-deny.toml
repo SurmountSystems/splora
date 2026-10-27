@@ -41,6 +41,10 @@ allow = [
 ]
 # AGPL and SSPL are omitted on purpose. They would infect the binary.
 # GPL-2.0 / GPL-3.0 are omitted for the same reason.
+exceptions = [
+    # dirs 7.0.0 pulls option-ext 0.2.0, whose license is MPL-2.0.
+    { allow = ["MPL-2.0"], crate = "option-ext" },
+]
 
 [bans]
 multiple-versions = "warn"

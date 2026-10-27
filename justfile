@@ -24,7 +24,7 @@ check-local:
     # .github/workflows/ci.yml names the bin electrs. Cargo.toml's bin is splora.
     cargo build --release --bin electrs
     cargo deny --offline --locked check --config cargo-deny.toml
-    cargo audit
+    cargo audit --no-fetch
 
 # Local max-jobs 0. The store queried is the ssh-ng machine in
 # ~/.config/nix/machines. A laptop cache hit must not satisfy this.

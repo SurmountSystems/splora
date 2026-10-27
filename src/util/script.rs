@@ -146,11 +146,8 @@ pub fn get_innerscripts(txin: &TxIn, prevout: &TxOut) -> InnerScripts {
         #[cfg(feature = "liquid")]
         let witness = &witness.script_witness;
 
-        // rust-bitcoin returns witness items as a [u8] slice, while rust-elements returns a Vec<u8>
-        #[cfg(not(feature = "liquid"))]
-        let wit_to_vec = Vec::from;
-        #[cfg(feature = "liquid")]
-        let wit_to_vec = Clone::clone;
+        // rust-bitcoin and rust-elements 0.27 both yield witness items as byte slices.
+        let wit_to_vec = |item: &[u8]| -> Vec<u8> { item.to_vec() };
 
         let inner_script_slice = if prevout.script_pubkey.segwit_is_p2tr() {
             // Witness stack is potentially very large

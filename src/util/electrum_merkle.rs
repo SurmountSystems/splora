@@ -15,7 +15,10 @@ pub fn get_tx_merkle_proof(
         .iter()
         .position(|txid| txid == tx_hash)
         .chain_err(|| format!("missing txid {}", tx_hash))?;
-    let txids = txids.into_iter().map(Sha256dHash::from).collect();
+    let txids = txids
+        .into_iter()
+        .map(|txid| Sha256dHash::from_byte_array(txid.to_byte_array()))
+        .collect();
 
     let (branch, _root) = create_merkle_branch_and_root(txids, pos);
     Ok((branch, pos))
@@ -46,7 +49,10 @@ pub fn get_header_merkle_proof(
         .collect::<Option<Vec<BlockHash>>>()
         .chain_err(|| "missing block headers")?;
 
-    let header_hashes = header_hashes.into_iter().map(Sha256dHash::from).collect();
+    let header_hashes = header_hashes
+        .into_iter()
+        .map(|hash| Sha256dHash::from_byte_array(hash.to_byte_array()))
+        .collect();
     Ok(create_merkle_branch_and_root(header_hashes, height))
 }
 
@@ -68,7 +74,10 @@ pub fn get_id_from_pos(
         .get(tx_pos)
         .chain_err(|| format!("No tx in position #{} in block #{}", tx_pos, height))?;
 
-    let txids = txids.into_iter().map(Sha256dHash::from).collect();
+    let txids = txids
+        .into_iter()
+        .map(|txid| Sha256dHash::from_byte_array(txid.to_byte_array()))
+        .collect();
 
     let branch = if want_merkle {
         create_merkle_branch_and_root(txids, tx_pos).0

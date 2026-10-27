@@ -1,6 +1,3 @@
-use bitcoin::hashes::Hash;
-use elements::hex::ToHex;
-use elements::secp256k1_zkp::ZERO_TWEAK;
 use elements::{AssetId, TxIn, confidential::Value, encode::serialize, issuance::ContractHash};
 
 pub mod asset;
@@ -33,24 +30,26 @@ pub struct IssuanceValue {
 impl From<&TxIn> for IssuanceValue {
     fn from(txin: &TxIn) -> Self {
         let issuance = &txin.asset_issuance;
-        let is_reissuance = issuance.asset_blinding_nonce != ZERO_TWEAK;
+        let is_reissuance = !issuance.asset_blinding_nonce.is_null();
 
         let asset_entropy = get_issuance_entropy(txin).expect("invalid issuance");
         let asset_id = AssetId::from_entropy(asset_entropy);
 
         let contract_hash = if !is_reissuance {
-            Some(ContractHash::from_slice(&issuance.asset_entropy).expect("invalid asset entropy"))
+            Some(ContractHash::from_byte_array(
+                issuance.asset_entropy.to_byte_array(),
+            ))
         } else {
             None
         };
 
         IssuanceValue {
-            asset_id: asset_id.to_hex(),
-            asset_entropy: asset_entropy.to_hex(),
-            contract_hash: contract_hash.map(|h| h.to_hex()),
+            asset_id: hex::encode(asset_id.as_byte_array()),
+            asset_entropy: hex::encode(asset_entropy.as_byte_array()),
+            contract_hash: contract_hash.map(|h| hex::encode(h.as_byte_array())),
             is_reissuance,
             asset_blinding_nonce: if is_reissuance {
-                Some(hex::encode(issuance.asset_blinding_nonce.as_ref()))
+                Some(hex::encode(issuance.asset_blinding_nonce.as_byte_array()))
             } else {
                 None
             },
