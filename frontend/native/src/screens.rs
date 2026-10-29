@@ -19,9 +19,9 @@ use splora_frontend_shared::{
     parse_block_header, parse_block_height, parse_block_raw_hex, parse_block_status,
     parse_block_txid, parse_block_txids, parse_mempool_txids, parse_merkle_proof,
     parse_merkleblock_proof, parse_outspend, parse_outspends, parse_package, parse_scripthash,
-    parse_scripthashes_txs, parse_tx, parse_tx_hex, parse_tx_raw_hex, route_availability,
-    sat_per_vbyte_from_vsize, sat_per_vbyte_from_weight, sats_fiat_usd, sats_to_btc,
-    scripthash_path, scripthash_txs_chain_page_path, scripthash_txs_mempool_path,
+    parse_scripthashes_txs, parse_tx, parse_tx_hex, parse_tx_raw_hex, rbf_socket_trees,
+    route_availability, sat_per_vbyte_from_vsize, sat_per_vbyte_from_weight, sats_fiat_usd,
+    sats_to_btc, scripthash_path, scripthash_txs_chain_page_path, scripthash_txs_mempool_path,
     scripthash_txs_path, scripthash_utxo_path, scripthashes_txs_body, scripthashes_txs_path,
     switch_usd_jpy_usd, test_txs_path, truncate_btc_decimals, tx_hex_path, tx_merkle_proof_path,
     tx_merkleblock_proof_path, tx_outspend_path, tx_outspends_path, tx_path, tx_raw_path,
@@ -40,6 +40,7 @@ pub enum Screen {
     Tx,
     Address,
     Mempool,
+    Rbf,
     MultiAddress,
     Broadcast,
     TestTransactions,
@@ -79,6 +80,7 @@ impl Screen {
             Self::Tx => "tx",
             Self::Address => "address",
             Self::Mempool => "mempool",
+            Self::Rbf => "rbf",
             Self::MultiAddress => "addresses",
             Self::Broadcast => "broadcast",
             Self::TestTransactions => "test transactions",
@@ -110,6 +112,7 @@ impl Screen {
             Self::Tx => "tx",
             Self::Address => "address",
             Self::Mempool => "mempool",
+            Self::Rbf => "rbf",
             Self::MultiAddress => "addresses",
             Self::Broadcast => "broadcast",
             Self::TestTransactions => "test-transactions",
@@ -139,6 +142,7 @@ impl Screen {
             "tx" => Some(Self::Tx),
             "address" => Some(Self::Address),
             "mempool" => Some(Self::Mempool),
+            "rbf" => Some(Self::Rbf),
             "addresses" => Some(Self::MultiAddress),
             "broadcast" => Some(Self::Broadcast),
             "test transactions" => Some(Self::TestTransactions),
@@ -233,6 +237,8 @@ pub struct Dashboard {
     search: String,
     lines: String,
     rows: Vec<String>,
+    /// Parsed `GET /mempool` summary. `None` is an empty backlog, not a zero receipt.
+    mempool_backlog: Option<splora_frontend_shared::MempoolBacklog>,
 }
 
 impl Dashboard {
@@ -243,15 +249,17 @@ impl Dashboard {
             search: String::new(),
             lines: String::new(),
             rows: Vec::new(),
+            mempool_backlog: None,
         }
     }
 
-    pub fn links(&self) -> [&'static str; 24] {
+    pub fn links(&self) -> [&'static str; 25] {
         [
             "block",
             "tx",
             "address",
             "mempool",
+            "rbf",
             "blocks",
             "addresses",
             "broadcast",
@@ -322,6 +330,20 @@ impl Dashboard {
             summary_route,
             r#"{"count":0,"vsize":0,"total_fee":0,"fee_histogram":[]}"#,
         )?;
+        match serde_json::from_str::<splora_frontend_shared::wire::MempoolSummary>(&summary_body) {
+            Ok(stats) => {
+                self.mempool_backlog = Some(splora_frontend_shared::MempoolBacklog {
+                    count: stats.count,
+                    vsize: stats.vsize,
+                    total_fee: stats.total_fee,
+                    fee_histogram_len: stats.fee_histogram.len(),
+                });
+            }
+            Err(err) => {
+                self.mempool_backlog = None;
+                return Err(http_parse(err));
+            }
+        }
         let parsed_blocks = render_block_list(&blocks_body)?;
         // dashboard.component.html recent-blocks heading when the list is not empty.
         // Size is the recent-blocks column. Liquid keeps the rows and skips Size.
@@ -1222,6 +1244,67 @@ impl MempoolScreen {
 impl Default for MempoolScreen {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// RBF replacements. An empty list paints the no-replacements sentence and tree count 0.
+/// `socket` holds a websocket fixture until `load` renders its `rbfLatest` length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RbfScreen {
+    lines: String,
+    socket: String,
+}
+
+impl RbfScreen {
+    pub fn new() -> Self {
+        Self {
+            lines: String::new(),
+            socket: String::new(),
+        }
+    }
+
+    /// GET `/api/v1/replacements` and GET `/api/v1/fullrbf/replacements`.
+    /// A socket fixture already stored by `set_query` replaces those empty lists.
+    pub fn load<G: ExplorerGet>(&mut self, client: &ExplorerClient<G>) -> Result<(), ClientError> {
+        if !self.socket.is_empty() {
+            let trees =
+                rbf_socket_trees(&self.socket).map_err(|err| ClientError::Http(err.to_string()))?;
+            self.lines = render_replacement_tree(trees.tree_len as usize);
+            return Ok(());
+        }
+        let replacements = read_required(client, REPLACEMENTS_PATH)?;
+        let full_rbf = read_required(client, FULLRBF_REPLACEMENTS_PATH)?;
+        let count = json_list_len(&replacements)? + json_list_len(&full_rbf)?;
+        self.lines = render_replacement_tree(count);
+        Ok(())
+    }
+
+    pub fn rendered(&self) -> String {
+        self.lines.clone()
+    }
+}
+
+impl Default for RbfScreen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+const REPLACEMENTS_PATH: &str = "/api/v1/replacements";
+const FULLRBF_REPLACEMENTS_PATH: &str = "/api/v1/fullrbf/replacements";
+const NO_REPLACEMENTS_LINE: &str = "There are no replacements in the mempool yet!";
+
+fn json_list_len(body: &str) -> Result<usize, ClientError> {
+    let list: Vec<serde_json::Value> =
+        serde_json::from_str(body).map_err(|err| ClientError::Http(err.to_string()))?;
+    Ok(list.len())
+}
+
+fn render_replacement_tree(count: usize) -> String {
+    if count == 0 {
+        format!("{NO_REPLACEMENTS_LINE}\ntree count {count}")
+    } else {
+        format!("tree count {count}")
     }
 }
 
@@ -5343,6 +5426,7 @@ pub struct ScreenHost<G> {
     pub tx: TxScreen,
     pub address: AddressScreen,
     pub mempool: MempoolScreen,
+    pub rbf: RbfScreen,
     pub multi_address: MultiAddressScreen,
     pub broadcast: BroadcastScreen,
     pub test_txs: TestTransactionsScreen,
@@ -5351,6 +5435,9 @@ pub struct ScreenHost<G> {
     calculator_draft: String,
     client: ExplorerClient<G>,
     pub notice: String,
+    /// Received `GET /mempool` summary. `None` means that response has not arrived.
+    /// Zeros are a receipt, not a missing summary.
+    mempool_backlog: Option<splora_frontend_shared::MempoolBacklog>,
 }
 
 impl<G> ScreenHost<G> {
@@ -5363,6 +5450,7 @@ impl<G> ScreenHost<G> {
             tx: TxScreen::new(),
             address: AddressScreen::new(),
             mempool: MempoolScreen::new(),
+            rbf: RbfScreen::new(),
             multi_address: MultiAddressScreen::new(),
             broadcast: BroadcastScreen::new(),
             test_txs: TestTransactionsScreen::new(),
@@ -5370,7 +5458,13 @@ impl<G> ScreenHost<G> {
             calculator_draft: String::new(),
             client,
             notice: String::new(),
+            mempool_backlog: None,
         }
+    }
+
+    /// Store a received mempool summary for the dashboard paint. Zeros count.
+    pub fn set_mempool_backlog(&mut self, backlog: splora_frontend_shared::MempoolBacklog) {
+        self.mempool_backlog = Some(backlog);
     }
 
     pub fn enter_calculator_amount(&mut self, field: &str, amount: &str) {
@@ -5434,6 +5528,7 @@ impl<G> ScreenHost<G> {
             Screen::Broadcast => self.broadcast.raw_tx.clone(),
             Screen::TestTransactions => self.test_txs.input.clone(),
             Screen::Calculator => self.calculator_draft.clone(),
+            Screen::Rbf => self.rbf.socket.clone(),
             _ => String::new(),
         }
     }
@@ -5468,6 +5563,7 @@ impl<G> ScreenHost<G> {
             Screen::Broadcast => self.broadcast.raw_tx = trimmed.to_string(),
             Screen::TestTransactions => self.test_txs.input = trimmed.to_string(),
             Screen::Calculator => self.calculator_draft = trimmed.to_string(),
+            Screen::Rbf => self.rbf.socket = trimmed.to_string(),
             _ => {}
         }
     }
@@ -5511,6 +5607,7 @@ impl<G> ScreenHost<G> {
             Screen::Broadcast => self.broadcast.raw_tx.push_str(text),
             Screen::TestTransactions => self.test_txs.input.push_str(text),
             Screen::Calculator => self.calculator_draft.push_str(text),
+            Screen::Rbf => self.rbf.socket.push_str(text),
             _ => {}
         }
     }
@@ -5555,6 +5652,9 @@ impl<G> ScreenHost<G> {
             }
             Screen::Calculator => {
                 self.calculator_draft.pop();
+            }
+            Screen::Rbf => {
+                self.rbf.socket.pop();
             }
             _ => {}
         }
@@ -5714,7 +5814,11 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
         match self.screen {
             Screen::Dashboard => {
                 if self.dashboard.search.trim().is_empty() {
-                    self.dashboard.load(&self.client)
+                    self.dashboard.load(&self.client)?;
+                    if let Some(backlog) = self.dashboard.mempool_backlog.clone() {
+                        self.set_mempool_backlog(backlog);
+                    }
+                    Ok(())
                 } else {
                     self.search_dashboard()
                 }
@@ -5724,6 +5828,7 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             Screen::Tx => self.tx.load(&self.client),
             Screen::Address => self.address.load(&self.client),
             Screen::Mempool => self.mempool.load(&self.client),
+            Screen::Rbf => self.rbf.load(&self.client),
             Screen::MultiAddress => self.multi_address.load(&self.client),
             Screen::Calculator => {
                 self.apply_calculator_draft();
@@ -5958,6 +6063,7 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             Screen::Tx => self.tx.rendered(),
             Screen::Address => self.address.rendered(),
             Screen::Mempool => self.mempool.rendered(),
+            Screen::Rbf => self.rbf.rendered(),
             Screen::MultiAddress => self.multi_address.rendered(),
             Screen::Broadcast => self.broadcast.rendered(),
             Screen::TestTransactions => self.test_txs.rendered(),
@@ -5995,6 +6101,7 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             Screen::Tx => self.tx.rows.clone(),
             Screen::Address => self.address.rows.clone(),
             Screen::Mempool => self.mempool.rows.clone(),
+            Screen::Rbf => Vec::new(),
             Screen::MultiAddress => self.multi_address.rows.clone(),
             Screen::Broadcast => self.broadcast.rows.clone(),
             Screen::TestTransactions
@@ -6044,6 +6151,22 @@ pub fn painted_shell_text<G: ExplorerGet + ExplorerPost>(
             host.rendered(),
         ];
         lines.extend(host.painted_rows());
+        if host.screen == Screen::Dashboard {
+            let page = splora_frontend_shared::dashboard_page_initial();
+            lines.push(format!("skeleton_visible={}", page.skeleton_visible));
+            for request in page.requests {
+                lines.push(request.to_string());
+            }
+            if let Some(backlog) = host.mempool_backlog {
+                let view = splora_frontend_shared::first_mempool_block_from_backlog(backlog);
+                if view.block_link_exists {
+                    lines.push(view.link_id);
+                    lines.push("blockLink".to_string());
+                }
+            }
+            lines.extend(crate::pools_screen::pools_screen_lines());
+            lines.extend(crate::graphs_screen::graphs_screen_lines());
+        }
         if !host.notice.is_empty() {
             lines.push(host.notice.clone());
         }

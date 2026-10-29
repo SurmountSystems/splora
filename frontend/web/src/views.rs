@@ -54,11 +54,12 @@ use leptos_router::hooks::{use_params_map, use_query_map};
 use leptos_router::path;
 use splora_api::Network;
 use splora_frontend_shared::{
-    FiatCode, address_path, address_txs_path, address_utxo_path, addresses_txs_path,
-    block_height_path, block_path, block_txs_path, blocks_path, blocks_start_height_path,
-    blocks_tip_hash_path, blocks_tip_height_path, broadcast_path, btc_fiat_jpy, btc_fiat_usd,
-    btc_to_sats, calculator_field_names, cap_btc_supply, enter_btc, enter_fiat, fee_estimates_path,
-    format_fiat, loaded_calculator, mempool_path, mempool_recent_path, parse_address_txs_summary,
+    FiatCode, MempoolBacklog, address_path, address_txs_path, address_utxo_path,
+    addresses_txs_path, block_height_path, block_path, block_txs_path, blocks_path,
+    blocks_start_height_path, blocks_tip_hash_path, blocks_tip_height_path, broadcast_path,
+    btc_fiat_jpy, btc_fiat_usd, btc_to_sats, calculator_field_names, cap_btc_supply, enter_btc,
+    enter_fiat, fee_estimates_path, first_mempool_block_from_backlog, format_fiat,
+    loaded_calculator, mempool_path, mempool_recent_path, parse_address_txs_summary,
     parse_blocks_tip_hash, parse_blocks_tip_height, route_availability, sats_fiat_usd, sats_to_btc,
     scripthash_txs_chain_page_path, scripthash_txs_mempool_path, scripthashes_txs_path,
     switch_usd_jpy_usd, test_txs_path, truncate_btc_decimals, usd_to_btc_and_sats,
@@ -494,6 +495,31 @@ pub fn mempool_size_markup(body: &str) -> String {
     )
 }
 
+/// First projected mempool block from `mempool-blocks.component.html`.
+///
+/// The parent id is the shared view's `link_id`. The child class is `blockLink`.
+/// A parsed `GET /mempool` body is a received backlog. The id and the class are
+/// emitted only when `block_link_exists` is true. A false flag emits neither.
+/// A body that does not parse is not a received backlog, so neither is emitted.
+pub fn first_mempool_block_link_markup(body: &str) -> String {
+    let Ok(stats) = parse_mempool_summary_json(body) else {
+        return String::new();
+    };
+    let view = first_mempool_block_from_backlog(MempoolBacklog {
+        count: stats.count,
+        vsize: stats.vsize,
+        total_fee: stats.total_fee,
+        fee_histogram_len: stats.fee_histogram.len(),
+    });
+    if !view.block_link_exists {
+        return String::new();
+    }
+    format!(
+        "<div id=\"{}\"><a class=\"blockLink\">&nbsp;</a></div>",
+        view.link_id
+    )
+}
+
 pub fn mempool_summary_text(body: &str) -> String {
     let mut lines = Vec::new();
     if skip_closed_or_empty(body, &mut lines) {
@@ -517,6 +543,18 @@ pub fn mempool_summary_text(body: &str) -> String {
     }
     lines.push("The incoming virtual-bytes-per-second rate is not in the payload.".to_string());
     lines.join("\n")
+}
+
+/// Loaded mempool section `Dashboard` inlines once `GET /mempool` is stored.
+///
+/// Order matches the three view lines this replaces: summary text in a `pre`,
+/// size markup as a `div`'s inner HTML, then the first block link markup as a
+/// `div`'s inner HTML. The helpers stay the painters. This only composes them.
+pub fn dashboard_loaded_markup(mempool_body: &str) -> String {
+    let summary = mempool_summary_text(mempool_body);
+    let size = mempool_size_markup(mempool_body);
+    let link = first_mempool_block_link_markup(mempool_body);
+    format!("<pre>{summary}</pre><div>{size}</div><div>{link}</div>")
 }
 
 pub fn dashboard_tip_fees_text(tip_hash: &str, tip_height: &str, fees: &str) -> String {
@@ -669,8 +707,7 @@ fn Dashboard() -> impl IntoView {
         }></div>
         <div inner_html=move || transaction_fees_heading(network.get() == Network::Liquid)></div>
         <pre>{move || dashboard_tip_fees_text(&tip_hash_body.get(), &tip_height_body.get(), &fees_body.get())}</pre>
-        <pre>{move || mempool_summary_text(&mempool_body.get())}</pre>
-        <div inner_html=move || mempool_size_markup(&mempool_body.get())></div>
+        <div inner_html=move || dashboard_loaded_markup(&mempool_body.get())></div>
     }
 }
 
@@ -761,6 +798,56 @@ pub fn block_page_heading_markup(block_json: &str) -> String {
         markup.push_str("\nBlock\n");
     }
     markup
+}
+
+/// Block-screen `h2` from `GET /block/:hash` `tx_count`.
+///
+/// The heading text is `empty_block_heading_from_tx_count`. A body that
+/// does not parse has no heading.
+pub fn shows_empty_blocks_properly_markup(block_json: &str) -> String {
+    let Ok(block) = parse_block_json(block_json) else {
+        return String::new();
+    };
+    let heading = splora_frontend_shared::empty_block_heading_from_tx_count(block.tx_count);
+    format!("<h2>{heading}</h2>")
+}
+
+/// Block-screen `h2` and first `ul.pagination` from `no_pagination_block_screen`.
+///
+/// The heading and the pager child count are that shared view of `tx_count`.
+/// The list link is `GET /block/:hash/txs`. A body that does not parse has
+/// no heading.
+pub fn shows_blocks_with_no_pagination_markup(block_json: &str) -> String {
+    let Ok(block) = parse_block_json(block_json) else {
+        return String::new();
+    };
+    let screen = splora_frontend_shared::no_pagination_block_screen(block.tx_count);
+    let path = block_txs_path(&block.id);
+    let items = "<li class=\"page-item\"></li>".repeat(screen.first_pagination_children);
+    format!(
+        "<h2>{}</h2><a href=\"{path}\"></a><ul class=\"pagination\">{items}</ul>",
+        screen.heading
+    )
+}
+
+/// First `.header-bg.box > a` for one block transaction page.
+///
+/// Whether that header differs from the active page is
+/// `after_next_page_click_supports_pagination_on_the_block_screen`.
+/// The href is `GET /block/:hash/txs/:start_index` from `block_hash` and
+/// `start_index`. The anchor text is that start index only when the shared
+/// view says the next page header differs. No transaction count, header, or
+/// transaction id list is invented here.
+pub fn paint_supports_pagination_on_the_block_screen(block_hash: &str, start_index: u64) -> String {
+    let view =
+        splora_frontend_shared::after_next_page_click_supports_pagination_on_the_block_screen();
+    let path = splora_frontend_shared::block_txs_start_index_path(block_hash, start_index);
+    let header = if view.later_page_header_differs {
+        start_index.to_string()
+    } else {
+        String::new()
+    };
+    format!("<div class=\"header-bg box\"><a href=\"{path}\">{header}</a></div>")
 }
 
 /// Block-details Size label beside the other detail rows.
@@ -1998,6 +2085,50 @@ fn RegistryEntryPage() -> impl IntoView {
     view! {
         <h2>"Registry entry"</h2>
         <div inner_html=move || registry_entry_markup(&body.get(), network.get() == Network::Liquid)></div>
+    }
+}
+
+/// Painted RBF screen after a websocket body.
+/// Tree count is `rbf_socket_trees(body).tree_len` (`rbfLatest` length), not a fixed number.
+pub fn rbf_page_socket_markup(body: &str) -> String {
+    let tree_len = splora_frontend_shared::rbf_socket_trees(body)
+        .map(|trees| trees.tree_len)
+        .unwrap_or(0);
+    format!("screen=rbf tree_count={tree_len}")
+}
+
+/// Opening RBF screen: no replacements yet, tree length 0, and the two replacement GETs.
+/// A websocket body is painted by `rbf_page_socket_markup`, which calls `rbf_socket_trees`.
+#[component]
+pub fn RbfPage() -> impl IntoView {
+    let opening = splora_frontend_shared::rbf_page_initial();
+    let no_replacements = if opening.shows_no_replacements {
+        "No replacements"
+    } else {
+        ""
+    };
+    let replacement_tree_len = opening.replacement_tree_len.unwrap_or(0);
+    let requests: Vec<&'static str> = opening
+        .requests
+        .into_iter()
+        .filter(|request| {
+            matches!(
+                *request,
+                "GET /api/v1/replacements" | "GET /api/v1/fullrbf/replacements"
+            )
+        })
+        .collect();
+    view! {
+        <section>
+            <h1>"RBF"</h1>
+            <p>{no_replacements}</p>
+            <p>"replacement tree length " {replacement_tree_len}</p>
+            <p>"tree count " {replacement_tree_len}</p>
+            {requests
+                .into_iter()
+                .map(|request| view! { <p>{request}</p> })
+                .collect_view()}
+        </section>
     }
 }
 

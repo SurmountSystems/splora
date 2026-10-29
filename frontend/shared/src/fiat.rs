@@ -32,6 +32,22 @@ pub fn format_fiat(code: FiatCode, amount: &str) -> String {
     }
 }
 
+/// Caller-supplied amount with the symbol for `code`.
+///
+/// USD is `$` then the digits, with no thousands comma. This is not an indexer price.
+pub fn displays_usd_values_with_correct_currency_symbol(amount: &str, code: FiatCode) -> String {
+    format_fiat(code, amount)
+}
+
+/// Caller-supplied amount with two USD cent digits when the fraction has one digit.
+///
+/// Uses [`displays_usd_values_with_correct_currency_symbol`]. The dollar sign
+/// stays before the digits, and a USD amount has no thousands comma. This is
+/// not an indexer price.
+pub fn displays_usd_values_with_proper_decimal_format(amount: &str, code: FiatCode) -> String {
+    displays_usd_values_with_correct_currency_symbol(amount, code)
+}
+
 /// Format one amount as USD, then JPY, then USD.
 pub fn switch_usd_jpy_usd(amount: &str) -> [String; 3] {
     [
