@@ -16,6 +16,9 @@ const ADDRESS_STARTS: &[&str] = &["bc1", "tb1", "bcrt1", "lq1", "ex1", "ert1"];
 /// A mainnet taproot address is `bc1p` plus 58 characters (62 in total).
 const BECH32M_ADDRESS_LEN: usize = 62;
 
+/// Shortest mainnet bech32 v0 address: `bc1q` plus 38 characters (42 in total).
+const BECH32_ADDRESS_LEN: usize = 42;
+
 /// Bitcoin base58 alphabet. Excludes 0, O, I, and l.
 const BASE58: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -47,8 +50,8 @@ pub fn plan_search_on(raw: &str, liquid: bool) -> Option<SearchPlan> {
     if is_hex_64(query) {
         return Some(hex_plan(query, liquid));
     }
-    // "bc1q" starts with bc1, so it is an address, not an address prefix.
-    // A short bc1p string is a prefix. A 62-character bech32m address is not.
+    // A partial bc1q or bc1p string, in any case, is a prefix folded to lowercase.
+    // A full v0 address is 42 characters. A full bech32m address is 62.
     if is_address(query) {
         return Some(address_plan(query));
     }
@@ -280,6 +283,14 @@ fn is_address(query: &str) -> bool {
         // Partial bc1p text is a prefix lookup. A full bech32m address still wins.
         if lower.starts_with("bc1p")
             && query.chars().count() < BECH32M_ADDRESS_LEN
+            && is_prefix(query)
+        {
+            return false;
+        }
+        // Partial bc1q text, any case, is the same kind of prefix.
+        // A full v0 address (42 characters, or a longer p2wsh) still wins.
+        if lower.starts_with("bc1q")
+            && query.chars().count() < BECH32_ADDRESS_LEN
             && is_prefix(query)
         {
             return false;

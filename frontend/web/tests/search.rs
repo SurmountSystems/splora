@@ -1,4 +1,4 @@
-//! The search control trims the query and classifies it as a block height when every character is an ASCII digit, including height 0 and a 64-digit id, as a transaction href, a block href, and the scripthash reads GET /scripthash/{hex}, GET /scripthash/{hex}/txs, GET /scripthash/{hex}/utxo, and GET /scripthash/{hex}/txs/mempool when the query is exactly 64 hex digits that are not all digits, as an address when it starts with bc1, tb1, bcrt1, lq1, ex1, or ert1 in any case, except a bc1p string shorter than 62 characters which is an address prefix folded to ASCII lowercase, or is a base58 string of length 26 through 90 starting with 1, 3, m, n, or 2, and otherwise as an address prefix of 1 to 64 characters with no page href when it has no slash, question mark, hash, space, or control character. A bc1 prefix is ASCII lowercase. Any other prefix keeps the typed case. Empty input and anything else are not a search. Mainnet search does not request /asset/.
+//! The search control trims the query and classifies it as a block height when every character is an ASCII digit, including height 0 and a 64-digit id, as a transaction href, a block href, and the scripthash reads GET /scripthash/{hex}, GET /scripthash/{hex}/txs, GET /scripthash/{hex}/utxo, and GET /scripthash/{hex}/txs/mempool when the query is exactly 64 hex digits that are not all digits, as an address when it starts with bc1, tb1, bcrt1, lq1, ex1, or ert1 in any case, except a bc1q string shorter than 42 characters or a bc1p string shorter than 62 characters, which is an address prefix folded to ASCII lowercase, or is a base58 string of length 26 through 90 starting with 1, 3, m, n, or 2, and otherwise as an address prefix of 1 to 64 characters with no page href when it has no slash, question mark, hash, space, or control character. A bc1 prefix is ASCII lowercase. Any other prefix keeps the typed case. Empty input and anything else are not a search. Mainnet search does not request /asset/.
 
 use splora_web::{
     IndexerRequest, SearchPlan, address_prefix_markup, plan_search, search_links_markup,
@@ -110,7 +110,9 @@ fn empty_query_is_not_a_search() {
 
 #[test]
 fn bc1_address_opens_the_address_page() {
-    let address = "bc1qexample";
+    // Full pay-to-witness-pubkey-hash is 42 characters. Shorter bc1q text is a prefix.
+    let address = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    assert_eq!(address.chars().count(), 42, "{address}");
     let plan = plan_search(address).expect("bc1 address");
     assert_eq!(plan.hrefs, vec![format!("/address/{address}")]);
     assert_one_get(&plan, &format!("/address/{address}"));
@@ -120,11 +122,18 @@ fn bc1_address_opens_the_address_page() {
         format!("<a href=\"/address/{address}\">/address/{address}</a>")
     );
 
-    let encoded_looking = "bc1q+example";
-    let plus = plan_search(encoded_looking).expect("plus stays in the address");
-    assert_eq!(plus.hrefs, vec!["/address/bc1q+example".to_string()]);
-    assert_one_get(&plus, "/address/bc1q+example");
-    assert!(!plus.requests[0].path.contains('%'));
+    let upper = address.to_ascii_uppercase();
+    let upper_plan = plan_search(&upper).expect("upper full address");
+    assert_eq!(upper_plan.hrefs, vec![format!("/address/{upper}")]);
+    assert_one_get(&upper_plan, &format!("/address/{upper}"));
+
+    // Full pay-to-witness-script-hash is 62 characters and still opens the address page.
+    let script = format!("bc1q{}", "q".repeat(58));
+    assert_eq!(script.chars().count(), 62);
+    let plan = plan_search(&script).expect("full bc1q script address");
+    assert_eq!(plan.hrefs, vec![format!("/address/{script}")]);
+    assert_one_get(&plan, &format!("/address/{script}"));
+    assert!(!plan.requests[0].path.contains("address-prefix"));
 }
 
 #[test]
@@ -143,11 +152,27 @@ fn bech32_family_prefixes_are_addresses_in_any_case() {
 }
 
 #[test]
-fn short_bc1q_is_an_address() {
-    let plan = plan_search("bc1q").expect("bc1q");
-    assert_eq!(plan.hrefs, vec!["/address/bc1q".to_string()]);
-    assert_one_get(&plan, "/address/bc1q");
-    assert!(!plan.requests[0].path.contains("address-prefix"));
+fn short_bc1q_is_a_folded_prefix() {
+    for query in ["bc1q", "BC1Q", "Bc1q"] {
+        let plan = plan_search(query).expect(query);
+        assert_eq!(plan.hrefs, Vec::<String>::new(), "{query}");
+        assert_one_get(&plan, "/address-prefix/bc1q");
+        assert!(!plan.requests[0].path.contains('%'), "{query}");
+    }
+    // Longer than the exact token `bc1q`, still shorter than a full address.
+    for query in ["BC1Q0003", "bC1q0003"] {
+        let plan = plan_search(query).expect(query);
+        assert_eq!(plan.hrefs, Vec::<String>::new(), "{query}");
+        assert_one_get(&plan, "/address-prefix/bc1q0003");
+        assert!(!plan.requests[0].path.contains('%'), "{query}");
+    }
+    let example = plan_search("bc1qexample").expect("short bc1q example");
+    assert_eq!(example.hrefs, Vec::<String>::new());
+    assert_one_get(&example, "/address-prefix/bc1qexample");
+    let plus = plan_search("bc1q+example").expect("plus stays in the prefix");
+    assert_eq!(plus.hrefs, Vec::<String>::new());
+    assert_one_get(&plus, "/address-prefix/bc1q+example");
+    assert!(!plus.requests[0].path.contains('%'));
 }
 
 #[test]

@@ -62,6 +62,7 @@ pub mod reward_stats;
 mod rows;
 mod screen_text;
 mod show_invalid_error_unblinded_tx;
+mod suite;
 mod theme_option_label;
 mod theme_preference_storage;
 mod timezone_option_label;
@@ -91,7 +92,7 @@ pub use calculator::{
     shows_warning_when_entering_21m_btc, strip_sats_decimal, strips_decimals_from_satoshis_input,
     truncate_btc_decimals,
 };
-pub use dashboard_page::{DashboardPage, dashboard_page_initial};
+pub use dashboard_page::{DashboardPage, dashboard_page_initial, loads_the_dashboard};
 pub use dashboard_phone_scrollbar::{
     DashboardPhoneScrollbar, loads_the_dashboard_with_no_scrollbars_on_mobile,
 };
@@ -234,6 +235,15 @@ pub use screen_text::{
 };
 #[cfg(not(test))]
 pub use show_invalid_error_unblinded_tx::show_invalid_error_unblinded_tx;
+pub use suite::{
+    AddressTxList, AdjacentBlocks, BLOCK_TX_PAGE_LEN, BlockOpen, BlockTxPage, ConfirmedBlockLink,
+    HomeView, MempoolStatus, PrefixLookup, SharedCase, TransactionView, address_tx_list,
+    address_view_path, adjacent_blocks, block_details_open, block_open, block_open_from_height,
+    block_pages_differ, block_tx_page, block_tx_page_path, home_view, indexer_path_is_plain,
+    liquid_rows_painted, next_block_tx_path, prefix_hits, prefix_lookup, recent_capped,
+    recent_unconfirmed, recent_while_paused, recent_with_arrival, shared_cases,
+    status_from_mempool, transaction_view,
+};
 pub use theme_option_label::theme_option_label;
 pub use theme_preference_storage::theme_preference_storage;
 pub use timezone_option_label::timezone_option_label;

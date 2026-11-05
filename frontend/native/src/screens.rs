@@ -13,15 +13,15 @@ use splora_frontend_shared::{
     blocks_start_height_path, broadcast_path, btc_fiat_jpy, btc_fiat_usd, btc_to_sats,
     calculator_field_names, cap_btc_supply, enter_btc, enter_fiat, fee_estimates_path, format_fiat,
     loaded_calculator, mempool_path, mempool_recent_path, mempool_txids_page_path,
-    mempool_txids_path, package_path, parse_address_prefix, parse_address_txs_summary,
-    parse_addresses_txs, parse_addresses_txs_summary, parse_asset_supply,
-    parse_asset_supply_decimal, parse_assets_registry, parse_assets_registry_search, parse_block,
-    parse_block_header, parse_block_height, parse_block_raw_hex, parse_block_status,
-    parse_block_txid, parse_block_txids, parse_mempool_txids, parse_merkle_proof,
-    parse_merkleblock_proof, parse_outspend, parse_outspends, parse_package, parse_scripthash,
-    parse_scripthashes_txs, parse_tx, parse_tx_hex, parse_tx_raw_hex, rbf_socket_trees,
-    route_availability, sat_per_vbyte_from_vsize, sat_per_vbyte_from_weight, sats_fiat_usd,
-    sats_to_btc, scripthash_path, scripthash_txs_chain_page_path, scripthash_txs_mempool_path,
+    mempool_txids_path, package_path, parse_address_txs_summary, parse_addresses_txs,
+    parse_addresses_txs_summary, parse_asset_supply, parse_asset_supply_decimal,
+    parse_assets_registry, parse_assets_registry_search, parse_block, parse_block_header,
+    parse_block_height, parse_block_raw_hex, parse_block_status, parse_block_txid,
+    parse_block_txids, parse_mempool_txids, parse_merkle_proof, parse_merkleblock_proof,
+    parse_outspend, parse_outspends, parse_package, parse_scripthash, parse_scripthashes_txs,
+    parse_tx, parse_tx_hex, parse_tx_raw_hex, rbf_socket_trees, route_availability,
+    sat_per_vbyte_from_vsize, sat_per_vbyte_from_weight, sats_fiat_usd, sats_to_btc,
+    scripthash_path, scripthash_txs_chain_page_path, scripthash_txs_mempool_path,
     scripthash_txs_path, scripthash_utxo_path, scripthashes_txs_body, scripthashes_txs_path,
     switch_usd_jpy_usd, test_txs_path, truncate_btc_decimals, tx_hex_path, tx_merkle_proof_path,
     tx_merkleblock_proof_path, tx_outspend_path, tx_outspends_path, tx_path, tx_raw_path,
@@ -1190,6 +1190,11 @@ pub struct MempoolScreen {
     pub body: String,
     rows: Vec<String>,
     last_seen: String,
+    /// Recent rows on screen. Pause copies this list.
+    shown: Vec<splora_frontend_shared::wire::RecentTransaction>,
+    paused: bool,
+    /// Rows captured when pause turned on. A later fetch does not replace them.
+    held: Vec<splora_frontend_shared::wire::RecentTransaction>,
 }
 
 impl MempoolScreen {
@@ -1198,11 +1203,31 @@ impl MempoolScreen {
             body: String::new(),
             rows: Vec::new(),
             last_seen: String::new(),
+            shown: Vec::new(),
+            paused: false,
+            held: Vec::new(),
         }
     }
 
     pub fn summary(&self) -> String {
         format!("mempool: {}", self.body)
+    }
+
+    /// Keep the recent rows already on screen, or resume live updates.
+    /// The painted rows stay until the next load. A later load while paused
+    /// still reads `GET /mempool/recent` and does not paint new txids.
+    pub fn toggle_pause(&mut self) {
+        if self.paused {
+            self.paused = false;
+            self.held.clear();
+        } else {
+            self.held = self.shown.clone();
+            self.paused = true;
+        }
+        self.body = rewrite_pause_marks(&self.body, self.paused);
+        if !self.rows.iter().any(|row| row == "row pause") {
+            self.rows.push("row pause".to_string());
+        }
     }
 
     /// GET `/mempool` and GET `/mempool/recent`.
@@ -1218,29 +1243,47 @@ impl MempoolScreen {
             return Err(ClientError::BadPath);
         }
         let summary_lines = render_mempool_summary(&summary_body)?;
-        let recent_lines = render_recent(&recent_body)?;
-        let mut rows = recent_row_lines(&recent_body)?;
+        let parsed = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(
+            &recent_body,
+        )
+        .map_err(http_parse)?;
+        let to_paint = if self.paused {
+            recent_kept_while_paused(&self.held, &parsed)
+        } else {
+            let capped = splora_frontend_shared::cap_recent_transactions(&parsed).to_vec();
+            self.shown = capped.clone();
+            capped
+        };
+        let recent_lines = render_recent_rows(&to_paint);
+        let mut rows = recent_tx_rows(&to_paint);
         let mut lines = vec![summary_lines, recent_lines];
-        if let Some(body) = read_optional(client, mempool_txids_path())? {
-            if let Ok(txids) = parse_mempool_txids(&body) {
-                if let Some(last) = txids.last() {
-                    rows.push(format!("row mempool page {last}"));
-                }
-                for txid in &txids {
-                    rows.push(format!("row mempool txid {txid}"));
-                }
-            }
-        }
-        if !self.last_seen.is_empty() {
-            let page = mempool_txids_page_path(&self.last_seen);
-            if let Some(body) = read_optional(client, &page)? {
+        if !self.paused {
+            if let Some(body) = read_optional(client, mempool_txids_path())? {
                 if let Ok(txids) = parse_mempool_txids(&body) {
-                    for txid in txids {
-                        lines.push(txid.clone());
+                    if let Some(last) = txids.last() {
+                        rows.push(format!("row mempool page {last}"));
+                    }
+                    for txid in &txids {
                         rows.push(format!("row mempool txid {txid}"));
                     }
                 }
             }
+            if !self.last_seen.is_empty() {
+                let page = mempool_txids_page_path(&self.last_seen);
+                if let Some(body) = read_optional(client, &page)? {
+                    if let Ok(txids) = parse_mempool_txids(&body) {
+                        for txid in txids {
+                            lines.push(txid.clone());
+                            rows.push(format!("row mempool txid {txid}"));
+                        }
+                    }
+                }
+            }
+        }
+        rows.push("row pause".to_string());
+        lines.push("btn-pause".to_string());
+        if self.paused {
+            lines.push("paused".to_string());
         }
         self.rows = rows;
         self.body = lines.join("\n");
@@ -3018,11 +3061,45 @@ fn tx_row_from_recent(tx: splora_frontend_shared::wire::RecentTransaction) -> Tx
 fn recent_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
     let txs = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(body)
         .map_err(http_parse)?;
-    Ok(splora_frontend_shared::cap_recent_transactions(&txs)
-        .iter()
+    Ok(recent_tx_rows(
+        splora_frontend_shared::cap_recent_transactions(&txs),
+    ))
+}
+
+fn recent_tx_rows(rows: &[splora_frontend_shared::wire::RecentTransaction]) -> Vec<String> {
+    rows.iter()
         .cloned()
         .map(|tx| paint_tx_row(&tx_row_from_recent(tx)))
-        .collect())
+        .collect()
+}
+
+/// Ids captured at pause stay, in that order. A later id that was not visible is left out.
+fn recent_kept_while_paused(
+    held: &[splora_frontend_shared::wire::RecentTransaction],
+    later: &[splora_frontend_shared::wire::RecentTransaction],
+) -> Vec<splora_frontend_shared::wire::RecentTransaction> {
+    let visible: Vec<String> = held.iter().map(|tx| tx.txid.clone()).collect();
+    let later_ids: Vec<String> = later.iter().map(|tx| tx.txid.clone()).collect();
+    splora_frontend_shared::recent_while_paused(&visible, &later_ids)
+        .into_iter()
+        .filter_map(|id| held.iter().find(|tx| tx.txid == id).cloned())
+        .collect()
+}
+
+fn rewrite_pause_marks(body: &str, paused: bool) -> String {
+    let mut text = body
+        .lines()
+        .filter(|line| *line != "btn-pause" && *line != "paused")
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !text.is_empty() {
+        text.push('\n');
+    }
+    text.push_str("btn-pause");
+    if paused {
+        text.push_str("\npaused");
+    }
+    text
 }
 
 fn transaction_row_lines(body: &str) -> Result<Vec<String>, ClientError> {
@@ -3321,8 +3398,12 @@ fn render_recent(body: &str) -> Result<String, ClientError> {
     let rows = serde_json::from_str::<Vec<splora_frontend_shared::wire::RecentTransaction>>(body)
         .map_err(http_parse)?;
     let rows = splora_frontend_shared::cap_recent_transactions(&rows);
+    Ok(render_recent_rows(rows))
+}
+
+fn render_recent_rows(rows: &[splora_frontend_shared::wire::RecentTransaction]) -> String {
     if rows.is_empty() {
-        return Ok("recent:\nThere are no transactions.".to_string());
+        return "recent:\nThere are no transactions.".to_string();
     }
     let mut lines = Vec::with_capacity(rows.len() + 5);
     // Same letters as the dashboard card title and the recent-transactions page h1.
@@ -3341,7 +3422,7 @@ fn render_recent(body: &str) -> Result<String, ClientError> {
             fee_rate_suffix(sat_per_vbyte_from_vsize(tx.fee, tx.vsize))
         )
     }));
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 fn render_fee_estimates(body: &str) -> Result<String, ClientError> {
@@ -5781,6 +5862,10 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
             let address = address.to_string();
             return self.open_address(&address);
         }
+        if row == "row pause" {
+            self.mempool.toggle_pause();
+            return self.finish(Ok(()));
+        }
         if row == "row block details" {
             self.block.toggle_details();
             return self.finish(Ok(()));
@@ -5988,7 +6073,8 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
                     self.screen = Screen::Dashboard;
                     return Ok(());
                 }
-                let addresses = parse_address_prefix(&body).map_err(http_parse)?;
+                let addresses =
+                    splora_frontend_shared::prefix_hits(prefix, &body).map_err(http_parse)?;
                 if addresses.is_empty() {
                     self.dashboard.lines = "There are no addresses.".to_string();
                     self.dashboard.rows.clear();
@@ -6177,6 +6263,10 @@ pub fn painted_shell_text<G: ExplorerGet + ExplorerPost>(
                 if view.block_link_exists {
                     lines.push(view.link_id);
                     lines.push("blockLink".to_string());
+                    lines.push(
+                        splora_frontend_shared::load_first_mempool_block_after_skeleton_loads()
+                            .route,
+                    );
                 }
             }
             lines.extend(crate::pools_screen::pools_screen_lines());

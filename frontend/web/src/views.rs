@@ -59,10 +59,11 @@ use splora_frontend_shared::{
     blocks_start_height_path, blocks_tip_hash_path, blocks_tip_height_path, broadcast_path,
     btc_fiat_jpy, btc_fiat_usd, btc_to_sats, calculator_field_names, cap_btc_supply, enter_btc,
     enter_fiat, fee_estimates_path, first_mempool_block_from_backlog, format_fiat,
-    loaded_calculator, mempool_path, mempool_recent_path, parse_address_txs_summary,
-    parse_blocks_tip_hash, parse_blocks_tip_height, route_availability, sats_fiat_usd, sats_to_btc,
-    scripthash_txs_chain_page_path, scripthash_txs_mempool_path, scripthashes_txs_path,
-    switch_usd_jpy_usd, test_txs_path, truncate_btc_decimals, usd_to_btc_and_sats,
+    load_first_mempool_block_after_skeleton_loads, loaded_calculator, mempool_path,
+    mempool_recent_path, parse_address_txs_summary, parse_blocks_tip_hash, parse_blocks_tip_height,
+    route_availability, sats_fiat_usd, sats_to_btc, scripthash_txs_chain_page_path,
+    scripthash_txs_mempool_path, scripthashes_txs_path, switch_usd_jpy_usd, test_txs_path,
+    truncate_btc_decimals, usd_to_btc_and_sats,
 };
 
 fn shell_style() -> String {
@@ -514,9 +515,10 @@ pub fn first_mempool_block_link_markup(body: &str) -> String {
     if !view.block_link_exists {
         return String::new();
     }
+    let opened = load_first_mempool_block_after_skeleton_loads();
     format!(
-        "<div id=\"{}\"><a class=\"blockLink\">&nbsp;</a></div>",
-        view.link_id
+        "<div id=\"{}\"><a class=\"blockLink\" href=\"{}\">&nbsp;</a></div>",
+        view.link_id, opened.route
     )
 }
 

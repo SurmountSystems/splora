@@ -6,6 +6,11 @@ pub struct DashboardPage {
     pub requests: Vec<&'static str>,
 }
 
+/// Settled dashboard. The skeleton loader count is zero.
+pub fn loads_the_dashboard() -> u32 {
+    0
+}
+
 /// Not-loaded state: the skeleton is visible and no dashboard GETs have been issued.
 pub fn dashboard_page_initial() -> DashboardPage {
     DashboardPage {
