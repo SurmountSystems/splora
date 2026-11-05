@@ -1,5 +1,6 @@
-//! Graphs and hashrate render `not-served`. The price chart names
-//! `/api/v1/historical-price` and renders `not-checked`.
+//! Graphs page text includes the Angular card title
+//! `Mempool by vBytes (sat/vByte)`. Hashrate renders `not-served`.
+//! The price chart names `/api/v1/historical-price` and renders `not-checked`.
 //! No chart is drawn. No price is requested.
 
 use splora_web::{graphs_page_text, hashrate_page_text, price_chart_page_text};
@@ -65,7 +66,10 @@ fn quoted_route_arg(body: &str) -> String {
 
 #[test]
 fn graphs_hashrate_and_price_chart_show_route_tokens() {
-    assert_eq!(graphs_page_text(), "not-served");
+    assert!(
+        graphs_page_text().contains("Mempool by vBytes (sat/vByte)"),
+        "graphs page text must include the Angular card title"
+    );
     assert_eq!(hashrate_page_text(), "not-served");
     assert_eq!(price_chart_page_text(), "not-checked");
 

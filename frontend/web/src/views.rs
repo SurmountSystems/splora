@@ -707,7 +707,18 @@ fn Dashboard() -> impl IntoView {
         }></div>
         <div inner_html=move || transaction_fees_heading(network.get() == Network::Liquid)></div>
         <pre>{move || dashboard_tip_fees_text(&tip_hash_body.get(), &tip_height_body.get(), &fees_body.get())}</pre>
-        <div inner_html=move || dashboard_loaded_markup(&mempool_body.get())></div>
+        <div inner_html=move || {
+            let body = mempool_body.get();
+            let summary = mempool_summary_text(&body);
+            let loaded = dashboard_loaded_markup(&body);
+            // One summary pre. This call's text replaces the same opening pre.
+            let prefix = format!("<pre>{summary}</pre>");
+            if let Some(rest) = loaded.strip_prefix(&prefix) {
+                format!("{prefix}{rest}")
+            } else {
+                format!("{prefix}{loaded}")
+            }
+        }></div>
     }
 }
 
@@ -896,6 +907,67 @@ pub fn block_page_weight_markup(details: &str, block_json: &str) -> String {
     out
 }
 
+/// Width for `block_transactions_markup_for_viewport`.
+///
+/// The browser reports `innerWidth`. No window is not a desktop width.
+fn block_page_viewport_width() -> u32 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return web_sys::window()
+            .and_then(|window| window.inner_width().ok())
+            .and_then(|width| width.as_f64())
+            .filter(|width| width.is_finite() && *width >= 0.0)
+            .map(|width| width.round() as u32)
+            .unwrap_or(0);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        0
+    }
+}
+
+fn helper_pagination_list(markup: &str) -> Option<&str> {
+    let at = markup.find("<ul class=\"pagination\">")?;
+    let end_rel = markup[at..].find("</ul>")?;
+    Some(&markup[at..at + end_rel + "</ul>".len()])
+}
+
+/// Transaction list the block page paints for one viewport width.
+///
+/// `viewport_width` is the width the caller measured. The first
+/// `ul.pagination` child count comes from
+/// `block_transactions_markup_for_viewport`.
+pub fn block_page_transactions_markup(
+    block_json: &str,
+    txs_json: &str,
+    page: u32,
+    viewport_width: u32,
+) -> String {
+    let rows = block_transactions_markup(block_json, txs_json, page);
+    let pagination =
+        crate::block_transactions_markup_for_viewport(block_json, txs_json, page, viewport_width);
+    with_helper_pagination(rows, &pagination)
+}
+
+/// Pagination list from the viewport helper, inside the transaction heading.
+fn with_helper_pagination(rows: String, helper_markup: &str) -> String {
+    let Some(list) = helper_pagination_list(helper_markup) else {
+        return format!("{rows}{helper_markup}");
+    };
+    let Some(old_at) = rows.find("<ul class=\"pagination\">") else {
+        return format!("{rows}{helper_markup}");
+    };
+    let Some(old_end_rel) = rows[old_at..].find("</ul>") else {
+        return format!("{rows}{helper_markup}");
+    };
+    let old_end = old_at + old_end_rel + "</ul>".len();
+    let mut out = String::with_capacity(rows.len() + list.len());
+    out.push_str(&rows[..old_at]);
+    out.push_str(list);
+    out.push_str(&rows[old_end..]);
+    out
+}
+
 #[component]
 fn BlockPage() -> impl IntoView {
     let params = use_params_map();
@@ -1009,7 +1081,17 @@ fn BlockPage() -> impl IntoView {
                 })
                 .unwrap_or(0);
             let page = start / 25 + 1;
-            block_transactions_markup(&block_body.get(), &txs_body.get(), page)
+            let block = block_body.get();
+            let txs = txs_body.get();
+            let viewport_width = block_page_viewport_width();
+            let pagination = crate::block_transactions_markup_for_viewport(
+                &block,
+                &txs,
+                page,
+                viewport_width,
+            );
+            let rows = block_transactions_markup(&block, &txs, page);
+            with_helper_pagination(rows, &pagination)
         }></div>
         <div inner_html=move || block_status_markup(&status_body.get())></div>
         <div inner_html=move || {
@@ -1081,6 +1163,9 @@ fn TransactionPage() -> impl IntoView {
     let status_body = RwSignal::new(String::new());
     let tip_height_body = RwSignal::new(String::new());
     let spend_rows = RwSignal::new(Vec::new());
+    // Cypress `rbfTransaction` sends `txReplaced`. This page does not open
+    // that socket, so the body stays empty until a caller supplies it.
+    let replacement_socket = RwSignal::new(String::new());
     let txid = params.with(|p| p.get("txid").unwrap_or_default());
     for req in transaction_requests(&txid) {
         let indexed = tx_path(txid.trim());
@@ -1129,6 +1214,12 @@ fn TransactionPage() -> impl IntoView {
     });
     view! {
         <h1>"Transaction"</h1>
+        <div inner_html=move || {
+            crate::desktop_rbf::desktop_rbf_transaction_markup(
+                &body.get(),
+                &replacement_socket.get(),
+            )
+        }></div>
         <div inner_html=move || {
             let name = match network.get() {
                 Network::Mainnet => "mainnet",

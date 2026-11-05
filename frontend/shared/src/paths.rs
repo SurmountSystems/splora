@@ -463,6 +463,11 @@ pub fn package_body(hexes: &[&str]) -> String {
     test_txs_body(hexes)
 }
 
+/// Explorer page `/assets/asset/` plus the asset id. Not an indexer route.
+pub fn asset_page_path(asset_id: &str) -> String {
+    format!("/assets/asset/{asset_id}")
+}
+
 /// `GET /asset/:asset`. Path string only. Not an indexer route.
 pub fn asset_path(asset: &str) -> String {
     format!("/asset/{asset}")

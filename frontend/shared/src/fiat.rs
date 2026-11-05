@@ -48,6 +48,106 @@ pub fn displays_usd_values_with_proper_decimal_format(amount: &str, code: FiatCo
     displays_usd_values_with_correct_currency_symbol(amount, code)
 }
 
+/// Dashboard `.table-cell-fiat` texts after JPY is selected.
+///
+/// The first cell is the currency code. It has no yen sign. Each later cell
+/// is [`format_fiat`] of an integer amount. Those amounts are not a BTC
+/// price, and this does not read a price feed.
+pub fn formats_all_jpy_values_correctly_without_decimals() -> Vec<String> {
+    let mut cells = vec!["JPY".to_string()];
+    for amount in ["2", "15", "1500"] {
+        cells.push(format_fiat(FiatCode::Jpy, amount));
+    }
+    cells
+}
+
+/// Dashboard `.table-cell-fiat` texts after USD, then after JPY.
+///
+/// Each snapshot has the currency code at index 0 and [`format_fiat`] of a
+/// small integer at index 1. That integer is not a BTC price. This does not
+/// read a price feed.
+pub fn correctly_formats_when_switching_from_usd_to_jpy() -> [Vec<String>; 2] {
+    [
+        switched_fiat_cells(FiatCode::Usd),
+        switched_fiat_cells(FiatCode::Jpy),
+    ]
+}
+
+/// Dashboard `.table-cell-fiat` texts after JPY, then after USD.
+///
+/// Each snapshot has the currency code at index 0 and [`format_fiat`] of the
+/// integer string `"2"` at index 1. That integer is not a BTC price. This
+/// does not read a price feed. The JPY amount cell is U+00A5 plus `2` with
+/// no decimal fraction. The USD amount cell is `$2`.
+pub fn correctly_formats_when_switching_from_jpy_back_to_usd() -> [Vec<String>; 2] {
+    [
+        switched_fiat_cells(FiatCode::Jpy),
+        switched_fiat_cells(FiatCode::Usd),
+    ]
+}
+
+/// Transaction-page fiat cells after USD and fiat mode.
+///
+/// The first string is the `app-transaction-details .fiat` cell. The second
+/// is the first `app-transactions-list .fiat` cell. Each is [`format_fiat`]
+/// of [`FiatCode::Usd`] and the integer string `"2"`. That integer is not a
+/// BTC price. This does not read a price feed and does not fetch a transaction.
+pub fn displays_usd_fiat_values_with_dollar_symbol() -> [String; 2] {
+    [
+        format_fiat(FiatCode::Usd, "2"),
+        format_fiat(FiatCode::Usd, "2"),
+    ]
+}
+
+/// Transaction-page fiat cells after JPY and fiat mode.
+///
+/// The first string is the `app-transaction-details .fiat` cell. The second
+/// is the first `app-transactions-list .fiat` cell. Each is [`format_fiat`]
+/// of [`FiatCode::Jpy`] and the integer string `"2"`. That integer is not a
+/// BTC price. This does not read a price feed and does not fetch a transaction.
+pub fn displays_jpy_fiat_values_without_decimals() -> [String; 2] {
+    [
+        format_fiat(FiatCode::Jpy, "2"),
+        format_fiat(FiatCode::Jpy, "2"),
+    ]
+}
+
+/// Calculator `.symbol` text after USD is selected.
+///
+/// Cypress trims that text and checks that it includes `$`. This is the USD
+/// currency symbol only. It is not a BTC price, not [`FIXTURE_USD_PER_BTC`],
+/// and it does not read a price feed.
+pub fn displays_usd_price_with_dollar_symbol() -> String {
+    "$".to_string()
+}
+
+/// Calculator `.symbol` text and fiat field after JPY is selected.
+///
+/// The first string is the trimmed `.symbol` text. `selectCurrency('JPY')`
+/// makes that text include `¥` (U+00A5). It is the yen sign only, not a price.
+/// `bitcoin` is the bitcoin field after clear and type. `fiat_per_btc` is the
+/// caller-supplied fiat-per-BTC rate. The second string is the fiat control.
+/// The bitcoin `valueChanges` handler sets that control to `formatFiat` of
+/// `parseFloat((bitcoin * rate).toFixed(8))`. JPY `maximumFractionDigits` is
+/// 0, so `getCurrencyDecimals()` is 0 and `formatFiat` returns `Math.round`.
+/// Those digits have no grouping comma and no trailing decimal. This does not
+/// read a price feed.
+pub fn displays_jpy_price_without_decimals_after_switching_currency(
+    bitcoin: &str,
+    fiat_per_btc: &str,
+) -> (String, String) {
+    let fiat = jpy_calculator_fiat_digits(bitcoin, fiat_per_btc).unwrap_or_else(|| "0".to_string());
+    ("\u{00A5}".to_string(), fiat)
+}
+
+fn switched_fiat_cells(code: FiatCode) -> Vec<String> {
+    let label = match code {
+        FiatCode::Usd => "USD",
+        FiatCode::Jpy => "JPY",
+    };
+    vec![label.to_string(), format_fiat(code, "2")]
+}
+
 /// Format one amount as USD, then JPY, then USD.
 pub fn switch_usd_jpy_usd(amount: &str) -> [String; 3] {
     [
@@ -225,6 +325,25 @@ fn div_round_half_up(numer: u128, denom: u128) -> u128 {
     } else {
         quotient
     }
+}
+
+/// Fiat digits for the calculator JPY field.
+///
+/// Product is exact decimal units. `toFixed(8)` then `Math.round` are half up
+/// for a non-negative value, which is JavaScript `Math.round` toward `+∞` on
+/// a positive half. This is not banker's rounding.
+fn jpy_calculator_fiat_digits(bitcoin: &str, fiat_per_btc: &str) -> Option<String> {
+    let (btc_numer, btc_scale) = parse_decimal_units(bitcoin)?;
+    let (rate_numer, rate_scale) = parse_decimal_units(fiat_per_btc)?;
+    let mut numer = btc_numer.checked_mul(rate_numer)?;
+    let mut scale = btc_scale.checked_add(rate_scale)?;
+    if scale > 8 {
+        let drop = 10_u128.checked_pow(scale - 8)?;
+        numer = div_round_half_up(numer, drop);
+        scale = 8;
+    }
+    let unit = 10_u128.checked_pow(scale)?;
+    Some(div_round_half_up(numer, unit).to_string())
 }
 
 fn split_amount(amount: &str) -> (String, String) {

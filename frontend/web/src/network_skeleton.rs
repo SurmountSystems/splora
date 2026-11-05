@@ -1,10 +1,10 @@
-//! Web render glue for the settled skeleton-loader markers.
+//! Web render of the settled skeleton-loader markers.
 //! The network transition lives in frontend/shared.
 
-use splora_frontend_shared::skeleton_loader_count_after_network_changes;
+use splora_frontend_shared::loads_skeleton_when_changes_between_networks;
 
-/// Repeats `skeleton-loader` once for each settled count after `first`, then `second`.
+/// One `.skeleton-loader` element for each settled count after `first`, then `second`.
 pub fn paint_loads_skeleton_when_changes_between_networks(first: &str, second: &str) -> String {
-    let count = skeleton_loader_count_after_network_changes(first, second);
-    "skeleton-loader".repeat(count as usize)
+    let change = loads_skeleton_when_changes_between_networks(first, second);
+    "<div class=\"skeleton-loader\"></div>".repeat(change.settled as usize)
 }

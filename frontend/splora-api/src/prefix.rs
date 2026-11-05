@@ -49,6 +49,11 @@ pub fn signet_is_backend() -> bool {
     false
 }
 
+/// HTTP 307 from `/signet` to `/mutinynet`. Signet is not an indexer.
+pub fn signet_redirect() -> (u16, &'static str) {
+    (SIGNET_STATUS, "/mutinynet")
+}
+
 /// True only for the five indexer networks, by name or by public prefix.
 /// `signet`, `Signet`, `/signet`, and `/signet/api` are false.
 pub fn is_backend_network(name: &str) -> bool {

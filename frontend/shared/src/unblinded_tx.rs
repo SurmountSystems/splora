@@ -36,6 +36,57 @@ pub fn unblinded_tx_preview(fragment: &str, fee_sats: u64) -> String {
     lines.join("\n")
 }
 
+/// First `.table-tx-vout` row for a `#blinded` fragment.
+///
+/// `row_class` is the class on `tr:nth-child(1)`. `amount` is that row's
+/// `.amount` text. Fee is not applied, and this is not a transaction body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirstUnblindedVout {
+    pub row_class: &'static str,
+    pub amount: String,
+}
+
+/// First vout row painted from `fragment`.
+///
+/// `fee_sats` stays 0, so the shared preview lines are all vout amounts and
+/// the first line is `tr:nth-child(1)`. That row uses class `assetBox` when
+/// the line is present. The amount text comes from [`unblinded_tx_preview`].
+pub fn show_first_unblinded_vout(fragment: &str) -> FirstUnblindedVout {
+    let preview = unblinded_tx_preview(fragment, 0);
+    let amount = preview.lines().next().unwrap_or("").to_string();
+    let row_class = if amount.is_empty() { "" } else { "assetBox" };
+    FirstUnblindedVout { row_class, amount }
+}
+
+/// Second `.table-tx-vout` row for a `#blinded` fragment.
+///
+/// `child` is 2 (`tr:nth-child(2)`). `row_class` is the class on that row.
+/// `amount` is that row's `.amount` text. Fee is not applied. The amount is
+/// the first preview line, the same kind of line [`show_first_unblinded_vout`]
+/// paints on child 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecondUnblindedVout {
+    pub child: u8,
+    pub row_class: &'static str,
+    pub amount: String,
+}
+
+/// Second vout row painted from `fragment`.
+///
+/// `fee_sats` stays 0. That first preview line is placed on child 2, not
+/// child 1. The row uses class `assetBox` when the line is present. The
+/// amount text comes from [`unblinded_tx_preview`].
+pub fn show_second_unblinded_vout(fragment: &str) -> SecondUnblindedVout {
+    let preview = unblinded_tx_preview(fragment, 0);
+    let amount = preview.lines().next().unwrap_or("").to_string();
+    let row_class = if amount.is_empty() { "" } else { "assetBox" };
+    SecondUnblindedVout {
+        child: 2,
+        row_class,
+        amount,
+    }
+}
+
 fn format_lbtc(sats: u64) -> String {
     format!("{} LBTC", sats_to_btc(sats))
 }

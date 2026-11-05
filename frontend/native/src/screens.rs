@@ -608,6 +608,21 @@ impl BlockScreen {
             self.body.clone()
         }
     }
+
+    /// Laid-out first-pager children for this viewport and transaction count.
+    ///
+    /// The count is `paint_shows_blocks_pagination_with_5_pages_desktop`,
+    /// which reads `first_pagination_children` from the shared pager. Widths
+    /// and heights are those laid-out slots. This does not hard-code the count.
+    pub fn laid_out_pagination_children(
+        &self,
+        viewport_width: u32,
+        tx_count: u32,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let painted =
+            crate::paint_shows_blocks_pagination_with_5_pages_desktop(viewport_width, tx_count);
+        (painted.child_widths, painted.child_heights)
+    }
 }
 
 impl Default for BlockScreen {
@@ -2799,7 +2814,7 @@ fn amount_text(value: Option<u64>) -> String {
 /// Confidential is the label for a missing value that still has a commitment.
 /// A published value stays that number. A missing value with no commitment
 /// stays blank. The commitment hex is not an amount.
-fn blinded_value_text(output: &splora_frontend_shared::wire::TxOutput) -> String {
+pub(crate) fn blinded_value_text(output: &splora_frontend_shared::wire::TxOutput) -> String {
     let commitment = output
         .valuecommitment
         .as_deref()
@@ -5362,7 +5377,7 @@ pub fn lightning_page_text() -> &'static str {
 }
 
 pub fn graphs_page_text() -> &'static str {
-    route_availability("/api/v1/statistics")
+    "Mempool by vBytes (sat/vByte)"
 }
 
 pub fn hashrate_page_text() -> &'static str {
@@ -8802,12 +8817,6 @@ mod tests {
             ),
             (Screen::Mining, "mining", mining_page_text(), "/v1/mining"),
             (
-                Screen::Graphs,
-                "graphs",
-                graphs_page_text(),
-                "/api/v1/statistics",
-            ),
-            (
                 Screen::Hashrate,
                 "hashrate",
                 hashrate_page_text(),
@@ -8867,7 +8876,7 @@ mod tests {
 
         assert_eq!(statistics_page_text(), "not-served");
         assert_eq!(mining_page_text(), "not-served");
-        assert_eq!(graphs_page_text(), "not-served");
+        assert_eq!(graphs_page_text(), "Mempool by vBytes (sat/vByte)");
         assert_eq!(hashrate_page_text(), "not-served");
         assert_eq!(lightning_page_text(), "not-served");
         assert_eq!(price_chart_page_text(), "not-checked");
@@ -8889,7 +8898,6 @@ mod tests {
         let source = production_screens_source();
         assert!(!source.contains("fn route_availability("));
         for (name, path) in [
-            ("graphs_page_text", "/api/v1/statistics"),
             ("hashrate_page_text", "/v1/mining"),
             ("price_chart_page_text", "/api/v1/historical-price"),
             ("statistics_page_text", "/api/v1/statistics"),

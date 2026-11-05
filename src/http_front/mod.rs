@@ -689,6 +689,19 @@ Nt4lIHa63WwcYB/eIviuEZEtfw2yog40VqTyPWcY5SsHFMqlN/BoVyEw
         );
     }
 
+    /// Named contract: public front has no `/regtest` prefix. `/signet` stays 307 to `/mutinynet`.
+    #[test]
+    fn regtest_explorer_routes_public_front_has_no_regtest_prefix() {
+        assert!(matches!(route("/regtest"), Route::NotFound));
+        assert!(matches!(
+            route("/regtest/api/blocks/tip/hash"),
+            Route::NotFound
+        ));
+        assert!(
+            matches!(route("/signet"), Route::Redirect307 { location } if location == "/mutinynet")
+        );
+    }
+
     /// Named contract: `/liquid/api/tx/x` hits liquid UDS with path `/tx/x`.
     #[tokio::test]
     async fn liquid_api_tx_hits_liquid_uds_with_path_tx() {

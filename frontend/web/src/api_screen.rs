@@ -1,16 +1,17 @@
-//! Markup for the api screen. Whether the screen is active is decided by
+//! After-click api screen. The destination and the active flag come from
 //! `after_docs_button_loads_the_api_screen` in the shared crate.
 //!
-//! This paint is the after-click flag only. It is not a live docs page.
+//! This paint forwards the clicked control and the docs route table.
+//! It is not a live docs page.
 
-use splora_frontend_shared::after_docs_button_loads_the_api_screen;
+use splora_frontend_shared::{ApiScreen, after_docs_button_loads_the_api_screen};
 
-/// One `#btn-docs` control, plus the api screen name, only when the shared
-/// view says that screen is active. An inactive view stays `not-served`.
-pub fn paint_loads_the_api_screen() -> String {
-    let view = after_docs_button_loads_the_api_screen();
-    if !view.api_screen_active {
-        return "not-served".to_string();
-    }
-    r#"<button id="btn-docs" type="button"></button><section>api screen</section>"#.to_string()
+/// Destination and api-screen flag for one clicked control.
+///
+/// Both fields are the shared view. This paint does not match routes.
+pub fn paint_loads_the_api_screen<'a>(
+    clicked_control: &str,
+    docs_routes: &'a [(&'a str, &'a str)],
+) -> ApiScreen<'a> {
+    after_docs_button_loads_the_api_screen(clicked_control, docs_routes)
 }

@@ -339,6 +339,21 @@ pub fn indexer_request(call: &IndexerCall) -> IndexerRequest {
     }
 }
 
+/// `/tx/push` and `/pushtx` are `POST /tx`. `/tx/test` is `POST /txs/test`.
+/// The body is the raw transaction text, built by `indexer_request`.
+/// Another route is not one of those requests.
+pub fn broadcast_route_request(route: &str, raw_tx: &str) -> Option<IndexerRequest> {
+    match route {
+        "/tx/push" | "/pushtx" => Some(indexer_request(&IndexerCall::Broadcast {
+            hex: raw_tx.to_string(),
+        })),
+        "/tx/test" => Some(indexer_request(&IndexerCall::TestTxs {
+            hexes: vec![raw_tx.to_string()],
+        })),
+        _ => None,
+    }
+}
+
 fn script_refs(values: &[String]) -> Vec<&str> {
     values.iter().map(String::as_str).collect()
 }

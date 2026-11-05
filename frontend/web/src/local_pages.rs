@@ -53,8 +53,10 @@ pub fn lightning_page_text() -> &'static str {
     route_availability("/lightning")
 }
 
+/// Card title from `statistics.component.html` line 7.
+/// The span is a label. It is not a vbyte series or a fee total.
 pub fn graphs_page_text() -> &'static str {
-    route_availability("/api/v1/statistics")
+    "Mempool by vBytes (sat/vByte)"
 }
 
 pub fn hashrate_page_text() -> &'static str {

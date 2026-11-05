@@ -3912,7 +3912,7 @@ pub fn block_tx_page_path(hash: &str, page: u32) -> String {
 
 /// One click shows the details panel. The next click hides it.
 pub fn details_open_after_click(open: bool) -> bool {
-    !open
+    splora_frontend_shared::details_open_after_click(open)
 }
 
 fn block_page_count(tx_count: u32) -> u32 {

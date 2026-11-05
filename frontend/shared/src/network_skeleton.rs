@@ -30,10 +30,50 @@ pub fn skeleton_loader_count_after_network_changes(first: &str, second: &str) ->
     skeleton
 }
 
-/// `cy.changeNetwork('signet')` then `cy.changeNetwork('mainnet')`.
+/// Peak and settled `.skeleton-loader` counts after two `changeNetwork` clicks.
 ///
-/// The settled count is whatever remains after both clears. This row performs
-/// no GET, so both clears leave the count at 0.
-pub fn loads_skeleton_when_changes_between_networks() -> u32 {
-    skeleton_loader_count_after_network_changes("signet", "mainnet")
+/// The page starts on mainnet, where `waitForSkeletonGone` has already seen
+/// a count of 0. `network` is the name in effect after the second click.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetworkSkeletonChange {
+    /// Highest `.skeleton-loader` count while a click was in flight.
+    pub peak: u32,
+    /// Count after the websocket response clears `isLoadingWebSocket$`.
+    pub settled: u32,
+    /// Network after both clicks. The start network is mainnet.
+    pub network: String,
+}
+
+/// `cy.changeNetwork(first)` then `cy.changeNetwork(second)`, from mainnet.
+///
+/// Dashboard `mempoolTable` renders `.skeleton-loader` from the `#loading`
+/// template while `(isLoadingWebSocket$ | async) === false && mempoolInfoData.value`
+/// is false. `WebsocketService.startSubscription` sets that flag true when
+/// `networkChanged$` actually differs from the current network and calls
+/// `reconnectWebsocket`. The flag goes false on the websocket response, which
+/// is the settled `Cypress.$('.skeleton-loader').length === 0` check.
+/// The same name returns early in `networkChanged$` and does not show the loader.
+pub fn loads_skeleton_when_changes_between_networks(
+    first: &str,
+    second: &str,
+) -> NetworkSkeletonChange {
+    let mut network = "mainnet".to_string();
+    let mut skeleton: u32 = 0;
+    let mut peak: u32 = 0;
+    for next in [first, second] {
+        if next == network {
+            continue;
+        }
+        skeleton = 1;
+        if skeleton > peak {
+            peak = skeleton;
+        }
+        network = next.to_string();
+        skeleton = 0;
+    }
+    NetworkSkeletonChange {
+        peak,
+        settled: skeleton,
+        network,
+    }
 }

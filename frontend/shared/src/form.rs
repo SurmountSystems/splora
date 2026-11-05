@@ -37,6 +37,98 @@ pub fn calculator_field_names() -> [&'static str; 3] {
     ["fiat", "bitcoin", "satoshis"]
 }
 
+/// One calculator clipboard button.
+///
+/// `field` is a form control an `app-clipboard` copies. `visible` stays
+/// true: the Cypress screen shows that button with no extra condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CopyButton {
+    pub field: &'static str,
+    pub visible: bool,
+}
+
+/// One visible clipboard button per calculator copy field.
+///
+/// The fields are `calculator_field_names` (`fiat`, `bitcoin`, `satoshis`).
+/// Those are the three `app-clipboard` form controls. `copy_buttons` on
+/// `CalculatorForm` stores the labels `fiat`, `btc`, and `sats`, which are
+/// not those controls.
+pub fn copy_buttons_exist_and_are_visible() -> Vec<CopyButton> {
+    calculator_field_names()
+        .into_iter()
+        .map(|field| CopyButton {
+            field,
+            visible: true,
+        })
+        .collect()
+}
+
+/// One `app-clipboard` for each calculator amount input.
+///
+/// Cypress counts those controls and checks each is visible. The inputs
+/// are `calculator_field_names`. This does not read a price feed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyButtonsForEachInput {
+    pub inputs: Vec<&'static str>,
+    pub buttons: Vec<CopyButton>,
+}
+
+/// Visible clipboard controls, one per calculator input.
+///
+/// The calculator template places `app-clipboard` after `fiat`, `bitcoin`,
+/// and `satoshis`. No conversion rate is read.
+pub fn shows_copy_buttons_for_each_input() -> CopyButtonsForEachInput {
+    let inputs = calculator_field_names().to_vec();
+    let buttons = inputs
+        .iter()
+        .copied()
+        .map(|field| CopyButton {
+            field,
+            visible: true,
+        })
+        .collect();
+    CopyButtonsForEachInput { inputs, buttons }
+}
+
+/// Visible calculator `.input-group-text` labels.
+///
+/// Template order is the fiat currency, then `BTC`, then `sats`.
+/// `currency` is `USD` when no fiat preference is stored. The three
+/// spans are visible once the calculator form is shown. This does not
+/// read a price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputLabelsForCurrencyBtcAndSats {
+    pub currency: &'static str,
+    pub btc: &'static str,
+    pub sats: &'static str,
+    pub currency_visible: bool,
+    pub btc_visible: bool,
+    pub sats_visible: bool,
+}
+
+impl InputLabelsForCurrencyBtcAndSats {
+    /// The three `.input-group-text` strings in template order.
+    pub fn group_text(&self) -> [&'static str; 3] {
+        [self.currency, self.btc, self.sats]
+    }
+}
+
+/// Input labels for currency, BTC, and sats.
+///
+/// Cypress checks that `.input-group-text` contains `BTC` and `sats`
+/// and that those matches are visible. The first span is `currency$`.
+/// With no stored preference that text is `USD`.
+pub fn shows_input_labels_for_currency_btc_and_sats() -> InputLabelsForCurrencyBtcAndSats {
+    InputLabelsForCurrencyBtcAndSats {
+        currency: "USD",
+        btc: "BTC",
+        sats: "sats",
+        currency_visible: true,
+        btc_visible: true,
+        sats_visible: true,
+    }
+}
+
 /// One BTC, with fiat filled from the fixture rate for `code`.
 pub fn loaded_calculator(code: FiatCode) -> CalculatorForm {
     let symbol = match code {
@@ -59,6 +151,41 @@ pub fn loaded_calculator(code: FiatCode) -> CalculatorForm {
         label_sats: "sats",
     };
     enter_btc(&blank, "1")
+}
+
+/// Loaded calculator form once the price-feed wait is gone.
+///
+/// `text` is the loaded form's heading and field controls.
+/// `bitcoin_visible` follows that form, not a separate flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalculatorFormAfterPriceFeed {
+    pub text: String,
+    pub bitcoin_visible: bool,
+}
+
+/// The loaded calculator form, without a waiting sentence, with the bitcoin input shown.
+///
+/// Calls [`loaded_calculator`]. Does not read `/v1/prices`.
+pub fn shows_calculator_form_after_price_feed_loads() -> CalculatorFormAfterPriceFeed {
+    let form = loaded_calculator(FiatCode::Usd);
+    CalculatorFormAfterPriceFeed {
+        text: loaded_calculator_form_text(&form),
+        bitcoin_visible: loaded_calculator_bitcoin_input_visible(&form),
+    }
+}
+
+fn loaded_calculator_form_text(form: &CalculatorForm) -> String {
+    let mut lines = Vec::with_capacity(1 + calculator_field_names().len());
+    lines.push(form.heading.to_string());
+    for name in calculator_field_names() {
+        lines.push(format!("input formControlName=\"{name}\""));
+    }
+    lines.join("\n")
+}
+
+fn loaded_calculator_bitcoin_input_visible(form: &CalculatorForm) -> bool {
+    let has_bitcoin_control = calculator_field_names().contains(&"bitcoin");
+    has_bitcoin_control && form.inputs_present() && !form.waiting_for_price && !form.btc.is_empty()
 }
 
 /// Set the fiat field and update BTC and sats from the fixture rate.
