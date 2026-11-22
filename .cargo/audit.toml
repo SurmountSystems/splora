@@ -9,4 +9,49 @@
 
 [advisories]
 ignore = [
+    # chrono 0.4.45 is unmaintained and has no patched release. stderrlog 0.6.0
+    # timestamps (Cargo.toml requirement "0.6.0") and gpui-pre 0.3.5 still depend
+    # on it. See doc/supply-chain.md (accessed: 2026-11-22).
+    "RUSTSEC-2026-0543",
+    # paste 1.0.15 is unmaintained and has no patched release. leptos is pinned
+    # at =0.8.20, and gpui-pre 0.3.5 reaches paste through rav1e and metal.
+    # See doc/supply-chain.md (accessed: 2026-11-22).
+    "RUSTSEC-2024-0436",
+    # rustybuzz 0.20.1 is unmaintained and has no patched release. gpui-pre
+    # 0.3.5 reaches it through usvg and resvg. See doc/supply-chain.md.
+    "RUSTSEC-2026-0206",
+    # ttf-parser 0.25.1 is unmaintained and has no patched release. gpui-pre
+    # 0.3.5 still depends on it. See doc/supply-chain.md.
+    "RUSTSEC-2026-0192",
+    # zvariant 5.15.1 was folded into zbus 6. No 5.x patch exists. gpui-pre
+    # 0.3.5 still resolves zbus 5. See doc/supply-chain.md.
+    "RUSTSEC-2026-0370",
+    # zbus_names 4.3.5 was folded into zbus 6. No patched standalone release.
+    # gpui-pre 0.3.5 still resolves zbus 5. See doc/supply-chain.md.
+    "RUSTSEC-2026-0371",
+    # zvariant_derive 5.15.1 was folded into zbus 6. No patched standalone
+    # release. gpui-pre 0.3.5 still resolves zbus 5. See doc/supply-chain.md.
+    "RUSTSEC-2026-0372",
+    # heapless 0.8.0 via faster-hex 0.10.1. Patched versions are >= 0.9.4.
+    # faster-hex 0.10.1 requires heapless = { version = "0.8" } only under
+    # cfg(not(feature = "alloc")). That range is >=0.8.0 and <0.9.0, so it
+    # cannot take >= 0.9.4. nostr requires faster-hex version = "0.10"
+    # (>=0.10.0 and <0.11.0). The Menhera index cache lists only 0.10.0 and
+    # 0.10.1, and both keep heapless 0.8. These binaries enable nostr
+    # features std, os-rng, and nip98. nostr std enables faster-hex/std,
+    # and faster-hex std includes alloc, so that heapless module is not
+    # compiled. On the off cfg, faster-hex only names heapless::Vec and
+    # heapless::String. It does not call FindMutView::pop, Spsc::peek,
+    # IndexMap, Deque, HistoryBuf, SortedLinkedList::zeroize,
+    # vec::IntoIter::drop, or the pool APIs named by these nine advisories.
+    # See doc/supply-chain.md (accessed: 2026-11-22).
+    "RUSTSEC-2026-0574",
+    "RUSTSEC-2026-0575",
+    "RUSTSEC-2026-0576",
+    "RUSTSEC-2026-0577",
+    "RUSTSEC-2026-0578",
+    "RUSTSEC-2026-0579",
+    "RUSTSEC-2026-0580",
+    "RUSTSEC-2026-0581",
+    "RUSTSEC-2026-0582",
 ]

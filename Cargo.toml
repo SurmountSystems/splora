@@ -15,7 +15,7 @@ publish = false
 keywords = ["bitcoin", "electrum", "server", "index", "database"]
 readme = "README.md"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 autobins = false
 default-run = "splora"
 
