@@ -54,4 +54,13 @@ ignore = [
     "RUSTSEC-2026-0580",
     "RUSTSEC-2026-0581",
     "RUSTSEC-2026-0582",
+    # url 2.5.8 is RUSTSEC-2026-0592, a stack overflow in Url::origin on nested
+    # blob URLs. The patched release is >=2.5.9. Root requires url = "2.5.8"
+    # (>=2.5.8, <3.0.0), so 2.5.9 is inside that requirement. Native pins
+    # url = "=2.5.8", which does not include 2.5.9. On 2026-11-22 the Menhera
+    # 3-day index (sparse+https://index.crates.menhera.org/3d/) lists 2.5.8
+    # and does not list 2.5.9. cargo update -p url locked 0 packages.
+    # This tree's Rust sources do not call url::Url::origin or
+    # url::quirks::origin. See doc/supply-chain.md (accessed: 2026-11-22).
+    "RUSTSEC-2026-0592",
 ]
