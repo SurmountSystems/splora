@@ -1,22 +1,20 @@
 //! Markup for an empty `#blinded=` fragment on the same Liquid transaction.
 //!
 //! Amount text is `recent_value_text` on each parsed output. An empty
-//! `unblinded_tx_preview` leaves those amounts in place. A non-empty preview
-//! is the populated unblind painter. Fee is passed to that preview and is
-//! not painted as its own amount row.
+//! fragment leaves those amounts in place. A non-empty fragment is the
+//! populated unblind painter. Fee is passed to that painter and is not
+//! painted as its own amount row.
 
 use splora_frontend_shared::wire::{TxOutput, recent_value_text};
 
 /// Paints vin and vout tables for `fragment` and `fee_sats`.
 ///
-/// Both arguments go to `unblinded_tx_preview`. When that preview has lines,
-/// `show_unblinded_tx_markup` paints the asset boxes. When the preview is
-/// empty, this parses the one-input two-output transaction and paints each
-/// confidential amount. The row class is `ng-star-inserted` because the
-/// amount was not replaced.
+/// A non-empty fragment is the populated unblind painter. An empty fragment
+/// parses the one-input two-output transaction and paints each confidential
+/// amount. The row class is `ng-star-inserted` because the amount was not
+/// replaced. Fee is not painted as its own amount row.
 pub fn show_empty_unblinded_tx_markup(fragment: &str, fee_sats: u64) -> String {
-    let preview = splora_frontend_shared::unblinded_tx_preview(fragment, fee_sats);
-    if !preview.is_empty() {
+    if !fragment.is_empty() {
         return crate::show_unblinded_tx_markup(fragment, fee_sats);
     }
     let Ok(tx) = crate::parse_transaction_json(EMPTY_UNBLINDED_TX) else {

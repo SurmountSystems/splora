@@ -52,3 +52,60 @@ fn show_unblinded_tx() {
         "empty fragment painted the second output amount: {empty}"
     );
 }
+
+/// An empty fragment is not an asset box, and a fee must not move the last
+/// Confidential line onto the vin. A real blinded fragment still paints amounts.
+#[test]
+fn empty_fragment_is_not_an_asset_box() {
+    let zero = splora_native::show_unblinded_tx_text("", 0);
+    let with_fee = splora_native::show_unblinded_tx_text("", 240);
+    assert!(
+        !zero.contains("assetBox"),
+        "show_unblinded_tx_text(\"\", 0) must not paint assetBox for an empty fragment, got {zero}"
+    );
+    assert!(
+        !with_fee.contains("assetBox"),
+        "show_unblinded_tx_text(\"\", 240) must not paint assetBox for an empty fragment, got {with_fee}"
+    );
+    assert_eq!(
+        vin_amounts(&zero),
+        vin_amounts(&with_fee),
+        "an empty fragment must not paint the last Confidential line as the vin amount, fee 0 {zero:?} fee 240 {with_fee:?}"
+    );
+
+    let painted = splora_native::show_unblinded_tx_text(BLINDED, 240);
+    assert!(
+        painted.contains("0.02465000 LBTC"),
+        "non-empty fragment must still paint the input amount: {painted}"
+    );
+    assert!(
+        painted.contains("0.00100000 LBTC"),
+        "non-empty fragment must still paint the first output amount: {painted}"
+    );
+    assert!(
+        painted.contains("0.02364760 LBTC"),
+        "non-empty fragment must still paint the second output amount: {painted}"
+    );
+    assert!(
+        painted.contains("assetBox"),
+        "non-empty fragment must still paint assetBox: {painted}"
+    );
+}
+
+fn vin_amounts(text: &str) -> Vec<&str> {
+    let vin = match (text.find("table-tx-vin"), text.find("table-tx-vout")) {
+        (Some(vin_at), Some(vout_at)) if vin_at < vout_at => &text[vin_at..vout_at],
+        (Some(vin_at), None) => &text[vin_at..],
+        _ => "",
+    };
+    let mut amounts = Vec::new();
+    let mut rest = vin;
+    let key = "class=\"amount\">";
+    while let Some(at) = rest.find(key) {
+        rest = &rest[at + key.len()..];
+        let end = rest.find('<').unwrap_or(rest.len());
+        amounts.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+    amounts
+}

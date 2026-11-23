@@ -6073,16 +6073,32 @@ impl<G: ExplorerGet + ExplorerPost> ScreenHost<G> {
                     self.screen = Screen::Dashboard;
                     return Ok(());
                 }
-                let addresses =
-                    splora_frontend_shared::prefix_hits(prefix, &body).map_err(http_parse)?;
-                if addresses.is_empty() {
+                let parsed =
+                    splora_frontend_shared::parse_address_prefix(&body).map_err(http_parse)?;
+                // Only an empty JSON array paints this sentence. Blank strings
+                // are not that sentence. A served address stays listed when it
+                // does not start with the typed prefix. When any address does
+                // match, keep that narrower prefix_hits list.
+                if parsed.is_empty() {
                     self.dashboard.lines = "There are no addresses.".to_string();
                     self.dashboard.rows.clear();
                     self.screen = Screen::Dashboard;
                     return Ok(());
                 }
-                self.dashboard.lines = addresses.join("\n");
-                self.dashboard.rows = addresses
+                let listed: Vec<String> = parsed
+                    .into_iter()
+                    .filter(|address| !address.is_empty())
+                    .collect();
+                let shown = if listed.is_empty() {
+                    Vec::new()
+                } else {
+                    match splora_frontend_shared::prefix_hits(prefix, &body) {
+                        Ok(hits) if !hits.is_empty() => hits,
+                        _ => listed,
+                    }
+                };
+                self.dashboard.lines = shown.join("\n");
+                self.dashboard.rows = shown
                     .iter()
                     .map(|address| format!("row prefix {address}"))
                     .collect();

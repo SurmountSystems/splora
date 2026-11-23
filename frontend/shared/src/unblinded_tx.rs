@@ -11,8 +11,16 @@ use crate::calculator::sats_to_btc;
 /// Format each parsed satoshi value as eight-decimal LBTC.
 ///
 /// A positive `fee_sats` adds one line for the sum of those values plus the
-/// fee. An empty or unusable fragment returns no amount lines.
+/// fee. An empty fragment is not parsed into amount lines. The word
+/// Confidential still names the first input and both outputs, in one record.
+/// Fee is not one of those words. An unusable non-empty fragment returns no
+/// amount lines.
 pub fn unblinded_tx_preview(fragment: &str, fee_sats: u64) -> String {
+    if fragment.is_empty() {
+        // One record, not three amount lines. Callers must not paint this as
+        // asset rows, and a fee must not move the last word onto the vin.
+        return "Confidential Confidential Confidential".to_string();
+    }
     let values = parse_blinder_values(fragment);
     if values.is_empty() {
         return String::new();
@@ -50,11 +58,19 @@ pub struct FirstUnblindedVout {
 ///
 /// `fee_sats` stays 0, so the shared preview lines are all vout amounts and
 /// the first line is `tr:nth-child(1)`. That row uses class `assetBox` when
-/// the line is present. The amount text comes from [`unblinded_tx_preview`].
+/// the line is a parsed amount. An empty fragment uses `ng-star-inserted`,
+/// the same class as [`show_second_unblinded_vout`]. The amount text comes
+/// from [`unblinded_tx_preview`].
 pub fn show_first_unblinded_vout(fragment: &str) -> FirstUnblindedVout {
     let preview = unblinded_tx_preview(fragment, 0);
     let amount = preview.lines().next().unwrap_or("").to_string();
-    let row_class = if amount.is_empty() { "" } else { "assetBox" };
+    let row_class = if fragment.is_empty() {
+        "ng-star-inserted"
+    } else if amount.is_empty() {
+        ""
+    } else {
+        "assetBox"
+    };
     FirstUnblindedVout { row_class, amount }
 }
 
@@ -74,12 +90,18 @@ pub struct SecondUnblindedVout {
 /// Second vout row painted from `fragment`.
 ///
 /// `fee_sats` stays 0. That first preview line is placed on child 2, not
-/// child 1. The row uses class `assetBox` when the line is present. The
-/// amount text comes from [`unblinded_tx_preview`].
+/// child 1. A parsed amount uses class `assetBox`. An empty fragment keeps
+/// the confidential amount and uses `ng-star-inserted`, not `assetBox`.
 pub fn show_second_unblinded_vout(fragment: &str) -> SecondUnblindedVout {
     let preview = unblinded_tx_preview(fragment, 0);
     let amount = preview.lines().next().unwrap_or("").to_string();
-    let row_class = if amount.is_empty() { "" } else { "assetBox" };
+    let row_class = if fragment.is_empty() {
+        "ng-star-inserted"
+    } else if amount.is_empty() {
+        ""
+    } else {
+        "assetBox"
+    };
     SecondUnblindedVout {
         child: 2,
         row_class,

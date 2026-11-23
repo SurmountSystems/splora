@@ -3,11 +3,11 @@
     "asset-registry": {
       "flake": false,
       "locked": {
-        "lastModified": 1795334903,
+        "lastModified": 1795370902,
         "narHash": "sha256-eDH9QWoDDF5ZjUR8f0+pz8qUL7d7BMi//OHv57hOZbo=",
         "owner": "Blockstream",
         "repo": "asset_registry_db",
-        "rev": "9ae50331798a347f472edf2b67bafe82d9b1e6ac",
+        "rev": "01b82036547ed29e6f794efe17f4ae20de5822ca",
         "type": "github"
       },
       "original": {

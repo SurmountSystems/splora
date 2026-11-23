@@ -712,14 +712,9 @@ fn Dashboard() -> impl IntoView {
         <div inner_html=move || {
             let body = mempool_body.get();
             let summary = mempool_summary_text(&body);
-            let loaded = dashboard_loaded_markup(&body);
-            // One summary pre. This call's text replaces the same opening pre.
-            let prefix = format!("<pre>{summary}</pre>");
-            if let Some(rest) = loaded.strip_prefix(&prefix) {
-                format!("{prefix}{rest}")
-            } else {
-                format!("{prefix}{loaded}")
-            }
+            let size = mempool_size_markup(&body);
+            let link = first_mempool_block_link_markup(&body);
+            format!("<pre>{summary}</pre><div>{size}</div><div>{link}</div>")
         }></div>
     }
 }

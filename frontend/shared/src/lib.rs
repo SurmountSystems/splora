@@ -98,6 +98,9 @@ pub use dashboard_phone_scrollbar::{
 };
 #[cfg(not(test))]
 pub use details_open_after_click::details_open_after_click;
+pub use details_open_after_click::{
+    BlockDetailsAfterClick, expands_and_collapses_the_block_details,
+};
 pub use difficulty_adjustment::shows_the_difficulty_adjustment_stats;
 pub use fiat::{
     FIXTURE_JPY_PER_BTC, FIXTURE_USD_PER_BTC, FiatCode, JpyBtcQuote, UsdBtcQuote, btc_fiat_jpy,
@@ -105,8 +108,8 @@ pub use fiat::{
     correctly_formats_when_switching_from_usd_to_jpy, decimal_comma_to_dot,
     displays_jpy_fiat_values_without_decimals,
     displays_jpy_price_without_decimals_after_switching_currency,
-    displays_usd_fiat_values_with_dollar_symbol, displays_usd_price_with_dollar_symbol,
-    displays_usd_values_with_correct_currency_symbol,
+    displays_jpy_values_without_decimal_places, displays_usd_fiat_values_with_dollar_symbol,
+    displays_usd_price_with_dollar_symbol, displays_usd_values_with_correct_currency_symbol,
     displays_usd_values_with_proper_decimal_format, format_fiat,
     formats_all_jpy_values_correctly_without_decimals, jpy_to_btc_and_sats, sats_fiat_jpy,
     sats_fiat_usd, switch_usd_jpy_usd, usd_to_btc_and_sats,

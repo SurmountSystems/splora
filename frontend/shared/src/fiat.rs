@@ -48,6 +48,16 @@ pub fn displays_usd_values_with_proper_decimal_format(amount: &str, code: FiatCo
     displays_usd_values_with_correct_currency_symbol(amount, code)
 }
 
+/// Second dashboard `.table-cell-fiat` cell after JPY is selected.
+///
+/// Cypress reads `.eq(1)`, trims the text, and expects it not to match
+/// `/\.\d+$/`. The cell is [`format_fiat`] of [`FiatCode::Jpy`] and the
+/// integer string `"2"`. That integer is not a BTC price. This does not
+/// read a price feed.
+pub fn displays_jpy_values_without_decimal_places() -> String {
+    format_fiat(FiatCode::Jpy, "2")
+}
+
 /// Dashboard `.table-cell-fiat` texts after JPY is selected.
 ///
 /// The first cell is the currency code. It has no yen sign. Each later cell

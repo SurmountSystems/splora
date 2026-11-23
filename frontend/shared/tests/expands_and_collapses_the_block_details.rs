@@ -10,7 +10,7 @@
 use splora_frontend_shared::expands_and_collapses_the_block_details;
 
 #[test]
-fn expands_and_collapses_the_block_details() {
+fn expands_and_collapses_the_block_details_case() {
     let collapsed = expands_and_collapses_the_block_details(true);
     assert!(
         !collapsed.details_visible,
