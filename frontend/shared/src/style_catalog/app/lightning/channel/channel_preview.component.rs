@@ -1,0 +1,141 @@
+use crate::style_rule::{GpuiOutcome, StyleRule};
+
+pub fn rules() -> &'static [StyleRule] {
+    RULES
+}
+
+static RULES: &[StyleRule] = &[
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".table-col",
+        properties: &[("max-width", "calc(100% - 470px)"), ("overflow", "hidden")],
+        leptos_css: "max-width: calc(100% - 470px); overflow: hidden;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".table",
+        properties: &[("font-size", "32px"), ("margin-top", "10px")],
+        leptos_css: "font-size: 32px; margin-top: 10px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".badges",
+        properties: &[
+            ("font-size", "28px"),
+            ("flex-shrink", "0"),
+            ("flex-grow", "0"),
+            ("display", "flex"),
+            ("flex-direction", "row"),
+            ("flex-wrap", "nowrap"),
+            ("align-items", "baseline"),
+            ("justify-content", "flex-end"),
+        ],
+        leptos_css: "font-size: 28px; flex-shrink: 0; flex-grow: 0; display: flex; flex-direction: row; flex-wrap: nowrap; align-items: baseline; justify-content: flex-end;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".badges ::ng-deep .badge",
+        properties: &[("margin-left", "0.5em")],
+        leptos_css: "margin-left: 0.5em;",
+        gpui: GpuiOutcome::NotAWidget { feature: "pseudo" },
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".row",
+        properties: &[("margin-right", "0")],
+        leptos_css: "margin-right: 0;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".full-width-row",
+        properties: &[
+            ("padding-left", "15px"),
+            ("padding-right", "15px"),
+            ("flex-wrap", "nowrap"),
+        ],
+        leptos_css: "padding-left: 15px; padding-right: 15px; flex-wrap: nowrap;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".row.nodes",
+        properties: &[("background", "var(--stat-box-bg)"), ("margin", "15px 0 0")],
+        leptos_css: "background: var(--stat-box-bg); margin: 15px 0 0;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".nodes",
+        properties: &[("font-size", "36px"), ("align-items", "center")],
+        leptos_css: "font-size: 36px; align-items: center;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".between-arrow",
+        properties: &[("font-size", "24px")],
+        leptos_css: "font-size: 24px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".map-col",
+        properties: &[
+            ("flex-grow", "0"),
+            ("flex-shrink", "0"),
+            ("width", "470px"),
+            ("min-width", "470px"),
+            ("padding", "0"),
+            ("background", "var(--stat-box-bg)"),
+            ("max-height", "350px"),
+            ("overflow", "hidden"),
+        ],
+        leptos_css: "flex-grow: 0; flex-shrink: 0; width: 470px; min-width: 470px; padding: 0; background: var(--stat-box-bg); max-height: 350px; overflow: hidden;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: "::ng-deep .symbol",
+        properties: &[("font-size", "24px")],
+        leptos_css: "font-size: 24px;",
+        gpui: GpuiOutcome::NotAWidget { feature: "pseudo" },
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".dual-cell",
+        properties: &[
+            ("width", "100%"),
+            ("display", "flex"),
+            ("flex-direction", "row"),
+            ("justify-content", "space-between"),
+            ("align-items", "baseline"),
+        ],
+        leptos_css: "width: 100%; display: flex; flex-direction: row; justify-content: space-between; align-items: baseline;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".dual-cell > *",
+        properties: &[("width", "0"), ("flex-grow", "1")],
+        leptos_css: "width: 0; flex-grow: 1;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".dual-cell > *:nth-child(2)",
+        properties: &[("text-align", "center"), ("max-width", "1.5em")],
+        leptos_css: "text-align: center; max-width: 1.5em;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/channel/channel-preview.component.scss",
+        selector_path: ".dual-cell > *:nth-child(3)",
+        properties: &[("text-align", "right")],
+        leptos_css: "text-align: right;",
+        gpui: GpuiOutcome::Paint,
+    },
+];

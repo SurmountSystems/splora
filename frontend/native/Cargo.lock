@@ -6136,6 +6136,7 @@ version = "0.1.0"
 name = "splora-frontend-shared"
 version = "0.1.0"
 dependencies = [
+ "gpui-pre",
  "serde",
  "serde_json",
 ]

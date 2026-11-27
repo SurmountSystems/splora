@@ -1,0 +1,163 @@
+use crate::style_rule::{GpuiOutcome, StyleRule};
+
+pub fn rules() -> &'static [StyleRule] {
+    RULES
+}
+
+static RULES: &[StyleRule] = &[
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie.rtl",
+        properties: &[("transform", "scale(-1, 1)")],
+        leptos_css: "transform: scale(-1, 1);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line",
+        properties: &[("fill", "none")],
+        leptos_css: "fill: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.input",
+        properties: &[("stroke", "url(#input-gradient)")],
+        leptos_css: "stroke: url(#input-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.output",
+        properties: &[("stroke", "url(#output-gradient)")],
+        leptos_css: "stroke: url(#output-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.fee",
+        properties: &[("stroke", "url(#fee-gradient)")],
+        leptos_css: "stroke: url(#fee-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.zerovalue",
+        properties: &[("stroke", "url(#gradient0)"), ("stroke-linecap", "round")],
+        leptos_css: "stroke: url(#gradient0); stroke-linecap: round;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.highlight",
+        properties: &[("z-index", "8"), ("cursor", "pointer")],
+        leptos_css: "z-index: 8; cursor: pointer;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.highlight.input",
+        properties: &[("stroke", "url(#input-highlight-gradient)")],
+        leptos_css: "stroke: url(#input-highlight-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.highlight.output",
+        properties: &[("stroke", "url(#output-highlight-gradient)")],
+        leptos_css: "stroke: url(#output-highlight-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line.highlight.zerovalue",
+        properties: &[("stroke", "var(--info)")],
+        leptos_css: "stroke: var(--info);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line:hover, .bowtie .marker-target:hover + .line",
+        properties: &[("z-index", "10"), ("cursor", "pointer")],
+        leptos_css: "z-index: 10; cursor: pointer;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line:hover.input, .bowtie .marker-target:hover + .line.input",
+        properties: &[("stroke", "url(#input-hover-gradient)")],
+        leptos_css: "stroke: url(#input-hover-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line:hover.output, .bowtie .marker-target:hover + .line.output",
+        properties: &[("stroke", "url(#output-hover-gradient)")],
+        leptos_css: "stroke: url(#output-hover-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line:hover.fee, .bowtie .marker-target:hover + .line.fee",
+        properties: &[("stroke", "url(#fee-hover-gradient)")],
+        leptos_css: "stroke: url(#fee-hover-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .line:hover.zerovalue, .bowtie .marker-target:hover + .line.zerovalue",
+        properties: &[("stroke", "white")],
+        leptos_css: "stroke: white;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .connector",
+        properties: &[
+            ("stroke", "none"),
+            ("opacity", "0.75"),
+            ("cursor", "pointer"),
+        ],
+        leptos_css: "stroke: none; opacity: 0.75; cursor: pointer;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .connector.input",
+        properties: &[("fill", "url(#input-connector-gradient)")],
+        leptos_css: "fill: url(#input-connector-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .connector.output",
+        properties: &[("fill", "url(#output-connector-gradient)")],
+        leptos_css: "fill: url(#output-connector-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .connector:hover.input",
+        properties: &[("fill", "url(#input-hover-connector-gradient)")],
+        leptos_css: "fill: url(#input-hover-connector-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .connector:hover.output",
+        properties: &[("fill", "url(#output-hover-connector-gradient)")],
+        leptos_css: "fill: url(#output-hover-connector-gradient);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/tx-bowtie-graph/tx-bowtie-graph.component.scss",
+        selector_path: ".bowtie .marker-target",
+        properties: &[
+            ("stroke", "none"),
+            ("fill", "transparent"),
+            ("cursor", "pointer"),
+        ],
+        leptos_css: "stroke: none; fill: transparent; cursor: pointer;",
+        gpui: GpuiOutcome::Paint,
+    },
+];

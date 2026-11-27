@@ -66,20 +66,40 @@ use splora_frontend_shared::{
     truncate_btc_decimals, usd_to_btc_and_sats,
 };
 
-fn shell_style() -> String {
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    unsafe(export_name = "splora_web_shell_style")
+)]
+pub fn shell_style() -> String {
     format!("background:{BACKGROUND};color:{TEXT};min-height:100vh;margin:0")
 }
 
-fn link_style() -> String {
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    unsafe(export_name = "splora_web_link_style")
+)]
+pub fn link_style() -> String {
     format!("color:{ACCENT}")
 }
 
-fn network_button_style(selected: bool) -> String {
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    unsafe(export_name = "splora_web_network_button_style")
+)]
+pub fn network_button_style(selected: bool) -> String {
     if selected {
         format!("background:{ACCENT};color:{BACKGROUND};border:1px solid {ACCENT}")
     } else {
         format!("background:{BACKGROUND};color:{TEXT};border:1px solid {ACCENT}")
     }
+}
+
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    unsafe(export_name = "splora_web_page_stylesheet")
+)]
+fn page_stylesheet() -> String {
+    splora_frontend_shared::style_proof::leptos_stylesheet_css()
 }
 
 #[component]
@@ -394,8 +414,10 @@ fn SearchBox() -> impl IntoView {
 
 #[component]
 fn Shell() -> impl IntoView {
+    let stylesheet = page_stylesheet();
     view! {
         <div style=shell_style()>
+            <style>{stylesheet}</style>
             <h1>"Splora"</h1>
             <Switcher/>
             <SearchBox/>

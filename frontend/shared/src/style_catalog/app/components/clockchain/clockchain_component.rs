@@ -1,0 +1,140 @@
+use crate::style_rule::{GpuiOutcome, StyleRule};
+
+pub fn rules() -> &'static [crate::style_rule::StyleRule] {
+    RULES
+}
+
+static RULES: &[StyleRule] = &[
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".divider",
+        properties: &[("position", "absolute"), ("left", "-0.5px"), ("top", "0")],
+        leptos_css: "position: absolute; left: -0.5px; top: 0;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".divider .divider-line",
+        properties: &[
+            ("stroke", "var(--nav-icon)"),
+            ("stroke-width", "4px"),
+            ("stroke-linecap", "butt"),
+            ("stroke-dasharray", "25px 25px"),
+        ],
+        leptos_css: "stroke: var(--nav-icon); stroke-width: 4px; stroke-linecap: butt; stroke-dasharray: 25px 25px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".blockchain-wrapper",
+        properties: &[
+            ("height", "100%"),
+            ("-webkit-user-select", "none"),
+            ("-moz-user-select", "none"),
+            ("-ms-user-select", "none"),
+            ("user-select", "none"),
+        ],
+        leptos_css: "height: 100%; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none; user-select: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".position-container",
+        properties: &[("position", "absolute"), ("left", "50%"), ("top", "0")],
+        leptos_css: "position: absolute; left: 50%; top: 0;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".black-background",
+        properties: &[
+            ("background-color", "#11131f"),
+            ("z-index", "100"),
+            ("position", "relative"),
+        ],
+        leptos_css: "background-color: #11131f; z-index: 100; position: relative;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".scroll-spacer",
+        properties: &[
+            ("position", "absolute"),
+            ("top", "0"),
+            ("left", "0"),
+            ("width", "1px"),
+            ("height", "1px"),
+            ("pointer-events", "none"),
+        ],
+        leptos_css: "position: absolute; top: 0; left: 0; width: 1px; height: 1px; pointer-events: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".loading-block",
+        properties: &[
+            ("position", "absolute"),
+            ("text-align", "center"),
+            ("margin", "auto"),
+            ("width", "300px"),
+            ("left", "-150px"),
+            ("top", "0px"),
+        ],
+        leptos_css: "position: absolute; text-align: center; margin: auto; width: 300px; left: -150px; top: 0px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".time-toggle",
+        properties: &[
+            ("color", "white"),
+            ("font-size", "0.8rem"),
+            ("position", "absolute"),
+            ("bottom", "-1.8em"),
+            ("left", "1px"),
+            ("transform", "translateX(-50%)"),
+            ("background", "none"),
+            ("border", "none"),
+            ("outline", "none"),
+            ("margin", "0"),
+            ("padding", "0"),
+        ],
+        leptos_css: "color: white; font-size: 0.8rem; position: absolute; bottom: -1.8em; left: 1px; transform: translateX(-50%); background: none; border: none; outline: none; margin: 0; padding: 0;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".blockchain-wrapper.ltr-transition .blocks-wrapper, .blockchain-wrapper.ltr-transition .position-container, .blockchain-wrapper.ltr-transition .time-toggle",
+        properties: &[("transition", "transform 1s")],
+        leptos_css: "transition: transform 1s;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".blockchain-wrapper.time-ltr .blocks-wrapper",
+        properties: &[("transform", "scaleX(-1)")],
+        leptos_css: "transform: scaleX(-1);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ".blockchain-wrapper.time-ltr .time-toggle",
+        properties: &[("transform", "translateX(-50%) scaleX(-1)")],
+        leptos_css: "transform: translateX(-50%) scaleX(-1);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ":host-context(.ltr-layout) .blockchain-wrapper.time-ltr .blocks-wrapper, :host-context(.ltr-layout) .blockchain-wrapper .blocks-wrapper",
+        properties: &[("direction", "ltr")],
+        leptos_css: "direction: ltr;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/clockchain/clockchain.component.scss",
+        selector_path: ":host-context(.rtl-layout) .blockchain-wrapper.time-ltr .blocks-wrapper, :host-context(.rtl-layout) .blockchain-wrapper .blocks-wrapper",
+        properties: &[("direction", "rtl")],
+        leptos_css: "direction: rtl;",
+        gpui: GpuiOutcome::Paint,
+    },
+];

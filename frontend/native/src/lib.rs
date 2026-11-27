@@ -91,6 +91,7 @@ pub mod shows_warning_when_entering_21m_btc;
 pub mod signer;
 pub mod signet_redirect;
 pub mod strips_decimals_from_satoshis_input;
+pub mod style_paint;
 pub mod supports_pagination_on_the_block_screen;
 pub mod theme;
 mod theme_option_label;

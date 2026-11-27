@@ -1,0 +1,298 @@
+use crate::style_rule::{GpuiOutcome, StyleRule};
+
+pub fn rules() -> &'static [crate::style_rule::StyleRule] {
+    RULES
+}
+
+static RULES: &[StyleRule] = &[
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-container",
+        properties: &[
+            ("display", "flex"),
+            ("flex-direction", "row"),
+            ("justify-content", "space-around"),
+            ("height", "76px"),
+        ],
+        leptos_css: "display: flex; flex-direction: row; justify-content: space-around; height: 76px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-container .shared-block",
+        properties: &[("color", "var(--transparent-fg)"), ("font-size", "12px")],
+        leptos_css: "color: var(--transparent-fg); font-size: 12px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-container .item",
+        properties: &[
+            ("padding", "0 5px"),
+            ("width", "100%"),
+            ("max-width", "150px"),
+        ],
+        leptos_css: "padding: 0 5px; width: 100%; max-width: 150px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-container .item:last-child",
+        properties: &[("display", "none")],
+        leptos_css: "display: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 485px) { .balance-container .item:last-child }",
+
+        properties: &[("display", "table-cell")],
+        leptos_css: "display: table-cell;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 768px) { .balance-container .item:last-child }",
+
+        properties: &[("display", "none")],
+        leptos_css: "display: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 992px) { .balance-container .item:last-child }",
+
+        properties: &[("display", "table-cell")],
+        leptos_css: "display: table-cell;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-container .card-text",
+        properties: &[
+            ("font-size", "22px"),
+            ("margin-top", "-9px"),
+            ("position", "relative"),
+        ],
+        leptos_css: "font-size: 22px; margin-top: -9px; position: relative;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton",
+        properties: &[("display", "flex"), ("justify-content", "space-between")],
+        leptos_css: "display: flex; justify-content: space-between;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 376px) { .balance-skeleton }",
+
+        properties: &[("flex-direction", "row")],
+        leptos_css: "flex-direction: row;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton .item",
+        properties: &[
+            ("min-width", "120px"),
+            ("max-width", "150px"),
+            ("margin", "0"),
+            ("width", "-webkit-fill-available"),
+        ],
+        leptos_css: "min-width: 120px; max-width: 150px; margin: 0; width: -webkit-fill-available;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 376px) { .balance-skeleton .item }",
+
+        properties: &[("margin", "0 auto 0px")],
+        leptos_css: "margin: 0 auto 0px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton .item:last-child",
+        properties: &[("display", "none")],
+        leptos_css: "display: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 485px) { .balance-skeleton .item:last-child }",
+
+        properties: &[("display", "block")],
+        leptos_css: "display: block;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 768px) { .balance-skeleton .item:last-child }",
+
+        properties: &[("display", "none")],
+        leptos_css: "display: none;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: "@media (min-width: 992px) { .balance-skeleton .item:last-child }",
+
+        properties: &[("display", "block")],
+        leptos_css: "display: block;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton .item:last-child",
+        properties: &[("margin-bottom", "0")],
+        leptos_css: "margin-bottom: 0;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton .card-text .skeleton-loader",
+        properties: &[("width", "100%"), ("display", "block")],
+        leptos_css: "width: 100%; display: block;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton .card-text .skeleton-loader:first-child",
+        properties: &[("margin", "14px auto 0"), ("max-width", "80px")],
+        leptos_css: "margin: 14px auto 0; max-width: 80px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".balance-skeleton .card-text .skeleton-loader:last-child",
+        properties: &[("margin", "10px auto 0"), ("max-width", "120px")],
+        leptos_css: "margin: 10px auto 0; max-width: 120px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".card",
+        properties: &[("background-color", "var(--bg)"), ("height", "126px")],
+        leptos_css: "background-color: var(--bg); height: 126px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".card-title",
+        properties: &[
+            ("color", "var(--title-fg)"),
+            ("font-size", "1rem"),
+            ("overflow", "hidden"),
+            ("text-overflow", "ellipsis"),
+            ("white-space", "nowrap"),
+        ],
+        leptos_css: "color: var(--title-fg); font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".progress",
+        properties: &[
+            ("display", "inline-flex"),
+            ("width", "100%"),
+            ("background-color", "var(--secondary)"),
+            ("height", "1.1rem"),
+            ("max-width", "180px"),
+        ],
+        leptos_css: "display: inline-flex; width: 100%; background-color: var(--secondary); height: 1.1rem; max-width: 180px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".skeleton-loader",
+        properties: &[("max-width", "100%")],
+        leptos_css: "max-width: 100%;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".more-padding",
+        properties: &[("padding", "24px 20px")],
+        leptos_css: "padding: 24px 20px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".small-bar",
+        properties: &[("height", "8px"), ("top", "-4px"), ("max-width", "120px")],
+        leptos_css: "height: 8px; top: -4px; max-width: 120px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".loading-container",
+        properties: &[("min-height", "76px")],
+        leptos_css: "min-height: 76px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".main-title",
+        properties: &[
+            ("position", "relative"),
+            ("color", "rgba(255, 255, 255, 0.568627451)"),
+            ("margin-top", "-13px"),
+            ("font-size", "10px"),
+            ("text-transform", "uppercase"),
+            ("font-weight", "500"),
+            ("text-align", "center"),
+            ("padding-bottom", "3px"),
+        ],
+        leptos_css: "position: relative; color: rgba(255, 255, 255, 0.568627451); margin-top: -13px; font-size: 10px; text-transform: uppercase; font-weight: 500; text-align: center; padding-bottom: 3px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".card-wrapper .card",
+        properties: &[("height", "auto !important")],
+        leptos_css: "height: auto !important;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".card-wrapper .card-body",
+        properties: &[
+            ("display", "flex"),
+            ("flex", "inherit"),
+            ("text-align", "center"),
+            ("flex-direction", "column"),
+            ("justify-content", "space-around"),
+            ("padding", "24px 20px"),
+        ],
+        leptos_css: "display: flex; flex: inherit; text-align: center; flex-direction: column; justify-content: space-around; padding: 24px 20px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".retarget-sign",
+        properties: &[
+            ("margin-right", "-3px"),
+            ("font-size", "14px"),
+            ("top", "-2px"),
+            ("position", "relative"),
+        ],
+        leptos_css: "margin-right: -3px; font-size: 14px; top: -2px; position: relative;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".previous-retarget-sign",
+        properties: &[("margin-right", "-2px"), ("font-size", "10px")],
+        leptos_css: "margin-right: -2px; font-size: 10px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/components/balance-widget/balance-widget.component.scss",
+        selector_path: ".symbol",
+        properties: &[("font-size", "13px"), ("white-space", "nowrap")],
+        leptos_css: "font-size: 13px; white-space: nowrap;",
+        gpui: GpuiOutcome::Paint,
+    },
+];

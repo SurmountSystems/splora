@@ -43,7 +43,12 @@
         pkgs:
         let
           inherit (pkgs) lib;
-          rustToolchain = pkgs.rust-bin.stable."1.100.0".default;
+          # Linux default profile sets enableLibsecret. That wraps cargo
+          # with libsecret, whose build inputs pull gjs, gtk, sassc, and
+          # libsass. Offline locked builds do not use that credential helper.
+          rustToolchain = pkgs.rust-bin.stable."1.100.0".default.override {
+            enableLibsecret = false;
+          };
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
           # Link nixpkgs rocksdb. Use clang / default ld. Never gcc

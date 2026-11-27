@@ -1,0 +1,155 @@
+use crate::style_rule::{GpuiOutcome, StyleRule};
+
+pub fn rules() -> &'static [StyleRule] {
+    RULES
+}
+
+static RULES: &[StyleRule] = &[
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".card-header",
+        properties: &[("border-bottom", "0"), ("font-size", "18px")],
+        leptos_css: "border-bottom: 0; font-size: 18px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (min-width: 465px) { .card-header }",
+        properties: &[("font-size", "20px")],
+        leptos_css: "font-size: 20px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (min-width: 992px) { .card-header }",
+        properties: &[("height", "40px")],
+        leptos_css: "height: 40px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".full-container",
+        properties: &[
+            ("display", "flex"),
+            ("flex-direction", "column"),
+            ("padding", "0px 15px"),
+            ("width", "100%"),
+            ("height", "calc(100vh - 225px)"),
+            ("min-height", "400px"),
+        ],
+        leptos_css: "display: flex; flex-direction: column; padding: 0px 15px; width: 100%; height: calc(100vh - 225px); min-height: 400px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (min-width: 992px) { .full-container }",
+        properties: &[("height", "calc(100vh - 150px)")],
+        leptos_css: "height: calc(100vh - 150px);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".full-container.widget",
+        properties: &[
+            ("min-height", "240px"),
+            ("height", "240px"),
+            ("padding", "0px"),
+        ],
+        leptos_css: "min-height: 240px; height: 240px; padding: 0px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".full-container.fit-container",
+        properties: &[
+            ("margin", "0"),
+            ("padding", "0"),
+            ("height", "100%"),
+            ("min-height", "100px"),
+        ],
+        leptos_css: "margin: 0; padding: 0; height: 100%; min-height: 100px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".full-container.fit-container .chart",
+        properties: &[("padding", "0"), ("min-height", "100px")],
+        leptos_css: "padding: 0; min-height: 100px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".chart",
+        properties: &[
+            ("display", "flex"),
+            ("flex", "1"),
+            ("height", "100%"),
+            ("padding-top", "30px"),
+            ("padding-bottom", "20px"),
+            ("padding-right", "10px"),
+        ],
+        leptos_css: "display: flex; flex: 1; height: 100%; padding-top: 30px; padding-bottom: 20px; padding-right: 10px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (max-width: 992px) { .chart }",
+        properties: &[("padding-bottom", "25px")],
+        leptos_css: "padding-bottom: 25px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (max-width: 829px) { .chart }",
+        properties: &[("padding-bottom", "50px")],
+        leptos_css: "padding-bottom: 50px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (max-width: 767px) { .chart }",
+        properties: &[("padding-bottom", "25px")],
+        leptos_css: "padding-bottom: 25px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (max-width: 629px) { .chart }",
+        properties: &[("padding-bottom", "55px")],
+        leptos_css: "padding-bottom: 55px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (max-width: 567px) { .chart }",
+        properties: &[("padding-bottom", "55px")],
+        leptos_css: "padding-bottom: 55px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".chart.widget",
+        properties: &[("padding", "0px")],
+        leptos_css: "padding: 0px;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: ".loading-spinner",
+        properties: &[
+            ("position", "absolute"),
+            ("top", "50%"),
+            ("left", "calc(50% - 15px)"),
+            ("z-index", "99"),
+        ],
+        leptos_css: "position: absolute; top: 50%; left: calc(50% - 15px); z-index: 99;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "app/lightning/nodes-map/nodes-map.component.scss",
+        selector_path: "@media (max-width: 767.98px) { .loading-spinner }",
+        properties: &[("top", "550px")],
+        leptos_css: "top: 550px;",
+        gpui: GpuiOutcome::Paint,
+    },
+];

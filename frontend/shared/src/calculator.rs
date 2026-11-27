@@ -195,7 +195,7 @@ fn reaches_cap(btc: &str) -> bool {
     if whole.len() < 8 {
         return false;
     }
-    whole.as_bytes() >= b"21000000"
+    whole.as_bytes() >= b"21000000".as_slice()
 }
 
 fn parse_digits(digits: &str) -> Option<u64> {

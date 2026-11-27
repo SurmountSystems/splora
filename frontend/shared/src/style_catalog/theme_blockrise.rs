@@ -1,0 +1,151 @@
+use crate::style_rule::{GpuiOutcome, StyleRule};
+
+pub fn rules() -> &'static [StyleRule] {
+    RULES
+}
+
+static RULES: &[StyleRule] = &[
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: ".input-group-text",
+        properties: &[
+            (
+                "background-color",
+                "rgb(5.3921568627%, 18.0392156863%, 16.3725490196%) !important",
+            ),
+            (
+                "border",
+                "1px solid rgb(13.6470588235%, 24.9411764706%, 23.4509803922%) !important",
+            ),
+        ],
+        leptos_css: "background-color: rgb(5.3921568627%, 18.0392156863%, 16.3725490196%) !important; border: 1px solid rgb(13.6470588235%, 24.9411764706%, 23.4509803922%) !important;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: ":root",
+        properties: &[
+            ("--bg", "#12211F"),
+            ("--active-bg", "#0F1719"),
+            ("--hover-bg", "rgb(6.0588235294%, 16%, 14.6862745098%)"),
+            ("--fg", "#fff"),
+            ("--nav-bg", "#0F1719"),
+            ("--title-fg", "#DAD3C9"),
+            ("--primary", "#01554A"),
+            (
+                "--secondary",
+                "rgb(14.7450980392%, 26.9411764706%, 25.3333333333%)",
+            ),
+            ("--tertiary", "#ED9121"),
+            ("--success", "#0aab2f"),
+            ("--info", "#00C1A8"),
+            ("--link-color", "#00C1A8"),
+            (
+                "--link-hover-color",
+                "rgb(0%, 45.6862745098%, 39.7683633039%)",
+            ),
+            ("--icon", "#DAD3C9"),
+            (
+                "--skeleton-bg",
+                "rgb(13.6470588235%, 24.9411764706%, 23.4509803922%)",
+            ),
+            ("--skeleton-bg-light", "#679993"),
+            (
+                "--box-bg",
+                "rgb(5.5921568627%, 17.4274509804%, 15.8666666667%)",
+            ),
+            ("--stat-box-bg", "#0F1719"),
+            ("--alert-bg", "#01554A"),
+            ("--transparent-fg", "#ffffffbb"),
+            (
+                "--fade-out-box-bg-start",
+                "rgba(5.5921568627%, 17.4274509804%, 15.8666666667%, 0)",
+            ),
+            (
+                "--fade-out-box-bg-end",
+                "rgb(5.5921568627%, 17.4274509804%, 15.8666666667%)",
+            ),
+            ("--opacity", "0.9"),
+            ("--testnet", "#1d486f"),
+            ("--signet", "#6f1d5d"),
+            ("--regtest", "#7d7d7d"),
+            ("--liquid", "#116761"),
+            ("--liquidtestnet", "#494a4a"),
+            ("--mainnet-alt", "#01554A"),
+            ("--testnet-alt", "#183550"),
+            ("--signet-alt", "#471850"),
+            ("--regtest-alt", "#4a4a4a"),
+            ("--liquidtestnet-alt", "#272e46"),
+            ("--taproot", "#eba814"),
+            ("--taproot-light", "#d5a90a"),
+            ("--taproot-dark", "#9d7c05"),
+            ("--green", "#83fd00"),
+            ("--red", "#ff3d00"),
+            ("--yellow", "#fff000"),
+            ("--grey", "#8a9492"),
+            ("--tooltip-grey", "#b7bcbb"),
+            ("--orange", "#ff9f00"),
+            ("--pink", "#e83e8c"),
+            ("--search-button", "#01554A"),
+            ("--search-button-border", "#01554A"),
+            ("--search-button-focus", "#4A877F"),
+            ("--search-button-shadow", "rgba(0, 193, 168, 0.5)"),
+        ],
+        leptos_css: "--bg: #12211F; --active-bg: #0F1719; --hover-bg: rgb(6.0588235294%, 16%, 14.6862745098%); --fg: #fff; --nav-bg: #0F1719; --title-fg: #DAD3C9; --primary: #01554A; --secondary: rgb(14.7450980392%, 26.9411764706%, 25.3333333333%); --tertiary: #ED9121; --success: #0aab2f; --info: #00C1A8; --link-color: #00C1A8; --link-hover-color: rgb(0%, 45.6862745098%, 39.7683633039%); --icon: #DAD3C9; --skeleton-bg: rgb(13.6470588235%, 24.9411764706%, 23.4509803922%); --skeleton-bg-light: #679993; --box-bg: rgb(5.5921568627%, 17.4274509804%, 15.8666666667%); --stat-box-bg: #0F1719; --alert-bg: #01554A; --transparent-fg: #ffffffbb; --fade-out-box-bg-start: rgba(5.5921568627%, 17.4274509804%, 15.8666666667%, 0); --fade-out-box-bg-end: rgb(5.5921568627%, 17.4274509804%, 15.8666666667%); --opacity: 0.9; --testnet: #1d486f; --signet: #6f1d5d; --regtest: #7d7d7d; --liquid: #116761; --liquidtestnet: #494a4a; --mainnet-alt: #01554A; --testnet-alt: #183550; --signet-alt: #471850; --regtest-alt: #4a4a4a; --liquidtestnet-alt: #272e46; --taproot: #eba814; --taproot-light: #d5a90a; --taproot-dark: #9d7c05; --green: #83fd00; --red: #ff3d00; --yellow: #fff000; --grey: #8a9492; --tooltip-grey: #b7bcbb; --orange: #ff9f00; --pink: #e83e8c; --search-button: #01554A; --search-button-border: #01554A; --search-button-focus: #4A877F; --search-button-shadow: rgba(0, 193, 168, 0.5);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: ".nav-item.active, .btn-purple",
+        properties: &[("--icon", "white")],
+        leptos_css: "--icon: white;",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: ".btn-purple:not(:disabled):not(.disabled):active, .btn-purple:not(:disabled):not(.disabled).active, .show > .btn-purple.dropdown-toggle",
+        properties: &[
+            ("color", "#fff"),
+            ("background-color", "var(--search-button)"),
+            ("border-color", "var(--search-button-border)"),
+        ],
+        leptos_css: "color: #fff; background-color: var(--search-button); border-color: var(--search-button-border);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: ".btn-purple:focus, .btn-purple.focus",
+        properties: &[
+            ("color", "#fff"),
+            ("background-color", "var(--search-button-focus)"),
+            ("border-color", "var(--search-button)"),
+            ("box-shadow", "0 0 0 0.2rem var(--search-button-shadow)"),
+        ],
+        leptos_css: "color: #fff; background-color: var(--search-button-focus); border-color: var(--search-button); box-shadow: 0 0 0 0.2rem var(--search-button-shadow);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: ".btn-purple:hover",
+        properties: &[
+            ("color", "#fff"),
+            ("background-color", "var(--search-button-focus)"),
+            ("border-color", "var(--search-button)"),
+        ],
+        leptos_css: "color: #fff; background-color: var(--search-button-focus); border-color: var(--search-button);",
+        gpui: GpuiOutcome::Paint,
+    },
+    StyleRule {
+        source_path: "theme-blockrise.scss",
+        selector_path: "app-accelerate-checkout, app-accelerate-fee-graph, app-acceleration-timeline, app-acceleration-timeline-tooltip, .badge-accelerated, .accelerate, .accelerateDeepMempool, .btn-accelerate, td:has(> a[href$=\"#accelerator-pro\"])",
+        properties: &[
+            ("--tertiary", "#6225b2"),
+            ("--search-button", "#4d2d77"),
+            ("--search-button-border", "#472a6e"),
+            ("--search-button-focus", "#533180"),
+            ("--search-button-shadow", "#7c58ab80"),
+        ],
+        leptos_css: "--tertiary: #6225b2; --search-button: #4d2d77; --search-button-border: #472a6e; --search-button-focus: #533180; --search-button-shadow: #7c58ab80;",
+        gpui: GpuiOutcome::Paint,
+    },
+];
